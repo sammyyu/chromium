@@ -20,8 +20,8 @@ namespace headless {
 
 namespace {
 // Product name for building the default user agent string.
-const char kProductName[] = "HeadlessChrome";
-constexpr gfx::Size kDefaultWindowSize(800, 600);
+const char kProductName[] = "Chrome";
+constexpr gfx::Size kDefaultWindowSize(1024, 768);
 
 std::string GetProductNameAndVersion() {
   return std::string(kProductName) + "/" + PRODUCT_VERSION;
