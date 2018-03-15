@@ -111,7 +111,7 @@ HeadlessURLRequestContextGetter::GetURLRequestContext() {
             base::CommandLine::ForCurrentProcess();
         config->store =
             command_line->GetSwitchValueASCII(switches::kPasswordStore);
-        config->product_name = "HeadlessChrome";
+        config->product_name = "Chrome";
         // OSCrypt may target keyring, which requires calls from the main
         // thread.
         config->main_thread_runner =
