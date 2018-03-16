@@ -31,7 +31,8 @@ int HeadlessPermissionManager::RequestPermission(
     return kNoPendingOperation;
   }
 
-  callback.Run(blink::mojom::PermissionStatus::ASK);
+//  callback.Run(blink::mojom::PermissionStatus::ASK);
+  callback.Run(blink::mojom::PermissionStatus::DENIED);
   return kNoPendingOperation;
 }
 
@@ -44,8 +45,12 @@ int HeadlessPermissionManager::RequestPermissions(
         void(const std::vector<blink::mojom::PermissionStatus>&)>& callback) {
   // In headless mode we just pretent the user "closes" any permission prompt,
   // without accepting or denying.
+/*
   std::vector<blink::mojom::PermissionStatus> result(
       permissions.size(), blink::mojom::PermissionStatus::ASK);
+*/
+  std::vector<blink::mojom::PermissionStatus> result(
+      permissions.size(), blink::mojom::PermissionStatus::DENIED);
   callback.Run(result);
   return kNoPendingOperation;
 }
@@ -59,7 +64,8 @@ blink::mojom::PermissionStatus HeadlessPermissionManager::GetPermissionStatus(
     content::PermissionType permission,
     const GURL& requesting_origin,
     const GURL& embedding_origin) {
-  return blink::mojom::PermissionStatus::ASK;
+//  return blink::mojom::PermissionStatus::ASK;
+  return blink::mojom::PermissionStatus::DENIED;
 }
 
 blink::mojom::PermissionStatus
