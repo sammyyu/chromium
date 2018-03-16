@@ -171,6 +171,8 @@ void HeadlessShell::OnStart(HeadlessBrowser* browser) {
     context_builder.SetAcceptLanguage(
         base::CommandLine::ForCurrentProcess()->GetSwitchValueASCII(
             ::switches::kLang));
+  } else {
+    context_builder.SetAcceptLanguage("en-US,en");
   }
   DeterministicHttpProtocolHandler* http_handler = nullptr;
   DeterministicHttpProtocolHandler* https_handler = nullptr;
@@ -703,6 +705,8 @@ int HeadlessShellMain(int argc, const char** argv) {
 // Crash reporting in headless mode is enabled by default in official builds.
 #if defined(GOOGLE_CHROME_BUILD)
   builder.SetCrashReporterEnabled(true);
+  // SYU turn crash report off
+  builder.SetCrashReporterEnabled(false);
   base::FilePath dumps_path;
   base::PathService::Get(base::DIR_TEMP, &dumps_path);
   builder.SetCrashDumpsDir(dumps_path);
