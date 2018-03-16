@@ -136,8 +136,7 @@ void SetRuntimeFeaturesDefaultsAndUpdateFromArgs(
   if (command_line.HasSwitch(switches::kEnableWebGLDraftExtensions))
     WebRuntimeFeatures::EnableWebGLDraftExtensions(true);
 
-  if (command_line.HasSwitch(switches::kEnableAutomation) ||
-      command_line.HasSwitch(switches::kHeadless)) {
+  if (command_line.HasSwitch(switches::kEnableAutomation)) {
     WebRuntimeFeatures::EnableAutomationControlled(true);
   }
 
