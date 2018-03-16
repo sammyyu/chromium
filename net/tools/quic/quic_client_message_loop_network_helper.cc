@@ -57,6 +57,11 @@ bool QuicClientMessageLooplNetworkHelper::CreateUDPSocketAndBind(
     client_address_ = QuicSocketAddress(QuicIpAddress::Any6(), bind_to_port);
   }
 
+  /* SYU disable QUIC */
+  if (true) {
+    return ERR_CONNECTION_REFUSED;
+  }
+
   int rc = socket->Connect(server_address.impl().socket_address());
   if (rc != OK) {
     LOG(ERROR) << "Connect failed: " << ErrorToShortString(rc);

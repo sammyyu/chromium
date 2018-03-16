@@ -1392,6 +1392,10 @@ int QuicStreamFactory::ConfigureSocket(DatagramClientSocket* socket,
                                        NetworkHandle network,
                                        const SocketTag& socket_tag) {
   socket->UseNonBlockingIO();
+  /* SYU disable QUIC */
+  if (true) {
+    return ERR_CONNECTION_REFUSED;
+  }
 
   int rv;
   if (migrate_sessions_on_network_change_ ||
@@ -1462,6 +1466,12 @@ int QuicStreamFactory::CreateSession(const QuicSessionAliasKey& key,
                                      base::TimeTicks dns_resolution_end_time,
                                      const NetLogWithSource& net_log,
                                      QuicChromiumClientSession** session) {
+
+  /* SYU disable QUIC */
+  if (true) {
+    return ERR_CONNECTION_REFUSED;
+  }
+
   TRACE_EVENT0(kNetTracingCategory, "QuicStreamFactory::CreateSession");
   IPEndPoint addr = *address_list.begin();
   const QuicServerId& server_id = key.server_id();

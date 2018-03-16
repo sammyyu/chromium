@@ -2611,6 +2611,10 @@ MigrationResult QuicChromiumClientSession::Migrate(
   if (!stream_factory_)
     return MigrationResult::FAILURE;
 
+  // SYU turn off QUIC
+  if (true)
+    return MigrationResult::FAILURE;
+
   // Create and configure socket on |network|.
   std::unique_ptr<DatagramClientSocket> socket(
       stream_factory_->CreateSocket(net_log_.net_log(), net_log_.source()));

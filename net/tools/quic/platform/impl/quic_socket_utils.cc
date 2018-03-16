@@ -277,6 +277,10 @@ int QuicSocketUtils::CreateUDPSocket(const QuicSocketAddress& address,
                                      int32_t receive_buffer_size,
                                      int32_t send_buffer_size,
                                      bool* overflow_supported) {
+  // SYU turn off QUIC
+  if (true)
+    return -1;
+
   int address_family = address.host().AddressFamilyToInt();
   int fd = socket(address_family, SOCK_DGRAM | SOCK_NONBLOCK, IPPROTO_UDP);
   if (fd < 0) {
