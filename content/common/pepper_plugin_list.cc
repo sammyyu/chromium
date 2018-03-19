@@ -151,9 +151,62 @@ bool MakePepperPluginInfo(const WebPluginInfo& webplugin_info,
   return true;
 }
 
+void AddHeadlessPluginList(std::vector<PepperPluginInfo>* plugins) {
+#if defined(USE_OZONE)
+    std::vector<std::vector<std::string>> mock_plugin_list;
+    std::vector<std::vector<std::vector<std::string>>> mock_plugin_mime_list;
+
+    // path, name, descripton, version, mime type, suffix
+    mock_plugin_list.push_back(std::vector<std::string> {"internal-pdf-viewer", "Chrome PDF Plugin", "PDF Plugin", "", "Portable Document Format", "application/x-google-chrome-pdf", "pdf"});
+    mock_plugin_list.push_back(std::vector<std::string> {"mhjfbmdgcfjbbpaeojofohoefgiehjai", "Chrome PDF Viewer", "", "", "", "application/pdf", "pdf"});
+    mock_plugin_list.push_back(std::vector<std::string> {"internal-nacl-plugin", "Native Client", "", "", "", "application/x-nacl", ""}); // multiple
+    mock_plugin_list.push_back(std::vector<std::string> {"libwidevinecdmadapter.so", "Widevine Content Decryption Module", "Enables Widevine licenses for playback of HTML audio/video content.  (version 1.4.8.1029)",
+                                                          "", "application/x-ppapi-widevine-cdm", ""});
+
+    mock_plugin_mime_list.push_back(std::vector<std::vector<std::string>> {{"application/x-google-chrome-pdf", "pdf"}});
+    mock_plugin_mime_list.push_back(std::vector<std::vector<std::string>> {{"application/pdf", "pdf"}});
+    mock_plugin_mime_list.push_back(std::vector<std::vector<std::string>> {{"application/x-nacl", ""},{"application/x-pnacl",""}});
+    mock_plugin_mime_list.push_back(std::vector<std::vector<std::string>> {{"application/x-ppapi-widevine-cdm", ""}});
+
+    int current_index = 0;
+    for (std::vector<std::string> mock_plugin_payload : mock_plugin_list) { 
+        PepperPluginInfo plugin;
+        plugin.is_out_of_process = false;
+        plugin.path = base::FilePath(mock_plugin_payload[0]);
+        plugin.name = mock_plugin_payload[1];
+        plugin.description = mock_plugin_payload[2];
+        if (!mock_plugin_payload[3].empty()) {
+            plugin.version = mock_plugin_payload[3];
+        }
+
+        // setup the mime types
+        std::vector<std::vector<std::string>> mime_payload_list = mock_plugin_mime_list.at(current_index);
+        for (std::vector<std::string> mime_payload : mime_payload_list) {
+            WebPluginMimeType mime_type(mime_payload[0],
+                                      mime_payload[1],
+                                      plugin.description);
+            plugin.mime_types.push_back(mime_type);
+        }
+
+        // If the plugin name is empty, use the filename.
+        if (plugin.name.empty()) {
+            plugin.name =
+              base::UTF16ToUTF8(plugin.path.BaseName().LossyDisplayName());
+        }
+
+        plugin.permissions = ppapi::PERMISSION_ALL_BITS;
+
+        plugins->push_back(plugin);
+        current_index = current_index + 1;
+    }
+
+#endif  // USE_OZONE
+}
+
 void ComputePepperPluginList(std::vector<PepperPluginInfo>* plugins) {
   GetContentClient()->AddPepperPlugins(plugins);
   ComputePluginsFromCommandLine(plugins);
+  AddHeadlessPluginList(plugins);
 }
 
 }  // namespace content
