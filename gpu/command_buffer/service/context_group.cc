@@ -129,6 +129,7 @@ gpu::ContextResult ContextGroup::Initialize(
     GLES2Decoder* decoder,
     ContextType context_type,
     const DisallowedFeatures& disallowed_features) {
+/*
   switch (context_type) {
     case CONTEXT_TYPE_WEBGL1:
       if (kGpuFeatureStatusBlacklisted ==
@@ -148,6 +149,7 @@ gpu::ContextResult ContextGroup::Initialize(
     default:
       break;
   }
+*/
   if (HaveContexts()) {
     if (context_type != feature_info_->context_type()) {
       LOG(ERROR) << "ContextResult::kFatalFailure: the type of "
