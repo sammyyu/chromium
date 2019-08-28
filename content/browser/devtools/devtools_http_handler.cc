@@ -102,6 +102,7 @@ constexpr net::NetworkTrafficAnnotationTag
           "Not implemented, only used in Devtools and is behind a switch."
       })");
 
+/*
 bool RequestIsSafeToServe(const net::HttpServerRequestInfo& info) {
   // For browser-originating requests, serve only those that are coming from
   // pages loaded off localhost or fixed IPs.
@@ -111,6 +112,7 @@ bool RequestIsSafeToServe(const net::HttpServerRequestInfo& info) {
   GURL url = GURL("http://" + header);
   return url.HostIsIPAddress() || net::IsLocalHostname(url.host(), nullptr);
 }
+*/
 
 }  // namespace
 
@@ -410,12 +412,13 @@ static std::string GetMimeType(const std::string& filename) {
 
 void ServerWrapper::OnHttpRequest(int connection_id,
                                   const net::HttpServerRequestInfo& info) {
+/*
   if (!RequestIsSafeToServe(info)) {
     Send500(connection_id,
             "Host header is specified and is not an IP address or localhost.");
     return;
   }
-
+*/
   server_->SetSendBufferSize(connection_id, kSendBufferSizeForDevTools);
 
   if (base::StartsWith(info.path, "/json", base::CompareCase::SENSITIVE)) {
