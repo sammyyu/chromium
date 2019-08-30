@@ -15,7 +15,7 @@
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
 #include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
-#include "chrome/browser/ui/views/toolbar/app_menu_button.h"
+#include "chrome/browser/ui/views/toolbar/browser_app_menu_button.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_view.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
@@ -136,8 +136,8 @@ bool RelaunchRecommendedBubbleView::ShouldShowCloseButton() const {
 
 gfx::ImageSkia RelaunchRecommendedBubbleView::GetWindowIcon() {
   return gfx::CreateVectorIcon(gfx::IconDescription(
-      vector_icons::kBusinessIcon, 20, gfx::kChromeIconGrey, base::TimeDelta(),
-      gfx::kNoneIcon));
+      vector_icons::kBusinessIcon, kTitleIconSize, gfx::kChromeIconGrey,
+      base::TimeDelta(), gfx::kNoneIcon));
 }
 
 bool RelaunchRecommendedBubbleView::ShouldShowWindowIcon() const {
@@ -151,15 +151,7 @@ int RelaunchRecommendedBubbleView::GetHeightForWidth(int width) const {
 }
 
 void RelaunchRecommendedBubbleView::Layout() {
-  // Align the body label with the left edge of the bubble's title.
-  // TODO(bsep): Remove this when fixing https://crbug.com/810970.
-  gfx::Point origin;
-  views::View::ConvertPointToWidget(GetBubbleFrameView()->title(), &origin);
-  views::View::ConvertPointFromWidget(this, &origin);
-
-  gfx::Rect bounds = GetContentsBounds();
-  bounds.Inset(origin.x(), 0, 0, 0);
-  body_label_->SetBoundsRect(bounds);
+  body_label_->SetBoundsRect(GetContentsBounds());
 }
 
 void RelaunchRecommendedBubbleView::Init() {
@@ -168,6 +160,17 @@ void RelaunchRecommendedBubbleView::Init() {
                        views::style::CONTEXT_MESSAGE_BOX_BODY_TEXT);
   body_label_->SetMultiLine(true);
   body_label_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+
+  // Align the body label with the left edge of the bubble's title.
+  // TODO(bsep): Remove this when fixing https://crbug.com/810970.
+  // Note: BubleFrameView applies INSETS_DIALOG_TITLE either side of the icon.
+  int title_offset = 2 * views::LayoutProvider::Get()
+                             ->GetInsetsMetric(views::INSETS_DIALOG_TITLE)
+                             .left() +
+                     kTitleIconSize;
+  body_label_->SetBorder(views::CreateEmptyBorder(
+      gfx::Insets(0, title_offset - margins().left(), 0, 0)));
+
   AddChildView(body_label_);
 
   base::RecordAction(base::UserMetricsAction("RelaunchRecommendedShown"));

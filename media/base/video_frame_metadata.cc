@@ -111,8 +111,8 @@ bool VideoFrameMetadata::GetString(Key key, std::string* value) const {
   DCHECK(value);
   const base::Value* const binary_value = GetBinaryValue(key);
   if (binary_value)
-    value->assign(binary_value->GetBlob().data(),
-                  binary_value->GetBlob().size());
+    value->assign(binary_value->GetBlob().begin(),
+                  binary_value->GetBlob().end());
   return !!binary_value;
 }
 
@@ -157,9 +157,13 @@ std::unique_ptr<base::DictionaryValue> VideoFrameMetadata::CopyInternalValues()
   return dictionary_.CreateDeepCopy();
 }
 
-void VideoFrameMetadata::MergeInternalValuesFrom(
-    const base::DictionaryValue& in) {
-  dictionary_.MergeDictionary(&in);
+void VideoFrameMetadata::MergeInternalValuesFrom(const base::Value& in) {
+  const base::DictionaryValue* dict;
+  if (!in.GetAsDictionary(&dict)) {
+    NOTREACHED();
+    return;
+  }
+  dictionary_.MergeDictionary(dict);
 }
 
 void VideoFrameMetadata::MergeMetadataFrom(

@@ -81,7 +81,7 @@ class APIPermission {
     kCryptotokenPrivate,
     kDataReductionProxy,
     kDiagnostics,
-    kDial,
+    kDeleted_Dial,  // API removed.
     kDebugger,
     kDeclarative,
     kDeclarativeContent,
@@ -251,6 +251,11 @@ class APIPermission {
     kDeclarativeNetRequest,
     kLockWindowFullscreenPrivate,
     kWebrtcLoggingPrivateAudioDebug,
+    kEnterpriseReportingPrivate,
+    kCecPrivate,
+    kSafeBrowsingPrivate,
+    kFileSystemRequestDownloads,
+    kSystemPowerSource,
     // Last entry: Add new entries above and ensure to update the
     // "ExtensionPermission3" enum in tools/metrics/histograms/histograms.xml
     // (by running update_extension_permission.py).
@@ -411,6 +416,7 @@ class APIPermissionInfo {
 
  private:
   // Instances should only be constructed from within a PermissionsProvider.
+  friend class CastAPIPermissions;
   friend class ChromeAPIPermissions;
   friend class ExtensionsAPIPermissions;
   // Implementations of APIPermission will want to get the permission message,

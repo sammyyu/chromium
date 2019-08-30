@@ -4,7 +4,6 @@
 
 #include "chrome/test/base/test_browser_window.h"
 
-#include "base/memory/ptr_util.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_list_observer.h"
 #include "content/public/browser/keyboard_event_processing_result.h"
@@ -108,8 +107,16 @@ bool TestBrowserWindow::IsFullscreenBubbleVisible() const {
   return false;
 }
 
+bool TestBrowserWindow::IsVisible() const {
+  return true;
+}
+
 LocationBar* TestBrowserWindow::GetLocationBar() const {
   return const_cast<TestLocationBar*>(&location_bar_);
+}
+
+PageActionIconContainer* TestBrowserWindow::GetPageActionIconContainer() {
+  return nullptr;
 }
 
 ToolbarActionsBar* TestBrowserWindow::GetToolbarActionsBar() {
@@ -153,6 +160,14 @@ ShowTranslateBubbleResult TestBrowserWindow::ShowTranslateBubble(
 autofill::SaveCardBubbleView* TestBrowserWindow::ShowSaveCreditCardBubble(
     content::WebContents* contents,
     autofill::SaveCardBubbleController* controller,
+    bool user_gesture) {
+  return nullptr;
+}
+
+autofill::LocalCardMigrationBubble*
+TestBrowserWindow::ShowLocalCardMigrationBubble(
+    content::WebContents* contents,
+    autofill::LocalCardMigrationBubbleController* controller,
     bool user_gesture) {
   return nullptr;
 }

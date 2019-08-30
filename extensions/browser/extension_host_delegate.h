@@ -45,7 +45,7 @@ class ExtensionHostDelegate {
 
   // Creates a new tab or popup window with |web_contents|. The embedder may
   // choose to do nothing if tabs and popups are not supported.
-  virtual void CreateTab(content::WebContents* web_contents,
+  virtual void CreateTab(std::unique_ptr<content::WebContents> web_contents,
                          const std::string& extension_id,
                          WindowOpenDisposition disposition,
                          const gfx::Rect& initial_rect,
@@ -56,7 +56,7 @@ class ExtensionHostDelegate {
   virtual void ProcessMediaAccessRequest(
       content::WebContents* web_contents,
       const content::MediaStreamRequest& request,
-      const content::MediaResponseCallback& callback,
+      content::MediaResponseCallback callback,
       const Extension* extension) = 0;
 
   // Checks if we have permission to access the microphone or camera. Note that

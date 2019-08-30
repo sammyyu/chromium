@@ -13,8 +13,8 @@
 #include "ash/shell/example_factory.h"
 #include "ash/shell/panel_window.h"
 #include "ash/shell/toplevel_window.h"
+#include "ash/system/message_center/notification_tray.h"
 #include "ash/system/status_area_widget.h"
-#include "ash/system/web_notification/web_notification_tray.h"
 #include "ash/wm/test_child_modal_parent.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/aura/window.h"
@@ -285,7 +285,7 @@ void WindowTypeLauncher::ButtonPressed(views::Button* sender,
     ModalWindow::OpenModalWindow(GetWidget()->GetNativeView(),
                                  ui::MODAL_TYPE_WINDOW);
   } else if (sender == child_modal_button_) {
-    TestChildModalParent::Create(GetWidget()->GetNativeView()->GetRootWindow());
+    TestChildModalParent::Show(GetWidget()->GetNativeView()->GetRootWindow());
   } else if (sender == transient_button_) {
     NonModalTransient::OpenNonModalTransient(GetWidget()->GetNativeView());
   } else if (sender == show_hide_window_button_) {
@@ -303,7 +303,7 @@ void WindowTypeLauncher::ButtonPressed(views::Button* sender,
 
     Shell::GetPrimaryRootWindowController()
         ->GetStatusAreaWidget()
-        ->web_notification_tray()
+        ->notification_tray()
         ->message_center()
         ->AddNotification(std::move(notification));
   } else if (sender == examples_button_) {

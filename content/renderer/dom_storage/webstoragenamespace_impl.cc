@@ -7,8 +7,8 @@
 #include "base/logging.h"
 #include "content/common/dom_storage/dom_storage_types.h"
 #include "content/renderer/dom_storage/webstoragearea_impl.h"
-#include "third_party/WebKit/public/platform/URLConversion.h"
-#include "third_party/WebKit/public/platform/WebSecurityOrigin.h"
+#include "third_party/blink/public/platform/url_conversion.h"
+#include "third_party/blink/public/platform/web_security_origin.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -39,11 +39,13 @@ WebStorageNamespace* WebStorageNamespaceImpl::copy() {
   return nullptr;
 }
 
+blink::WebString WebStorageNamespaceImpl::GetNamespaceId() const {
+  return blink::WebString::FromASCII(namespace_id_);
+}
+
 bool WebStorageNamespaceImpl::IsSameNamespace(
     const WebStorageNamespace& other) const {
-  const WebStorageNamespaceImpl* other_impl =
-      static_cast<const WebStorageNamespaceImpl*>(&other);
-  return namespace_id_ == other_impl->namespace_id_;
+  return GetNamespaceId() == other.GetNamespaceId();
 }
 
 }  // namespace content

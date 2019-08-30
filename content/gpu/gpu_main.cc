@@ -24,6 +24,7 @@
 #include "components/viz/service/main/viz_main_impl.h"
 #include "content/common/content_constants_internal.h"
 #include "content/common/content_switches_internal.h"
+#include "content/common/skia_utils.h"
 #include "content/gpu/gpu_child_thread.h"
 #include "content/gpu/gpu_process.h"
 #include "content/public/common/content_client.h"
@@ -34,16 +35,15 @@
 #include "gpu/command_buffer/service/gpu_switches.h"
 #include "gpu/config/gpu_driver_bug_list.h"
 #include "gpu/config/gpu_info_collector.h"
+#include "gpu/config/gpu_preferences.h"
 #include "gpu/config/gpu_switches.h"
 #include "gpu/config/gpu_util.h"
 #include "gpu/ipc/common/gpu_memory_buffer_support.h"
-#include "gpu/ipc/common/gpu_preferences_util.h"
 #include "gpu/ipc/service/gpu_config.h"
 #include "gpu/ipc/service/gpu_init.h"
 #include "gpu/ipc/service/gpu_watchdog_thread.h"
-#include "media/gpu/features.h"
+#include "media/gpu/buildflags.h"
 #include "third_party/angle/src/gpu_info_util/SystemInfo.h"
-#include "third_party/skia/include/core/SkGraphics.h"
 #include "ui/events/platform/platform_event_source.h"
 #include "ui/gfx/switches.h"
 #include "ui/gl/gl_context.h"
@@ -78,12 +78,10 @@
 #endif
 
 #if defined(OS_LINUX)
-#include "content/common/font_config_ipc_linux.h"
 #include "content/gpu/gpu_sandbox_hook_linux.h"
-#include "content/public/common/common_sandbox_support_linux.h"
 #include "content/public/common/sandbox_init.h"
 #include "services/service_manager/sandbox/linux/sandbox_linux.h"
-#include "third_party/skia/include/ports/SkFontConfigInterface.h"
+#include "services/service_manager/zygote/common/common_sandbox_support_linux.h"
 #endif
 
 #if defined(OS_MACOSX)
@@ -206,7 +204,7 @@ int GpuMain(const MainFunctionParams& parameters) {
   if (command_line.HasSwitch(switches::kGpuPreferences)) {
     std::string value =
         command_line.GetSwitchValueASCII(switches::kGpuPreferences);
-    bool success = gpu::SwitchValueToGpuPreferences(value, &gpu_preferences);
+    bool success = gpu_preferences.FromSwitchValue(value);
     CHECK(success);
   }
 
@@ -333,20 +331,13 @@ int GpuMain(const MainFunctionParams& parameters) {
 
   gpu_process.set_main_thread(child_thread);
 
+  InitializeSkia();
+
 #if defined(OS_ANDROID)
   base::trace_event::MemoryDumpManager::GetInstance()->RegisterDumpProvider(
       tracing::GraphicsMemoryDumpProvider::GetInstance(), "AndroidGraphics",
       nullptr);
 #endif
-
-  if (command_line.HasSwitch(switches::kEnableOOPRasterization)) {
-    SkGraphics::Init();
-#if defined(OS_LINUX)
-    // Set up the font IPC so that the GPU process can create typefaces.
-    SkFontConfigInterface::SetGlobal(new FontConfigIPC(GetSandboxFD()))
-        ->unref();
-#endif
-  }
 
   base::HighResolutionTimerManager hi_res_timer_manager;
 

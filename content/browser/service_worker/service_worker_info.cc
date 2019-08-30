@@ -9,32 +9,10 @@
 #include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/child_process_host.h"
 #include "ipc/ipc_message.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_object.mojom.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_registration.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
 
 namespace content {
-
-ServiceWorkerVersionInfo::ClientInfo::ClientInfo()
-    : ClientInfo(ChildProcessHost::kInvalidUniqueID,
-                 MSG_ROUTING_NONE,
-                 base::Callback<WebContents*(void)>(),
-                 blink::mojom::ServiceWorkerProviderType::kUnknown) {}
-
-ServiceWorkerVersionInfo::ClientInfo::ClientInfo(
-    int process_id,
-    int route_id,
-    const base::Callback<WebContents*(void)>& web_contents_getter,
-    blink::mojom::ServiceWorkerProviderType type)
-    : process_id(process_id),
-      route_id(route_id),
-      web_contents_getter(web_contents_getter),
-      type(type) {}
-
-ServiceWorkerVersionInfo::ClientInfo::ClientInfo(
-    const ServiceWorkerVersionInfo::ClientInfo& other) = default;
-
-ServiceWorkerVersionInfo::ClientInfo::~ClientInfo() {
-}
 
 ServiceWorkerVersionInfo::ServiceWorkerVersionInfo()
     : running_status(EmbeddedWorkerStatus::STOPPED),

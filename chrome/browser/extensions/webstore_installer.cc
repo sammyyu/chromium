@@ -205,9 +205,9 @@ GURL WebstoreInstaller::GetWebstoreInstallURL(
   }
 
   base::CommandLine* cmd_line = base::CommandLine::ForCurrentProcess();
-  if (cmd_line->HasSwitch(switches::kAppsGalleryDownloadURL)) {
+  if (cmd_line->HasSwitch(::switches::kAppsGalleryDownloadURL)) {
     std::string download_url =
-        cmd_line->GetSwitchValueASCII(switches::kAppsGalleryDownloadURL);
+        cmd_line->GetSwitchValueASCII(::switches::kAppsGalleryDownloadURL);
     return GURL(base::StringPrintf(download_url.c_str(),
                                    extension_id.c_str()));
   }
@@ -581,7 +581,7 @@ void WebstoreInstaller::DownloadCrx(
   MaybeAppendAuthUserParameter(approval_->authuser, &download_url_);
 
   base::FilePath user_data_dir;
-  PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
+  base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
   base::FilePath download_path = user_data_dir.Append(kWebstoreDownloadFolder);
 
   base::FilePath download_directory(g_download_directory_for_tests ?

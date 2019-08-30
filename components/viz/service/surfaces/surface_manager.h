@@ -73,10 +73,10 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
 
   // Sets an alternative base::TickClock to pass into surfaces for surface
   // synchronization deadlines. This allows unit tests to mock the wall clock.
-  void SetTickClockForTesting(base::TickClock* tick_clock);
+  void SetTickClockForTesting(const base::TickClock* tick_clock);
 
   // Returns the base::TickClock used to set surface synchronization deadlines.
-  base::TickClock* tick_clock() { return tick_clock_; }
+  const base::TickClock* tick_clock() { return tick_clock_; }
 
   // Creates a Surface for the given SurfaceClient. The surface will be
   // destroyed when DestroySurface is called, all of its destruction
@@ -130,25 +130,9 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
   void SurfaceDamageExpected(const SurfaceId& surface_id,
                              const BeginFrameArgs& args);
 
-  void RegisterFrameSinkId(const FrameSinkId& frame_sink_id);
-
   // Invalidate a frame_sink_id that might still have associated sequences,
   // possibly because a renderer process has crashed.
   void InvalidateFrameSinkId(const FrameSinkId& frame_sink_id);
-
-  const base::flat_map<FrameSinkId, std::string>& valid_frame_sink_labels()
-      const {
-    return valid_frame_sink_labels_;
-  }
-
-  // Set |debug_label| of the |frame_sink_id|. |frame_sink_id| must exist in
-  // |valid_frame_sink_labels_| already when UpdateFrameSinkDebugLabel is
-  // called.
-  void SetFrameSinkDebugLabel(const FrameSinkId& frame_sink_id,
-                              const std::string& debug_label);
-
-  // Returns the debug label associated with |frame_sink_id| if any.
-  std::string GetFrameSinkDebugLabel(const FrameSinkId& frame_sink_id) const;
 
   // Register a relationship between two namespaces.  This relationship means
   // that surfaces from the child namespace will be displayed in the parent.
@@ -163,6 +147,10 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
   // from the top level root may be garbage collected. It will not be a valid
   // SurfaceId and will never correspond to a surface.
   const SurfaceId& GetRootSurfaceId() const;
+
+  // Returns SurfaceIds of currently alive Surfaces. This may include ids of
+  // Surfaces that are about to be destroyed.
+  std::vector<SurfaceId> GetCreatedSurfaceIds() const;
 
   // Adds all surface references in |references|. This will remove any temporary
   // references for child surface in a surface reference.
@@ -259,12 +247,10 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
 
   // Adds a reference from |parent_id| to |child_id| without dealing with
   // temporary references.
-  void AddSurfaceReferenceImpl(const SurfaceId& parent_id,
-                               const SurfaceId& child_id);
+  void AddSurfaceReferenceImpl(const SurfaceReference& reference);
 
   // Removes a reference from a |parent_id| to |child_id|.
-  void RemoveSurfaceReferenceImpl(const SurfaceId& parent_id,
-                                  const SurfaceId& child_id);
+  void RemoveSurfaceReferenceImpl(const SurfaceReference& reference);
 
   // Removes all surface references to or from |surface_id|. Used when the
   // surface is about to be deleted.
@@ -311,11 +297,6 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
 
   base::flat_set<SurfaceId> surfaces_to_destroy_;
 
-  // Set of valid FrameSinkIds and their labels. When a FrameSinkId is removed
-  // from this set, any remaining (surface) sequences with that FrameSinkId are
-  // considered satisfied.
-  base::flat_map<FrameSinkId, std::string> valid_frame_sink_labels_;
-
   // Root SurfaceId that references display root surfaces. There is no Surface
   // with this id, it's for bookkeeping purposes only.
   const SurfaceId root_surface_id_;
@@ -325,7 +306,7 @@ class VIZ_SERVICE_EXPORT SurfaceManager {
   const base::flat_set<SurfaceId> empty_surface_id_set_;
 
   // Used for setting deadlines for surface synchronization.
-  base::TickClock* tick_clock_;
+  const base::TickClock* tick_clock_;
 
   // Keeps track of surface references for a surface. The graph of references is
   // stored in both directions, so we know the parents and children for each

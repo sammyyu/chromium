@@ -10,19 +10,20 @@
 #include "base/files/file.h"
 #include "base/macros.h"
 #include "base/strings/string_piece.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/time/time.h"
 #include "components/subresource_filter/content/common/subresource_filter_messages.h"
 #include "components/subresource_filter/content/renderer/unverified_ruleset_dealer.h"
 #include "components/subresource_filter/core/common/document_load_statistics.h"
+#include "components/subresource_filter/core/common/memory_mapped_ruleset.h"
 #include "components/subresource_filter/core/common/scoped_timers.h"
 #include "components/subresource_filter/core/common/test_ruleset_creator.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/public/platform/WebDocumentSubresourceFilter.h"
-#include "third_party/WebKit/public/platform/WebURL.h"
-#include "third_party/WebKit/public/platform/WebURLError.h"
-#include "third_party/WebKit/public/platform/WebURLRequest.h"
+#include "third_party/blink/public/platform/web_document_subresource_filter.h"
+#include "third_party/blink/public/platform/web_url.h"
+#include "third_party/blink/public/platform/web_url_error.h"
+#include "third_party/blink/public/platform/web_url_request.h"
 #include "url/gurl.h"
 
 namespace subresource_filter {
@@ -44,12 +45,13 @@ class SubresourceFilterAgentUnderTest : public SubresourceFilterAgent {
   explicit SubresourceFilterAgentUnderTest(
       UnverifiedRulesetDealer* ruleset_dealer)
       : SubresourceFilterAgent(nullptr /* RenderFrame */, ruleset_dealer) {}
-  ~SubresourceFilterAgentUnderTest() = default;
+  ~SubresourceFilterAgentUnderTest() override = default;
 
   MOCK_METHOD0(GetDocumentURL, GURL());
   MOCK_METHOD0(OnSetSubresourceFilterForCommittedLoadCalled, void());
   MOCK_METHOD0(SignalFirstSubresourceDisallowedForCommittedLoad, void());
   MOCK_METHOD1(SendDocumentLoadStatistics, void(const DocumentLoadStatistics&));
+  MOCK_METHOD0(SendFrameIsAdSubframe, void());
 
   bool IsMainFrame() override { return true; }
 
@@ -59,11 +61,12 @@ class SubresourceFilterAgentUnderTest : public SubresourceFilterAgent {
     OnSetSubresourceFilterForCommittedLoadCalled();
   }
 
-  void SetIsAdSubframeForDocument(bool is_ad_subframe) override {
-    is_ad_subframe_ = is_ad_subframe;
-  }
+  bool IsAdSubframe() override { return is_ad_subframe_; }
+  void SetIsAdSubframe() override { is_ad_subframe_ = true; }
 
-  bool GetIsAdSubframe() { return is_ad_subframe_; }
+  bool IsFilterAssociatedWithAdSubframe() {
+    return last_injected_filter_->GetIsAssociatedWithAdSubframe();
+  }
 
   blink::WebDocumentSubresourceFilter* filter() {
     return last_injected_filter_.get();
@@ -74,8 +77,8 @@ class SubresourceFilterAgentUnderTest : public SubresourceFilterAgent {
   }
 
  private:
-  bool is_ad_subframe_ = false;
   std::unique_ptr<blink::WebDocumentSubresourceFilter> last_injected_filter_;
+  bool is_ad_subframe_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(SubresourceFilterAgentUnderTest);
 };
@@ -178,6 +181,14 @@ class SubresourceFilterAgentTest : public ::testing::Test {
     EXPECT_CALL(*agent(), SendDocumentLoadStatistics(::testing::_));
   }
 
+  void ExpectSendFrameIsAdSubframe() {
+    EXPECT_CALL(*agent(), SendFrameIsAdSubframe());
+  }
+
+  void ExpectNoSendFrameIsAdSubframe() {
+    EXPECT_CALL(*agent(), SendFrameIsAdSubframe()).Times(0);
+  }
+
   void ExpectLoadPolicy(
       base::StringPiece url_spec,
       blink::WebDocumentSubresourceFilter::LoadPolicy expected_policy) {
@@ -229,6 +240,21 @@ TEST_F(SubresourceFilterAgentTest, DisabledByDefault_NoFilterIsInjected) {
 
   histogram_tester.ExpectTotalCount(kEvaluationTotalWallDuration, 0);
   histogram_tester.ExpectTotalCount(kEvaluationTotalCPUDuration, 0);
+}
+
+TEST_F(SubresourceFilterAgentTest, MmapFailure_FailsToInjectSubresourceFilter) {
+  ASSERT_NO_FATAL_FAILURE(
+      SetTestRulesetToDisallowURLsWithPathSuffix(kTestFirstURLPathSuffix));
+  MemoryMappedRuleset::SetMemoryMapFailuresForTesting(true);
+  ExpectNoSubresourceFilterGetsInjected();
+  StartLoadAndSetActivationState(ActivationState(ActivationLevel::ENABLED),
+                                 false /* is_associated_with_ad_subframe */);
+  ASSERT_TRUE(::testing::Mock::VerifyAndClearExpectations(agent()));
+
+  MemoryMappedRuleset::SetMemoryMapFailuresForTesting(false);
+  ExpectSubresourceFilterGetsInjected();
+  StartLoadAndSetActivationState(ActivationState(ActivationLevel::ENABLED),
+                                 false /* is_associated_with_ad_subframe */);
 }
 
 TEST_F(SubresourceFilterAgentTest, Disabled_NoFilterIsInjected) {
@@ -470,6 +496,9 @@ TEST_F(SubresourceFilterAgentTest, DryRun_ResourcesAreEvaluatedButNotFiltered) {
   // Performance measurement is switched off.
   histogram_tester.ExpectTotalCount(kEvaluationTotalWallDuration, 0);
   histogram_tester.ExpectTotalCount(kEvaluationTotalCPUDuration, 0);
+
+  EXPECT_FALSE(agent()->IsFilterAssociatedWithAdSubframe());
+  EXPECT_FALSE(agent()->IsAdSubframe());
 }
 
 TEST_F(SubresourceFilterAgentTest,
@@ -521,16 +550,53 @@ TEST_F(SubresourceFilterAgentTest,
   filter->ReportDisallowedLoad();
 }
 
-TEST_F(SubresourceFilterAgentTest, DryRun_DocumentIsAdSubframeTagging) {
-  base::HistogramTester histogram_tester;
+TEST_F(SubresourceFilterAgentTest,
+       DryRun_IsAssociatedWithAdSubframeforDocumentOrDedicatedWorker) {
   ASSERT_NO_FATAL_FAILURE(
       SetTestRulesetToDisallowURLsWithPathSuffix(kTestFirstURLPathSuffix));
+
   ExpectSubresourceFilterGetsInjected();
   StartLoadAndSetActivationState(ActivationState(ActivationLevel::DRYRUN),
-                                 true /* is_ad_subframe */);
+                                 true /* is_associated_with_ad_subframe */);
   ASSERT_TRUE(::testing::Mock::VerifyAndClearExpectations(agent()));
 
-  EXPECT_TRUE(agent()->GetIsAdSubframe());
+  // Test the ad subframe value that is set at the filter.
+  // This also represents the flag passed to a dedicated worker filter created.
+  // For testing the flag passed to the dedicated worker filter, the unit test
+  // is not able to test the implementation of WillCreateWorkerFetchContext as
+  // that will require setup of a WebWorkerFetchContextImpl.
+  EXPECT_TRUE(agent()->IsFilterAssociatedWithAdSubframe());
+  EXPECT_TRUE(agent()->IsAdSubframe());
+}
+
+TEST_F(SubresourceFilterAgentTest, DryRun_FrameAlreadyTaggedAsAd) {
+  agent()->SetIsAdSubframe();
+  ASSERT_NO_FATAL_FAILURE(
+      SetTestRulesetToDisallowURLsWithPathSuffix("somethingNotMatched"));
+  ExpectSubresourceFilterGetsInjected();
+  StartLoadAndSetActivationState(ActivationState(ActivationLevel::DRYRUN),
+                                 false /* is_associated_with_ad_subframe */);
+  ASSERT_TRUE(::testing::Mock::VerifyAndClearExpectations(agent()));
+
+  EXPECT_TRUE(agent()->IsFilterAssociatedWithAdSubframe());
+  EXPECT_TRUE(agent()->IsAdSubframe());
+}
+
+TEST_F(SubresourceFilterAgentTest, DryRun_SendsFrameIsAdSubframe) {
+  agent()->SetIsAdSubframe();
+  ExpectSendFrameIsAdSubframe();
+
+  // Call DidCreateNewDocument twice and verify that SendFrameIsAdSubframe is
+  // only called once.
+  EXPECT_CALL(*agent(), GetDocumentURL())
+      .WillOnce(::testing::Return(GURL("about:blank")));
+  agent_as_rfo()->DidCreateNewDocument();
+  agent_as_rfo()->DidCreateNewDocument();
+}
+
+TEST_F(SubresourceFilterAgentTest, DryRun_DoesNotSendFrameIsAdSubframe) {
+  ExpectNoSendFrameIsAdSubframe();
+  agent_as_rfo()->DidCreateNewDocument();
 }
 
 }  // namespace subresource_filter

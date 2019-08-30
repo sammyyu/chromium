@@ -8,7 +8,7 @@
 #include "base/i18n/number_formatting.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "chrome/browser/apps/app_window_registry_util.h"
+#include "chrome/browser/apps/platform_apps/app_window_registry_util.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
@@ -17,7 +17,7 @@
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
-#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/extensions/web_app_extension_helpers.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/grit/chrome_unscaled_resources.h"
@@ -25,6 +25,7 @@
 #include "chrome/grit/generated_resources.h"
 #include "components/prefs/pref_registry_simple.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/common/content_switches.h"
 #include "extensions/browser/app_window/app_window.h"
@@ -91,14 +92,15 @@ void QuitWithAppsController::Close(bool by_user) {
     suppress_for_session_ = !hosted_app_quit_notification_;
 }
 
-void QuitWithAppsController::Click() {
-  CloseNotification(notification_profile_);
-}
-
-void QuitWithAppsController::ButtonClick(int button_index) {
+void QuitWithAppsController::Click(
+    const base::Optional<int>& button_index,
+    const base::Optional<base::string16>& reply) {
   CloseNotification(notification_profile_);
 
-  if (button_index == kQuitAllAppsButtonIndex) {
+  if (!button_index)
+    return;
+
+  if (*button_index == kQuitAllAppsButtonIndex) {
     if (hosted_app_quit_notification_) {
       content::NotificationService::current()->Notify(
           chrome::NOTIFICATION_CLOSE_ALL_BROWSERS_REQUEST,
@@ -107,7 +109,7 @@ void QuitWithAppsController::ButtonClick(int button_index) {
       chrome::CloseAllBrowsers();
     }
     AppWindowRegistryUtil::CloseAllAppWindows();
-  } else if (button_index == kDontShowAgainButtonIndex &&
+  } else if (*button_index == kDontShowAgainButtonIndex &&
              !hosted_app_quit_notification_) {
     g_browser_process->local_state()->SetBoolean(
         prefs::kNotifyWhenAppsKeepChromeAlive, false);

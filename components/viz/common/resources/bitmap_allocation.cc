@@ -6,18 +6,14 @@
 
 #include <stdint.h>
 
+#include "base/debug/alias.h"
 #include "base/memory/shared_memory.h"
 #include "base/process/memory.h"
 #include "build/build_config.h"
-#include "components/viz/common/quads/shared_bitmap.h"
 #include "components/viz/common/resources/resource_format_utils.h"
+#include "components/viz/common/resources/resource_sizes.h"
 #include "mojo/public/cpp/system/platform_handle.h"
 #include "ui/gfx/geometry/size.h"
-
-#if defined(OS_WIN)
-#include "base/debug/alias.h"
-#include "base/process/process_metrics.h"
-#endif
 
 namespace viz {
 
@@ -27,25 +23,17 @@ void CollectMemoryUsageAndDie(const gfx::Size& size,
                               ResourceFormat format,
                               size_t alloc_size) {
 #if defined(OS_WIN)
+  DWORD last_error = GetLastError();
+  base::debug::Alias(&last_error);
+#endif
+
   int width = size.width();
   int height = size.height();
-  DWORD last_error = GetLastError();
-
-  std::unique_ptr<base::ProcessMetrics> metrics(
-      base::ProcessMetrics::CreateProcessMetrics(
-          base::GetCurrentProcessHandle()));
-
-  size_t private_bytes = 0;
-  size_t shared_bytes = 0;
-  metrics->GetMemoryBytes(&private_bytes, &shared_bytes);
 
   base::debug::Alias(&width);
   base::debug::Alias(&height);
   base::debug::Alias(&format);
-  base::debug::Alias(&last_error);
-  base::debug::Alias(&private_bytes);
-  base::debug::Alias(&shared_bytes);
-#endif
+
   base::TerminateBecauseOutOfMemory(alloc_size);
 }
 }  // namespace
@@ -57,7 +45,7 @@ std::unique_ptr<base::SharedMemory> AllocateMappedBitmap(
     ResourceFormat format) {
   DCHECK(IsBitmapFormatSupported(format));
   size_t bytes = 0;
-  if (!SharedBitmap::SizeInBytes(size, format, &bytes)) {
+  if (!ResourceSizes::MaybeSizeInBytes(size, format, &bytes)) {
     DLOG(ERROR) << "AllocateMappedBitmap with size that overflows";
     CollectMemoryUsageAndDie(size, format, std::numeric_limits<int>::max());
   }
@@ -86,6 +74,25 @@ std::unique_ptr<base::SharedMemory> AllocateMappedBitmap(
 
 mojo::ScopedSharedBufferHandle DuplicateAndCloseMappedBitmap(
     base::SharedMemory* memory,
+    const gfx::Size& size,
+    ResourceFormat format) {
+  DCHECK(IsBitmapFormatSupported(format));
+  base::SharedMemoryHandle dupe_handle =
+      base::SharedMemory::DuplicateHandle(memory->handle());
+  if (!base::SharedMemory::IsHandleValid(dupe_handle)) {
+    DLOG(ERROR) << "Failed to duplicate shared memory handle for bitmap.";
+    CollectMemoryUsageAndDie(size, format, memory->requested_size());
+  }
+
+  memory->Close();
+
+  return mojo::WrapSharedMemoryHandle(
+      dupe_handle, memory->mapped_size(),
+      mojo::UnwrappedSharedMemoryHandleProtection::kReadWrite);
+}
+
+mojo::ScopedSharedBufferHandle DuplicateWithoutClosingMappedBitmap(
+    const base::SharedMemory* memory,
     const gfx::Size& size,
     ResourceFormat format) {
   DCHECK(IsBitmapFormatSupported(format));

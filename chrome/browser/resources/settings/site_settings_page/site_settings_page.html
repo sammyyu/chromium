@@ -1,5 +1,6 @@
 <link rel="import" href="chrome://resources/html/polymer.html">
 
+<link rel="import" href="chrome://resources/cr_elements/icons.html">
 <link rel="import" href="chrome://resources/html/web_ui_listener_behavior.html">
 <link rel="import" href="chrome://resources/polymer/v1_0/paper-icon-button/paper-icon-button-light.html">
 <link rel="import" href="../icons.html">
@@ -17,15 +18,18 @@
       }
     </style>
     <template is="dom-if" if="[[enableSiteSettings_]]">
-      <div class="settings-box first" category$="[[ALL_SITES]]"
+      <div class="settings-box first line-only">
+        <h2 class="first">$i18n{siteSettingsAllSites}</h2>
+      </div>
+      <div class="settings-box first line-only" category$="[[ALL_SITES]]"
           data-route="SITE_SETTINGS_ALL" on-click="onTapNavigate_" actionable>
-        <iron-icon icon="settings:list"></iron-icon>
-        <div class="middle">$i18n{siteSettingsCategoryAllSites}</div>
+        <div class="start">$i18n{siteSettingsAllSitesDescription}</div>
         <paper-icon-button-light class="subpage-arrow">
-          <button aria-label="$i18n{siteSettingsCategoryAllSites}"></button>
+          <button aria-label="$i18n{siteSettingsAllSitesDescription}"></button>
         </paper-icon-button-light>
       </div>
-      <div class="settings-box line-only">
+      <div class="settings-box first line-only">
+        <h2>$i18n{siteSettingsPermissions}</h2>
       </div>
     </template>
     <div id="cookies" class="settings-box two-line first"
@@ -241,7 +245,7 @@
         category$="[[ContentSettingsTypes.BACKGROUND_SYNC]]"
         data-route="SITE_SETTINGS_BACKGROUND_SYNC" on-click="onTapNavigate_"
         actionable>
-      <iron-icon icon="settings:sync"></iron-icon>
+      <iron-icon icon="cr:sync"></iron-icon>
       <div class="middle">
         $i18n{siteSettingsBackgroundSync}
         <div class="secondary" id="backgroundSyncSecondary">
@@ -365,14 +369,23 @@
         <button aria-label="$i18n{siteSettingsZoomLevels}"></button>
       </paper-icon-button-light>
     </div>
-    <div id="usb-devices" class="settings-box"
+    <div id="usb-devices" class="settings-box two-line"
         category$="[[ContentSettingsTypes.USB_DEVICES]]"
         data-route="SITE_SETTINGS_USB_DEVICES" on-click="onTapNavigate_"
         actionable>
       <iron-icon icon="settings:usb"></iron-icon>
-      <div class="middle">$i18n{siteSettingsUsbDevices}</div>
+      <div class="middle">
+        $i18n{siteSettingsUsbDevices}
+        <div class="secondary" id="usbDevicesSecondary">
+          [[defaultSettingLabel_(
+              default_.usbDevices,
+              '$i18nPolymer{siteSettingsUsbDevicesAsk}',
+              '$i18nPolymer{siteSettingsUsbDevicesBlock}')]]
+        </div>
+      </div>
       <paper-icon-button-light class="subpage-arrow">
-        <button aria-label="$i18n{siteSettingsUsbDevices}"></button>
+        <button aria-label="$i18n{siteSettingsUsbDevices}"
+            area-describedby="usbDevicesSecondary"></button>
       </paper-icon-button-light>
     </div>
     <div id="pdf-documents" class="settings-box"
@@ -387,7 +400,7 @@
     <div id="protected-content" class="settings-box"
         data-route="SITE_SETTINGS_PROTECTED_CONTENT" on-click="onTapNavigate_"
         actionable>
-      <iron-icon icon="settings:security"></iron-icon>
+      <iron-icon icon="settings:protected-content"></iron-icon>
       <div class="middle">$i18n{siteSettingsProtectedContent}</div>
       <paper-icon-button-light class="subpage-arrow">
         <button aria-label="$i18n{siteSettingsProtectedContent}"></button>
@@ -395,9 +408,9 @@
     </div>
     <template is="dom-if" if="[[enableClipboardContentSetting_]]">
       <div id="clipboard" class="settings-box two-line"
-           category$="[[ContentSettingsTypes.CLIPBOARD]]"
-           data-route="SITE_SETTINGS_CLIPBOARD" on-click="onTapNavigate_"
-           actionable>
+          category$="[[ContentSettingsTypes.CLIPBOARD]]"
+          data-route="SITE_SETTINGS_CLIPBOARD" on-click="onTapNavigate_"
+          actionable>
         <iron-icon icon="settings:clipboard"></iron-icon>
         <div class="middle">
           $i18n{siteSettingsClipboard}
@@ -411,6 +424,27 @@
         <paper-icon-button-light class="subpage-arrow">
           <button aria-label="$i18n{siteSettingsClipboard}"
               aria-describedby="clipboardSecondary"></button>
+        </paper-icon-button-light>
+      </div>
+    </template>
+    <template is="dom-if" if="[[enablePaymentHandlerContentSetting_]]">
+      <div id="paymentHandler" class="settings-box two-line"
+           category$="[[ContentSettingsTypes.PAYMENT_HANDLER]]"
+           data-route="SITE_SETTINGS_PAYMENT_HANDLER" on-click="onTapNavigate_"
+           actionable>
+        <iron-icon icon="settings:payment-handler"></iron-icon>
+        <div class="middle">
+          $i18n{siteSettingsPaymentHandler}
+          <div class="secondary" id="paymentHandlerSecondary">
+            [[defaultSettingLabel_(
+                default_.paymentHandler,
+                '$i18nPolymer{siteSettingsPaymentHandlerAllow}',
+                '$i18nPolymer{siteSettingsPaymentHandlerBlock}')]]
+          </div>
+        </div>
+        <paper-icon-button-light class="subpage-arrow">
+          <button aria-label="$i18n{siteSettingsPaymentHandler}"
+              aria-describedby="paymentHandlerSecondary"></button>
         </paper-icon-button-light>
       </div>
     </template>

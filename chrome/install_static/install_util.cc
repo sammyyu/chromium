@@ -381,6 +381,10 @@ const CLSID& GetToastActivatorClsid() {
   return InstallDetails::Get().toast_activator_clsid();
 }
 
+const CLSID& GetElevatorClsid() {
+  return InstallDetails::Get().elevator_clsid();
+}
+
 std::wstring GetBaseAppName() {
   return InstallDetails::Get().mode().base_app_name;
 }
@@ -417,6 +421,10 @@ bool SupportsRetentionExperiments() {
 
 int GetIconResourceIndex() {
   return InstallDetails::Get().mode().app_icon_resource_index;
+}
+
+const wchar_t* GetSandboxSidPrefix() {
+  return InstallDetails::Get().mode().sandbox_sid_prefix;
 }
 
 bool GetCollectStatsConsent() {

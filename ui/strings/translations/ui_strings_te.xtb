@@ -13,6 +13,7 @@
 <translation id="1413622004203049571"><ph name="NOTIFIER_NAME" /> నుండి వచ్చే నోటిఫికేషన్‌లను నిలిపివేయి</translation>
 <translation id="1591184457164800433">{MINUTES,plural, =1{1 నిమిషం మరియు }other{# నిమిషాలు మరియు }}</translation>
 <translation id="1643823602425662293">నోటిఫికేషన్</translation>
+<translation id="169515659049020177">Shift</translation>
 <translation id="1710340000377843106">ఇప్పుడు</translation>
 <translation id="1752946267035950200">{MINUTES,plural, =1{1 నిమిషం}other{# నిమిషాలు}}</translation>
 <translation id="1761785978543082658"><ph name="QUANTITY" /> B</translation>
@@ -37,6 +38,7 @@
 <translation id="2295140143284145483">సర్వే</translation>
 <translation id="2297836609126180313"><ph name="QUANTITY" /> TB/s</translation>
 <translation id="24452542372838207">నోటిఫికేషన్‌ని విస్తరించు</translation>
+<translation id="2482878487686419369">ప్రకటనలు</translation>
 <translation id="2497284189126895209">మొత్తం ఫైళ్లు</translation>
 <translation id="2522350507219695259">క్రమాంకనం పూర్తయింది</translation>
 <translation id="252373100621549798">తెలియని ప్రదర్శన</translation>
@@ -49,6 +51,7 @@
 <translation id="3036649622769666520">ఫైళ్ళను తెరువు</translation>
 <translation id="3049748772180311791"><ph name="QUANTITY" /> MB</translation>
 <translation id="3087734570205094154">దిగువ</translation>
+<translation id="3126026824346185272">Ctrl</translation>
 <translation id="3157931365184549694">పునరుద్ధరించు</translation>
 <translation id="3183922693828471536">ఇక్కడ స్క్రోల్ చెయ్యండి</translation>
 <translation id="3234408098842461169">క్రింది బాణం</translation>
@@ -63,6 +66,7 @@
 <translation id="385051799172605136">వెనుకకు</translation>
 <translation id="3889424535448813030">కుడి బాణం</translation>
 <translation id="3892641579809465218">అంతర్గత ప్రదర్శన</translation>
+<translation id="3897092660631435901">మెను</translation>
 <translation id="3909791450649380159">క&amp;త్తిరించు</translation>
 <translation id="3990502903496589789">కుడి సరిహద్దు</translation>
 <translation id="4202807286478387388">వెళ్ళు</translation>
@@ -75,6 +79,7 @@
 <translation id="4730374152663651037">తరచుగా ఉపయోగించేవి</translation>
 <translation id="4788285488841504513">{MONTHS,plural, =1{1 నెల మిగిలి ఉంది}other{# నెలలు మిగిలి ఉన్నాయి}}</translation>
 <translation id="4820616160060340806">Command+<ph name="KEY_COMBO_NAME" /></translation>
+<translation id="4841881773802181781">చొప్పించడం</translation>
 <translation id="4968171027979920686">{SECONDS,plural, =1{1 సెకను}other{# సెకన్లు}}</translation>
 <translation id="4971687151119236543">మీడియా మునుపటి ట్రాక్</translation>
 <translation id="4999762576397546063">Ctrl+<ph name="KEY_COMBO_NAME" /></translation>
@@ -85,6 +90,7 @@
 <translation id="5266161281976477809">కంటెంట్‌ను విస్తరింపజేసే లేదా కుదించే త్రిభుజం</translation>
 <translation id="528468243742722775">ముగింపు</translation>
 <translation id="5329858601952122676">&amp;తొలగించు</translation>
+<translation id="5463830097259460683">ఎమోజి &amp;&amp; చిహ్నాలు</translation>
 <translation id="5476505524087279545">ఎంపిక  చెయ్యబడలేదు</translation>
 <translation id="5574202486608032840"><ph name="IDS_SHORT_PRODUCT_OS_NAME" /> సిస్టమ్</translation>
 <translation id="5583640892426849032">Backspace</translation>
@@ -116,6 +122,7 @@
 <translation id="6612467943526193239">క్రమాంకనం నుండి నిష్క్రమించేందుకు, Esc నొక్కండి.</translation>
 <translation id="6620110761915583480">ఫైల్‌ను సేవ్ చేయి</translation>
 <translation id="6699343763173986273">మీడియా తదుపరి ట్రాక్</translation>
+<translation id="673773751041746814">తొలగింపు</translation>
 <translation id="6786750046913594791">ఫోల్డర్‌ను మూసివేయండి</translation>
 <translation id="6808150112686056157">మీడియా ఆపివేయి</translation>
 <translation id="6845383723252244143">ఫోల్డర్‌ను ఎంచుకో</translation>
@@ -136,6 +143,7 @@
 <translation id="7389409599945284130">- <ph name="MESSAGE" /></translation>
 <translation id="7410957453383678442">{MINUTES,plural, =1{1 నిమిషం మిగిలి ఉంది}other{# నిమిషాలు మిగిలి ఉన్నాయి}}</translation>
 <translation id="7460907917090416791"><ph name="QUANTITY" /> TB</translation>
+<translation id="7507604095951736240">ఎమోజి</translation>
 <translation id="7658239707568436148">రద్దు చెయ్యి</translation>
 <translation id="7781829728241885113">నిన్న</translation>
 <translation id="7814458197256864873">&amp;కాపీ</translation>

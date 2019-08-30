@@ -12,7 +12,7 @@
 #include "base/macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
-#import "ios/testing/wait_util.h"
+#import "base/test/ios/wait_util.h"
 #import "ios/web/public/test/js_test_util.h"
 #include "ios/web/public/test/web_test.h"
 #import "ios/web/public/test/web_test_with_web_state.h"
@@ -32,8 +32,8 @@
 
 // Unit tests for ios/web/web_state/js/resources/context_menu.js.
 
-using testing::kWaitForJSCompletionTimeout;
-using testing::WaitUntilConditionOrTimeout;
+using base::test::ios::kWaitForJSCompletionTimeout;
+using base::test::ios::WaitUntilConditionOrTimeout;
 
 // A class which handles receiving script message responses by implementing the
 // WKScriptMessageHandler protocol.
@@ -488,7 +488,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, FindImageElementAtPoint) {
 
   id result = FindElementAtPoint(20, 20);
   NSDictionary* expected_value = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementSource : @"file:///bogus",
     kContextMenuElementReferrerPolicy : @"default",
   };
@@ -506,7 +506,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, FindImageElementWithTitleAtPoint) {
 
   id result = FindElementAtPoint(20, 20);
   NSDictionary* expected_value = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementSource : @"file:///bogus",
     kContextMenuElementReferrerPolicy : @"default",
     kContextMenuElementTitle : @"Hello world!",
@@ -526,7 +526,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest,
 
   id result = FindElementAtPoint(0, 0);
   NSDictionary* expected_value = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
   };
   EXPECT_NSEQ(expected_value, result);
 }
@@ -542,7 +542,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest,
 
   id result = FindElementAtPoint(GetWebViewContentSize().width / 2, 50);
   NSDictionary* expected_value = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
   };
   EXPECT_NSEQ(expected_value, result);
 }
@@ -551,7 +551,15 @@ TEST_F(ContextMenuJsFindElementAtPointTest,
 
 // Tests that an image link returns details for both the image and the link
 // destination when the image source is a file:// url.
-TEST_F(ContextMenuJsFindElementAtPointTest, FindLinkImageAtPointForFileUrl) {
+// TODO(crbug.com/796418): This test is flaky on devices.
+#if TARGET_IPHONE_SIMULATOR
+#define MAYBE_FindLinkImageAtPointForFileUrl FindLinkImageAtPointForFileUrl
+#else
+#define MAYBE_FindLinkImageAtPointForFileUrl \
+  FLAKY_FindLinkImageAtPointForFileUrl
+#endif
+TEST_F(ContextMenuJsFindElementAtPointTest,
+       MAYBE_FindLinkImageAtPointForFileUrl) {
   NSString* link_image =
       @"<a href='file:///linky'>"
        "<img id='foo' style='width:200;height:200;' src='file:///bogus'/>"
@@ -562,7 +570,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, FindLinkImageAtPointForFileUrl) {
 
   id result = FindElementAtPoint(20, 20);
   NSDictionary* expected_value = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementSource : @"file:///bogus",
     kContextMenuElementReferrerPolicy : @"default",
     kContextMenuElementHyperlink : @"file:///linky",
@@ -584,7 +592,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest,
 
   id result = FindElementAtPoint(0, 0);
   NSDictionary* expected_value = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
   };
   EXPECT_NSEQ(expected_value, result);
 }
@@ -603,7 +611,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest,
 
   id result = FindElementAtPoint(GetWebViewContentSize().width / 2, 50);
   NSDictionary* expected_value = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
   };
   EXPECT_NSEQ(expected_value, result);
 }
@@ -629,7 +637,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest,
 
   id result = FindElementAtPoint(20, 20);
   NSDictionary* expected_result = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementSource : [NSString stringWithFormat:@"%sfoo", kTestUrl],
     kContextMenuElementReferrerPolicy : @"default",
     kContextMenuElementHyperlink : kLinkDest,
@@ -649,7 +657,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, FindImageLinkedToJavaScript) {
 
   id result = FindElementAtPoint(20, 20);
   NSDictionary* expected_result = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementSource : [NSString stringWithFormat:@"%sfoo", kTestUrl],
     kContextMenuElementReferrerPolicy : @"default",
     kContextMenuElementHyperlink : @"javascript:console.log(",
@@ -668,7 +676,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest,
 
   id result = FindElementAtPoint(20, 20);
   NSDictionary* expected_result = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementSource : [NSString stringWithFormat:@"%sfoo", kTestUrl],
     kContextMenuElementReferrerPolicy : @"default",
   };
@@ -688,7 +696,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest,
 
   id result = FindElementAtPoint(20, 20);
   NSDictionary* expected_result = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementSource : [NSString stringWithFormat:@"%sfoo", kTestUrl],
     kContextMenuElementReferrerPolicy : @"default",
   };
@@ -708,7 +716,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest,
 
   id result = FindElementAtPoint(20, 20);
   NSDictionary* expected_result = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementSource : [NSString stringWithFormat:@"%sfoo", kTestUrl],
     kContextMenuElementReferrerPolicy : @"default",
   };
@@ -730,7 +738,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, LinkOfImageWithCalloutNone) {
 
   id result = FindElementAtPoint(5, 5);
   NSDictionary* expected_result = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementInnerText : @"",
     kContextMenuElementReferrerPolicy : @"default",
     kContextMenuElementHyperlink : kLinkDest,
@@ -758,7 +766,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, TextAreaStopsProximity) {
 
   id result = FindElementAtPoint(10, 10);
   NSDictionary* expected_value = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
   };
   EXPECT_NSEQ(expected_value, result);
 }
@@ -809,7 +817,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, MAYBE_LinkOfTextFromTallPage) {
   // Link is at bottom of the page content.
   id result = FindElementAtPoint(1, content_height - 5.0);
   NSDictionary* expected_result = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementInnerText : @"link",
     kContextMenuElementReferrerPolicy : @"default",
     kContextMenuElementHyperlink : @"http://destination/",
@@ -829,7 +837,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, LinkOfTextWithoutCalloutProperty) {
 
   id result = FindElementAtPoint(1, 1);
   NSDictionary* expected_result = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementInnerText : @"link",
     kContextMenuElementReferrerPolicy : @"default",
     kContextMenuElementHyperlink : kLinkDest,
@@ -860,7 +868,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest,
 
   id result = FindElementAtPoint(1, 1);
   NSDictionary* expected_result = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementInnerText : @"link",
     kContextMenuElementReferrerPolicy : @"default",
     kContextMenuElementHyperlink : kLinkDest,
@@ -879,7 +887,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, LinkOfTextWithCalloutNone) {
   ASSERT_TRUE(web::LoadHtml(web_view_, kLinkHtml, GetTestURL()));
 
   id result = FindElementAtPoint(1, 1);
-  EXPECT_NSEQ(@{kContextMenuElementRequestID : kRequestId}, result);
+  EXPECT_NSEQ(@{kContextMenuElementRequestId : kRequestId}, result);
 }
 
 // Tests that -webkit-touch-callout property can be inherited from ancester
@@ -894,7 +902,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, LinkOfTextWithCalloutFromAncester) {
   ASSERT_TRUE(web::LoadHtml(web_view_, kLinkHtml, GetTestURL()));
 
   id result = FindElementAtPoint(1, 1);
-  EXPECT_NSEQ(@{kContextMenuElementRequestID : kRequestId}, result);
+  EXPECT_NSEQ(@{kContextMenuElementRequestId : kRequestId}, result);
 }
 
 // Tests that setting -webkit-touch-callout property can override the value
@@ -912,7 +920,7 @@ TEST_F(ContextMenuJsFindElementAtPointTest, LinkOfTextWithCalloutOverride) {
 
   id result = FindElementAtPoint(1, 1);
   NSDictionary* expected_result = @{
-    kContextMenuElementRequestID : kRequestId,
+    kContextMenuElementRequestId : kRequestId,
     kContextMenuElementInnerText : @"link",
     kContextMenuElementReferrerPolicy : @"default",
     kContextMenuElementHyperlink : kLinkDest,

@@ -17,7 +17,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/child_process_host.h"
-#include "third_party/WebKit/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 
 namespace {
 
@@ -259,6 +259,32 @@ void SearchIPCRouter::HistorySyncCheck(int page_seq_no,
   }
 
   std::move(callback).Run(result);
+}
+
+void SearchIPCRouter::SetCustomBackgroundURL(const GURL& url) {
+  if (!policy_->ShouldProcessSetCustomBackgroundURL())
+    return;
+
+  delegate_->OnSetCustomBackgroundURL(url);
+}
+
+void SearchIPCRouter::SetCustomBackgroundURLWithAttributions(
+    const GURL& background_url,
+    const std::string& attribution_line_1,
+    const std::string& attribution_line_2,
+    const GURL& action_url) {
+  if (!policy_->ShouldProcessSetCustomBackgroundURLWithAttributions())
+    return;
+
+  delegate_->OnSetCustomBackgroundURLWithAttributions(
+      background_url, attribution_line_1, attribution_line_2, action_url);
+}
+
+void SearchIPCRouter::SelectLocalBackgroundImage() {
+  if (!policy_->ShouldProcessSelectLocalBackgroundImage())
+    return;
+
+  delegate_->OnSelectLocalBackgroundImage();
 }
 
 void SearchIPCRouter::set_delegate_for_testing(Delegate* delegate) {

@@ -13,7 +13,6 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_file.h"
-#include "base/mac/bind_objc_block.h"
 #include "base/mac/foundation_util.h"
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
@@ -43,9 +42,10 @@
 #include "net/log/net_log_capture_mode.h"
 #include "net/log/net_log_util.h"
 #include "net/proxy_resolution/proxy_resolution_service.h"
-#include "net/quic/core/quic_versions.h"
 #include "net/socket/ssl_client_socket.h"
 #include "net/ssl/channel_id_service.h"
+#include "net/ssl/ssl_key_logger_impl.h"
+#include "net/third_party/quic/core/quic_versions.h"
 #include "net/url_request/http_user_agent_settings.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_builder.h"
@@ -312,7 +312,8 @@ void CronetEnvironment::InitializeOnNetworkThread() {
   if (!ssl_key_log_file_set && !ssl_key_log_file_name_.empty()) {
     ssl_key_log_file_set = true;
     base::FilePath ssl_key_log_file(ssl_key_log_file_name_);
-    net::SSLClientSocket::SetSSLKeyLogFile(ssl_key_log_file);
+    net::SSLClientSocket::SetSSLKeyLogger(
+        std::make_unique<net::SSLKeyLoggerImpl>(ssl_key_log_file));
   }
 
   if (user_agent_partial_)
@@ -320,7 +321,7 @@ void CronetEnvironment::InitializeOnNetworkThread() {
 
   // Cache
   base::FilePath storage_path;
-  if (!PathService::Get(base::DIR_CACHE, &storage_path))
+  if (!base::PathService::Get(base::DIR_CACHE, &storage_path))
     return;
   storage_path = storage_path.Append(FILE_PATH_LITERAL("cronet"));
 
@@ -400,7 +401,7 @@ void CronetEnvironment::InitializeOnNetworkThread() {
                                          quic_hint.port());
     main_context_->http_server_properties()->SetQuicAlternativeService(
         quic_hint_server, alternative_service, base::Time::Max(),
-        net::QuicTransportVersionVector());
+        quic::QuicTransportVersionVector());
   }
 
   main_context_->transport_security_state()

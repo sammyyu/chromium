@@ -15,8 +15,6 @@
 #include "base/files/file_util.h"
 #include "base/json/json_reader.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
-#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
@@ -132,7 +130,7 @@ class DrawFadedStringLayerDelegate : public LayerDelegate {
 class LayerWithRealCompositorTest : public testing::Test {
  public:
   LayerWithRealCompositorTest() {
-    if (PathService::Get(gfx::DIR_TEST_DATA, &test_data_directory_)) {
+    if (base::PathService::Get(gfx::DIR_TEST_DATA, &test_data_directory_)) {
       test_data_directory_ = test_data_directory_.AppendASCII("compositor");
     } else {
       LOG(ERROR) << "Could not open test data directory.";
@@ -315,7 +313,8 @@ class TestLayerDelegate : public LayerDelegate {
 
   MOCK_METHOD2(OnLayerBoundsChanged,
                void(const gfx::Rect&, PropertyChangeReason));
-  MOCK_METHOD1(OnLayerTransformed, void(PropertyChangeReason));
+  MOCK_METHOD2(OnLayerTransformed,
+               void(const gfx::Transform&, PropertyChangeReason));
   MOCK_METHOD1(OnLayerOpacityChanged, void(PropertyChangeReason));
 
   void reset() {
@@ -572,10 +571,11 @@ TEST(LayerStandaloneTest, ReleaseMailboxOnDestruction) {
   bool callback_run = false;
   auto resource = viz::TransferableResource::MakeGL(
       gpu::Mailbox::Generate(), GL_LINEAR, GL_TEXTURE_2D, gpu::SyncToken());
-  layer->SetTransferableResource(resource,
-                                 viz::SingleReleaseCallback::Create(
-                                     base::Bind(ReturnMailbox, &callback_run)),
-                                 gfx::Size(10, 10));
+  layer->SetTransferableResource(
+      resource,
+      viz::SingleReleaseCallback::Create(
+          base::BindOnce(ReturnMailbox, &callback_run)),
+      gfx::Size(10, 10));
   EXPECT_FALSE(callback_run);
   layer.reset();
   EXPECT_TRUE(callback_run);
@@ -904,22 +904,34 @@ TEST_F(LayerWithDelegateTest, SurfaceLayerCloneAndMirror) {
   layer->SetShowPrimarySurface(surface_id_one, gfx::Size(10, 10), SK_ColorWHITE,
                                cc::DeadlinePolicy::UseDefaultDeadline(), false);
   EXPECT_FALSE(layer->StretchContentToFillBounds());
+  EXPECT_TRUE(static_cast<cc::SurfaceLayer*>(layer->cc_layer_for_testing())
+                  ->surface_hit_testable());
 
   auto clone = layer->Clone();
   EXPECT_FALSE(clone->StretchContentToFillBounds());
+  EXPECT_TRUE(static_cast<cc::SurfaceLayer*>(clone->cc_layer_for_testing())
+                  ->surface_hit_testable());
   auto mirror = layer->Mirror();
-  EXPECT_FALSE(clone->StretchContentToFillBounds());
+  EXPECT_FALSE(mirror->StretchContentToFillBounds());
+  EXPECT_TRUE(static_cast<cc::SurfaceLayer*>(mirror->cc_layer_for_testing())
+                  ->surface_hit_testable());
 
   local_surface_id = allocator.GenerateId();
   viz::SurfaceId surface_id_two(arbitrary_frame_sink, local_surface_id);
   layer->SetShowPrimarySurface(surface_id_two, gfx::Size(10, 10), SK_ColorWHITE,
                                cc::DeadlinePolicy::UseDefaultDeadline(), true);
   EXPECT_TRUE(layer->StretchContentToFillBounds());
+  EXPECT_TRUE(static_cast<cc::SurfaceLayer*>(layer->cc_layer_for_testing())
+                  ->surface_hit_testable());
 
   clone = layer->Clone();
   EXPECT_TRUE(clone->StretchContentToFillBounds());
+  EXPECT_TRUE(static_cast<cc::SurfaceLayer*>(clone->cc_layer_for_testing())
+                  ->surface_hit_testable());
   mirror = layer->Mirror();
-  EXPECT_TRUE(clone->StretchContentToFillBounds());
+  EXPECT_TRUE(mirror->StretchContentToFillBounds());
+  EXPECT_TRUE(static_cast<cc::SurfaceLayer*>(mirror->cc_layer_for_testing())
+                  ->surface_hit_testable());
 }
 
 class LayerWithNullDelegateTest : public LayerWithDelegateTest {
@@ -1004,8 +1016,8 @@ TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
   auto resource = viz::TransferableResource::MakeGL(
       gpu::Mailbox::Generate(), GL_LINEAR, GL_TEXTURE_2D, gpu::SyncToken());
   l1->SetTransferableResource(resource,
-                              viz::SingleReleaseCallback::Create(
-                                  base::Bind(ReturnMailbox, &callback1_run)),
+                              viz::SingleReleaseCallback::Create(base::BindOnce(
+                                  ReturnMailbox, &callback1_run)),
                               gfx::Size(10, 10));
 
   EXPECT_NE(before_layer, l1->cc_layer_for_testing());
@@ -1021,8 +1033,8 @@ TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
   resource = viz::TransferableResource::MakeGL(
       gpu::Mailbox::Generate(), GL_LINEAR, GL_TEXTURE_2D, gpu::SyncToken());
   l1->SetTransferableResource(resource,
-                              viz::SingleReleaseCallback::Create(
-                                  base::Bind(ReturnMailbox, &callback2_run)),
+                              viz::SingleReleaseCallback::Create(base::BindOnce(
+                                  ReturnMailbox, &callback2_run)),
                               gfx::Size(10, 10));
   EXPECT_TRUE(callback1_run);
   EXPECT_FALSE(callback2_run);
@@ -1043,8 +1055,8 @@ TEST_F(LayerWithNullDelegateTest, SwitchLayerPreservesCCLayerState) {
   resource = viz::TransferableResource::MakeGL(
       gpu::Mailbox::Generate(), GL_LINEAR, GL_TEXTURE_2D, gpu::SyncToken());
   l1->SetTransferableResource(resource,
-                              viz::SingleReleaseCallback::Create(
-                                  base::Bind(ReturnMailbox, &callback3_run)),
+                              viz::SingleReleaseCallback::Create(base::BindOnce(
+                                  ReturnMailbox, &callback3_run)),
                               gfx::Size(10, 10));
 
   EXPECT_NE(before_layer, l1->cc_layer_for_testing());
@@ -1190,10 +1202,10 @@ TEST_F(LayerWithNullDelegateTest, SetBoundsSchedulesPaint) {
 // Checks that the damage rect for a TextureLayer is empty after a commit.
 TEST_F(LayerWithNullDelegateTest, EmptyDamagedRect) {
   base::RunLoop run_loop;
-  viz::ReleaseCallback callback =
-      base::Bind([](base::RunLoop* run_loop, const gpu::SyncToken& sync_token,
-                    bool is_lost) { run_loop->Quit(); },
-                 base::Unretained(&run_loop));
+  viz::ReleaseCallback callback = base::BindOnce(
+      [](base::RunLoop* run_loop, const gpu::SyncToken& sync_token,
+         bool is_lost) { run_loop->Quit(); },
+      base::Unretained(&run_loop));
 
   std::unique_ptr<Layer> root(CreateLayer(LAYER_SOLID_COLOR));
   auto resource = viz::TransferableResource::MakeGL(
@@ -1328,8 +1340,8 @@ TEST_F(LayerWithRealCompositorTest, DrawAlphaBlendedPixels) {
   EXPECT_GE(viewport_size.height(), test_size);
 
   // Blue with a wee bit of transparency.
-  SkColor blue_with_alpha = SkColorSetARGBInline(40, 10, 20, 200);
-  SkColor blend_color = SkColorSetARGBInline(255, 216, 3, 32);
+  SkColor blue_with_alpha = SkColorSetARGB(40, 10, 20, 200);
+  SkColor blend_color = SkColorSetARGB(255, 216, 3, 32);
 
   std::unique_ptr<Layer> background_layer(
       CreateColorLayer(SK_ColorRED, gfx::Rect(viewport_size)));
@@ -1364,8 +1376,8 @@ TEST_F(LayerWithRealCompositorTest, DrawAlphaThresholdFilterPixels) {
   EXPECT_GE(viewport_size.height(), test_size);
 
   int blue_height = 10;
-  SkColor blue_with_alpha = SkColorSetARGBInline(40, 0, 0, 255);
-  SkColor blend_color = SkColorSetARGBInline(255, 215, 0, 40);
+  SkColor blue_with_alpha = SkColorSetARGB(40, 0, 0, 255);
+  SkColor blend_color = SkColorSetARGB(255, 215, 0, 40);
 
   std::unique_ptr<Layer> background_layer(
       CreateColorLayer(SK_ColorRED, gfx::Rect(viewport_size)));
@@ -1429,7 +1441,8 @@ TEST_F(LayerWithRealCompositorTest, SetRootLayer) {
 // - Whenever SetBounds, SetOpacity or SetTransform are called.
 // TODO(vollick): could be reorganized into compositor_unittest.cc
 // Flaky on Windows. See https://crbug.com/784563.
-#if defined(OS_WIN)
+// Flaky on Linux tsan. See https://crbug.com/834026.
+#if defined(OS_WIN) || defined(OS_LINUX)
 #define MAYBE_CompositorObservers DISABLED_CompositorObservers
 #else
 #define MAYBE_CompositorObservers CompositorObservers
@@ -1879,10 +1892,12 @@ TEST_F(LayerWithDelegateTest, ExternalContent) {
   EXPECT_EQ(before.get(), child->cc_layer_for_testing());
 
   // Showing surface content changes the underlying cc layer.
+  viz::FrameSinkId frame_sink_id(1u, 1u);
+  viz::ParentLocalSurfaceIdAllocator allocator;
   before = child->cc_layer_for_testing();
-  child->SetShowPrimarySurface(viz::SurfaceId(), gfx::Size(10, 10),
-                               SK_ColorWHITE,
-                               cc::DeadlinePolicy::UseDefaultDeadline(), false);
+  child->SetShowPrimarySurface(
+      viz::SurfaceId(frame_sink_id, allocator.GenerateId()), gfx::Size(10, 10),
+      SK_ColorWHITE, cc::DeadlinePolicy::UseDefaultDeadline(), false);
   scoped_refptr<cc::Layer> after = child->cc_layer_for_testing();
   const auto* surface = static_cast<cc::SurfaceLayer*>(after.get());
   EXPECT_TRUE(after.get());
@@ -1890,8 +1905,8 @@ TEST_F(LayerWithDelegateTest, ExternalContent) {
   EXPECT_EQ(base::nullopt, surface->deadline_in_frames());
 
   child->SetShowPrimarySurface(
-      viz::SurfaceId(), gfx::Size(10, 10), SK_ColorWHITE,
-      cc::DeadlinePolicy::UseSpecifiedDeadline(4u), false);
+      viz::SurfaceId(frame_sink_id, allocator.GenerateId()), gfx::Size(10, 10),
+      SK_ColorWHITE, cc::DeadlinePolicy::UseSpecifiedDeadline(4u), false);
   EXPECT_EQ(4u, surface->deadline_in_frames());
 }
 
@@ -2399,16 +2414,32 @@ TEST(LayerDelegateTest, OnLayerTransformed) {
   auto layer = std::make_unique<Layer>(LAYER_TEXTURED);
   testing::StrictMock<TestLayerDelegate> delegate;
   layer->set_delegate(&delegate);
-  gfx::Transform target_transform;
-  target_transform.Skew(10.0f, 5.0f);
+  gfx::Transform target_transform1;
+  target_transform1.Skew(10.0f, 5.0f);
+  {
+    EXPECT_CALL(delegate,
+                OnLayerTransformed(gfx::Transform(),
+                                   PropertyChangeReason::NOT_FROM_ANIMATION))
+        .WillOnce(testing::Invoke(
+            [&](const gfx::Transform& old_transform, PropertyChangeReason) {
+              // Verify that |layer->transform()| returns the correct value when
+              // the delegate is notified.
+              EXPECT_EQ(target_transform1, layer->transform());
+            }));
+    layer->SetTransform(target_transform1);
+  }
+  gfx::Transform target_transform2;
+  target_transform2.Skew(10.0f, 5.0f);
   EXPECT_CALL(delegate,
-              OnLayerTransformed(PropertyChangeReason::NOT_FROM_ANIMATION))
-      .WillOnce(testing::Invoke([&](PropertyChangeReason) {
-        // Verify that |layer->transform()| returns the correct value when the
-        // delegate is notified.
-        EXPECT_EQ(layer->transform(), target_transform);
-      }));
-  layer->SetTransform(target_transform);
+              OnLayerTransformed(target_transform1,
+                                 PropertyChangeReason::NOT_FROM_ANIMATION))
+      .WillOnce(testing::Invoke(
+          [&](const gfx::Transform& old_transform, PropertyChangeReason) {
+            // Verify that |layer->transform()| returns the correct value when
+            // the delegate is notified.
+            EXPECT_EQ(target_transform2, layer->transform());
+          }));
+  layer->SetTransform(target_transform2);
 }
 
 // Verify that LayerDelegate::OnLayerTransformed() is called at every step of a
@@ -2442,8 +2473,10 @@ TEST(LayerDelegateTest, OnLayerTransformedNonThreadedAnimation) {
   ASSERT_FALSE(element->IsThreaded(layer.get()));
   LayerAnimationElement* element_raw = element.get();
   EXPECT_CALL(delegate,
-              OnLayerTransformed(PropertyChangeReason::FROM_ANIMATION))
-      .WillOnce(testing::Invoke([&](PropertyChangeReason) {
+              OnLayerTransformed(gfx::Transform(),
+                                 PropertyChangeReason::FROM_ANIMATION))
+      .WillOnce(testing::Invoke([&](const gfx::Transform& old_transform,
+                                    PropertyChangeReason) {
         // Verify that |layer->transform()| returns the correct value when the
         // delegate is notified.
         EXPECT_EQ(layer->transform(), initial_transform);
@@ -2455,19 +2488,23 @@ TEST(LayerDelegateTest, OnLayerTransformedNonThreadedAnimation) {
 
   // Progress the animation.
   EXPECT_CALL(delegate,
-              OnLayerTransformed(PropertyChangeReason::FROM_ANIMATION))
-      .WillOnce(testing::Invoke([&](PropertyChangeReason) {
-        // Verify that |layer->transform()| returns the correct value when the
-        // delegate is notified.
-        EXPECT_EQ(layer->transform(), step_transform);
-      }));
+              OnLayerTransformed(initial_transform,
+                                 PropertyChangeReason::FROM_ANIMATION))
+      .WillOnce(testing::Invoke(
+          [&](const gfx::Transform& old_transform, PropertyChangeReason) {
+            // Verify that |layer->transform()| returns the correct value when
+            // the delegate is notified.
+            EXPECT_EQ(layer->transform(), step_transform);
+          }));
   test_controller.Step(element_raw->duration() / 2);
   testing::Mock::VerifyAndClear(&delegate);
 
   // End the animation.
-  EXPECT_CALL(delegate,
-              OnLayerTransformed(PropertyChangeReason::FROM_ANIMATION))
-      .WillOnce(testing::Invoke([&](PropertyChangeReason) {
+  EXPECT_CALL(
+      delegate,
+      OnLayerTransformed(step_transform, PropertyChangeReason::FROM_ANIMATION))
+      .WillOnce(testing::Invoke([&](const gfx::Transform& old_transform,
+                                    PropertyChangeReason) {
         // Verify that |layer->transform()| returns the correct value when the
         // delegate is notified.
         EXPECT_EQ(layer->transform(), target_transform);
@@ -2502,8 +2539,10 @@ TEST(LayerDelegateTest, OnLayerTransformedThreadedAnimation) {
   ASSERT_TRUE(element->IsThreaded(layer.get()));
   LayerAnimationElement* element_raw = element.get();
   EXPECT_CALL(delegate,
-              OnLayerTransformed(PropertyChangeReason::FROM_ANIMATION))
-      .WillOnce(testing::Invoke([&](PropertyChangeReason) {
+              OnLayerTransformed(gfx::Transform(),
+                                 PropertyChangeReason::FROM_ANIMATION))
+      .WillOnce(testing::Invoke([&](const gfx::Transform& old_transform,
+                                    PropertyChangeReason) {
         // Verify that |layer->transform()| returns the correct value when the
         // delegate is notified.
         EXPECT_EQ(layer->transform(), initial_transform);
@@ -2516,8 +2555,10 @@ TEST(LayerDelegateTest, OnLayerTransformedThreadedAnimation) {
 
   // End the animation.
   EXPECT_CALL(delegate,
-              OnLayerTransformed(PropertyChangeReason::FROM_ANIMATION))
-      .WillOnce(testing::Invoke([&](PropertyChangeReason) {
+              OnLayerTransformed(initial_transform,
+                                 PropertyChangeReason::FROM_ANIMATION))
+      .WillOnce(testing::Invoke([&](const gfx::Transform& old_transform,
+                                    PropertyChangeReason) {
         // Verify that |layer->transform()| returns the correct value when the
         // delegate is notified.
         EXPECT_EQ(layer->transform(), target_transform);

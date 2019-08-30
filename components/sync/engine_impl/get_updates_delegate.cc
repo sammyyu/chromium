@@ -49,8 +49,8 @@ NormalGetUpdatesDelegate::~NormalGetUpdatesDelegate() {}
 // This function assumes the progress markers have already been populated.
 void NormalGetUpdatesDelegate::HelpPopulateGuMessage(
     sync_pb::GetUpdatesMessage* get_updates) const {
-  // Fill the legacy GetUpdatesSource field. This is not used anymore, but it's
-  // a required field so we still have to fill it with something.
+  // Set legacy GetUpdatesMessage.GetUpdatesCallerInfo information. It's not
+  // used anymore, but |source| is a required field so we have to set it anyway.
   get_updates->mutable_caller_info()->set_source(
       sync_pb::GetUpdatesCallerInfo::UNKNOWN);
 
@@ -101,8 +101,8 @@ ConfigureGetUpdatesDelegate::~ConfigureGetUpdatesDelegate() {}
 
 void ConfigureGetUpdatesDelegate::HelpPopulateGuMessage(
     sync_pb::GetUpdatesMessage* get_updates) const {
-  // Fill the legacy GetUpdatesSource field. This is not used anymore, but it's
-  // a required field so we still have to fill it with something.
+  // Set legacy GetUpdatesMessage.GetUpdatesCallerInfo information. It's not
+  // used anymore, but |source| is a required field so we have to set it anyway.
   get_updates->mutable_caller_info()->set_source(
       sync_pb::GetUpdatesCallerInfo::UNKNOWN);
 
@@ -120,8 +120,8 @@ std::unique_ptr<ProtocolEvent>
 ConfigureGetUpdatesDelegate::GetNetworkRequestEvent(
     base::Time timestamp,
     const sync_pb::ClientToServerMessage& request) const {
-  return std::unique_ptr<ProtocolEvent>(
-      new ConfigureGetUpdatesRequestEvent(timestamp, origin_, request));
+  return std::make_unique<ConfigureGetUpdatesRequestEvent>(timestamp, origin_,
+                                                           request);
 }
 
 PollGetUpdatesDelegate::PollGetUpdatesDelegate() {}
@@ -130,8 +130,8 @@ PollGetUpdatesDelegate::~PollGetUpdatesDelegate() {}
 
 void PollGetUpdatesDelegate::HelpPopulateGuMessage(
     sync_pb::GetUpdatesMessage* get_updates) const {
-  // Fill the legacy GetUpdatesSource field. This is not used anymore, but it's
-  // a required field so we still have to fill it with something.
+  // Set legacy GetUpdatesMessage.GetUpdatesCallerInfo information. It's not
+  // used anymore, but |source| is a required field so we have to set it anyway.
   get_updates->mutable_caller_info()->set_source(
       sync_pb::GetUpdatesCallerInfo::UNKNOWN);
 

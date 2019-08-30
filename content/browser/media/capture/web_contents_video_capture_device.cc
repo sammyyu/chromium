@@ -31,11 +31,14 @@ class WebContentsVideoCaptureDevice::FrameTracker
           WebContentsVideoCaptureDevice::FrameTracker> {
  public:
   FrameTracker(base::WeakPtr<WebContentsVideoCaptureDevice> device,
+               CursorRenderer* cursor_renderer,
                int render_process_id,
                int main_render_frame_id)
       : device_(std::move(device)),
-        device_task_runner_(base::ThreadTaskRunnerHandle::Get()) {
+        device_task_runner_(base::ThreadTaskRunnerHandle::Get()),
+        cursor_renderer_(cursor_renderer) {
     DCHECK(device_task_runner_);
+    DCHECK(cursor_renderer_);
 
     BrowserThread::PostTask(
         BrowserThread::UI, FROM_HERE,
@@ -50,10 +53,15 @@ class WebContentsVideoCaptureDevice::FrameTracker
             AsWeakPtr(), render_process_id, main_render_frame_id));
   }
 
-  ~FrameTracker() final { DCHECK_CURRENTLY_ON(BrowserThread::UI); }
+  ~FrameTracker() final {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    if (is_capturing_)
+      DidStopCapturingWebContents();
+  }
 
   void WillStartCapturingWebContents(const gfx::Size& capture_size) {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    DCHECK(!is_capturing_);
 
     auto* contents = web_contents();
     if (!contents) {
@@ -82,14 +90,18 @@ class WebContentsVideoCaptureDevice::FrameTracker
             << preferred_size.ToString() << " from a capture size of "
             << capture_size.ToString();
     contents->IncrementCapturerCount(preferred_size);
+    is_capturing_ = true;
   }
 
   void DidStopCapturingWebContents() {
     DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
     if (auto* contents = web_contents()) {
+      DCHECK(is_capturing_);
       contents->DecrementCapturerCount();
+      is_capturing_ = false;
     }
+    DCHECK(!is_capturing_);
   }
 
  private:
@@ -131,6 +143,7 @@ class WebContentsVideoCaptureDevice::FrameTracker
   void DidDestroyFullscreenWidget() final { OnPossibleTargetChange(); }
   void WebContentsDestroyed() final {
     Observe(nullptr);
+    is_capturing_ = false;
     OnPossibleTargetChange();
   }
 
@@ -152,14 +165,20 @@ class WebContentsVideoCaptureDevice::FrameTracker
         native_view = view_impl->GetNativeView();
       }
 
-      if (frame_sink_id != target_frame_sink_id_ ||
-          native_view != target_native_view_) {
+      if (frame_sink_id != target_frame_sink_id_) {
         target_frame_sink_id_ = frame_sink_id;
-        target_native_view_ = native_view;
         device_task_runner_->PostTask(
             FROM_HERE,
             base::BindOnce(&WebContentsVideoCaptureDevice::OnTargetChanged,
-                           device_, frame_sink_id, native_view));
+                           device_, frame_sink_id));
+      }
+
+      if (native_view != target_native_view_) {
+        target_native_view_ = native_view;
+        // Note: CursorRenderer runs on the UI thread. It's also important that
+        // SetTargetView() be called in the current stack while |native_view| is
+        // known to be a valid pointer. http://crbug.com/818679
+        cursor_renderer_->SetTargetView(native_view);
       }
     } else {
       device_task_runner_->PostTask(
@@ -167,6 +186,7 @@ class WebContentsVideoCaptureDevice::FrameTracker
           base::BindOnce(
               &WebContentsVideoCaptureDevice::OnTargetPermanentlyLost,
               device_));
+      cursor_renderer_->SetTargetView(gfx::NativeView());
     }
   }
 
@@ -174,8 +194,16 @@ class WebContentsVideoCaptureDevice::FrameTracker
   const base::WeakPtr<WebContentsVideoCaptureDevice> device_;
   const scoped_refptr<base::SingleThreadTaskRunner> device_task_runner_;
 
+  // Owned by FrameSinkVideoCaptureDevice. This will be valid for the life of
+  // FrameTracker because the FrameTracker deleter task will be posted to the UI
+  // thread before the CursorRenderer deleter task.
+  CursorRenderer* const cursor_renderer_;
+
   viz::FrameSinkId target_frame_sink_id_;
   gfx::NativeView target_native_view_ = gfx::NativeView();
+
+  // Indicates whether the WebContents's capturer count needs to be decremented.
+  bool is_capturing_ = false;
 
   DISALLOW_COPY_AND_ASSIGN(FrameTracker);
 };
@@ -184,6 +212,7 @@ WebContentsVideoCaptureDevice::WebContentsVideoCaptureDevice(
     int render_process_id,
     int main_render_frame_id)
     : tracker_(new FrameTracker(AsWeakPtr(),
+                                cursor_renderer(),
                                 render_process_id,
                                 main_render_frame_id)) {}
 

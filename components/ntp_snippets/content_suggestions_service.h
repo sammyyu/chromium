@@ -92,7 +92,7 @@ class ContentSuggestionsService : public KeyedService,
     virtual ~Observer() = default;
   };
 
-  enum State {
+  enum class State {
     ENABLED,
     DISABLED,
   };
@@ -142,6 +142,13 @@ class ContentSuggestionsService : public KeyedService,
   // synchronously.
   void FetchSuggestionImage(const ContentSuggestion::ID& suggestion_id,
                             ImageFetchedCallback callback);
+
+  // Fetches the image data for the suggestion with the given |suggestion_id|
+  // and runs the |callback|. If that suggestion doesn't exist or the fetch
+  // fails, the callback gets empty data. The callback will not be called
+  // synchronously.
+  void FetchSuggestionImageData(const ContentSuggestion::ID& suggestion_id,
+                                ImageDataFetchedCallback callback);
 
   // Fetches the favicon from local cache (if larger than or equal to
   // |minimum_size_in_pixel|) or from Google server (if there is no icon in the
@@ -287,10 +294,7 @@ class ContentSuggestionsService : public KeyedService,
 
   // history::HistoryServiceObserver implementation.
   void OnURLsDeleted(history::HistoryService* history_service,
-                     bool all_history,
-                     bool expired,
-                     const history::URLRows& deleted_rows,
-                     const std::set<GURL>& favicon_urls) override;
+                     const history::DeletionInfo& deletion_info) override;
   void HistoryServiceBeingDeleted(
       history::HistoryService* history_service) override;
 

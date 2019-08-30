@@ -14,8 +14,8 @@
 #include "content/common/content_export.h"
 #include "content/renderer/media/stream/media_stream_audio_deliverer.h"
 #include "content/renderer/media/stream/media_stream_source.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamSource.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
+#include "third_party/blink/public/platform/web_media_stream_source.h"
+#include "third_party/blink/public/platform/web_media_stream_track.h"
 
 namespace base {
 class SingleThreadTaskRunner;
@@ -141,6 +141,9 @@ class CONTENT_EXPORT MediaStreamAudioSource : public MediaStreamSource {
 
   // Sets muted state and notifies it to all registered tracks.
   void SetMutedState(bool state);
+
+  // Gets the TaskRunner for the main thread, for subclasses that need it.
+  base::SingleThreadTaskRunner* GetTaskRunner() const;
 
  private:
   // MediaStreamSource override.

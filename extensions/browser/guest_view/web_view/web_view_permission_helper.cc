@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "base/location.h"
-#include "base/memory/ptr_util.h"
 #include "base/metrics/user_metrics.h"
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -19,7 +18,7 @@
 #include "extensions/browser/guest_view/web_view/web_view_guest.h"
 #include "extensions/browser/guest_view/web_view/web_view_permission_helper_delegate.h"
 #include "extensions/browser/guest_view/web_view/web_view_permission_types.h"
-#include "ppapi/features/features.h"
+#include "ppapi/buildflags/buildflags.h"
 
 using base::UserMetricsAction;
 using content::BrowserPluginGuestDelegate;
@@ -151,6 +150,7 @@ WebViewPermissionHelper::WebViewPermissionHelper(WebViewGuest* web_view_guest)
     : content::WebContentsObserver(web_view_guest->web_contents()),
       next_permission_request_id_(guest_view::kInstanceIDNone),
       web_view_guest_(web_view_guest),
+      default_media_access_permission_(false),
       weak_factory_(this) {
       web_view_permission_helper_delegate_.reset(
           ExtensionsAPIClient::Get()->CreateWebViewPermissionHelperDelegate(
@@ -193,17 +193,14 @@ bool WebViewPermissionHelper::OnMessageReceived(
 void WebViewPermissionHelper::RequestMediaAccessPermission(
     content::WebContents* source,
     const content::MediaStreamRequest& request,
-    const content::MediaResponseCallback& callback) {
+    content::MediaResponseCallback callback) {
   base::DictionaryValue request_info;
   request_info.SetString(guest_view::kUrl, request.security_origin.spec());
   RequestPermission(
-      WEB_VIEW_PERMISSION_TYPE_MEDIA,
-      request_info,
-      base::Bind(&WebViewPermissionHelper::OnMediaPermissionResponse,
-                 weak_factory_.GetWeakPtr(),
-                 request,
-                 callback),
-      false /* allowed_by_default */);
+      WEB_VIEW_PERMISSION_TYPE_MEDIA, request_info,
+      base::BindOnce(&WebViewPermissionHelper::OnMediaPermissionResponse,
+                     weak_factory_.GetWeakPtr(), request, std::move(callback)),
+      default_media_access_permission_);
 }
 
 bool WebViewPermissionHelper::CheckMediaAccessPermission(
@@ -222,28 +219,28 @@ bool WebViewPermissionHelper::CheckMediaAccessPermission(
 
 void WebViewPermissionHelper::OnMediaPermissionResponse(
     const content::MediaStreamRequest& request,
-    const content::MediaResponseCallback& callback,
+    content::MediaResponseCallback callback,
     bool allow,
     const std::string& user_input) {
   if (!allow) {
-    callback.Run(content::MediaStreamDevices(),
-                 content::MEDIA_DEVICE_PERMISSION_DENIED,
-                 std::unique_ptr<content::MediaStreamUI>());
+    std::move(callback).Run(content::MediaStreamDevices(),
+                            content::MEDIA_DEVICE_PERMISSION_DENIED,
+                            std::unique_ptr<content::MediaStreamUI>());
     return;
   }
   if (!web_view_guest()->attached() ||
       !web_view_guest()->embedder_web_contents()->GetDelegate()) {
-    callback.Run(content::MediaStreamDevices(),
-                 content::MEDIA_DEVICE_INVALID_STATE,
-                 std::unique_ptr<content::MediaStreamUI>());
+    std::move(callback).Run(content::MediaStreamDevices(),
+                            content::MEDIA_DEVICE_INVALID_STATE,
+                            std::unique_ptr<content::MediaStreamUI>());
     return;
   }
 
   web_view_guest()
       ->embedder_web_contents()
       ->GetDelegate()
-      ->RequestMediaAccessPermission(
-          web_view_guest()->embedder_web_contents(), request, callback);
+      ->RequestMediaAccessPermission(web_view_guest()->embedder_web_contents(),
+                                     request, std::move(callback));
 }
 
 void WebViewPermissionHelper::CanDownload(

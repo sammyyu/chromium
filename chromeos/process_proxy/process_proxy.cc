@@ -93,8 +93,8 @@ bool ProcessProxy::StartWatchingOutput(
       master_copy, base::Bind(&ProcessProxy::OnProcessOutput, this)));
 
   watcher_runner_->PostTask(
-      FROM_HERE, base::Bind(&ProcessOutputWatcher::Start,
-                            base::Unretained(output_watcher_.get())));
+      FROM_HERE, base::BindOnce(&ProcessOutputWatcher::Start,
+                                base::Unretained(output_watcher_.get())));
 
   return true;
 }
@@ -106,8 +106,8 @@ void ProcessProxy::OnProcessOutput(ProcessOutputType type,
     return;
 
   callback_runner_->PostTask(
-      FROM_HERE, base::Bind(&ProcessProxy::CallOnProcessOutputCallback, this,
-                            type, output, callback));
+      FROM_HERE, base::BindOnce(&ProcessProxy::CallOnProcessOutputCallback,
+                                this, type, output, callback));
 }
 
 void ProcessProxy::CallOnProcessOutputCallback(ProcessOutputType type,
@@ -137,7 +137,7 @@ void ProcessProxy::StopWatching() {
 
   watcher_runner_->PostTask(
       FROM_HERE,
-      base::Bind(&StopOutputWatcher, base::Passed(&output_watcher_)));
+      base::BindOnce(&StopOutputWatcher, std::move(output_watcher_)));
 }
 
 void ProcessProxy::Close() {
@@ -238,7 +238,10 @@ int ProcessProxy::LaunchProcess(const base::CommandLine& cmdline,
   options.allow_new_privs = base::CommandLine::ForCurrentProcess()->
       HasSwitch(chromeos::switches::kSystemInDevMode);
   options.ctrl_terminal_fd = slave_fd;
-  options.environ["TERM"] = "xterm";
+  // TODO(vapier): Ideally we'd just use the env settings from hterm itself.
+  // We can't let the user inject any env var they want, but we should be able
+  // to filter the $TERM value dynamically.
+  options.environ["TERM"] = "xterm-256color";
   options.environ["CROS_USER_ID_HASH"] = user_id_hash;
 
   // Launch the process.

@@ -58,6 +58,9 @@ network::mojom::NetworkService* GetNetworkService() {
     delete g_client;  // In case we're recreating the network service.
     g_client = new NetworkServiceClient(mojo::MakeRequest(&client_ptr));
     (*g_network_service_ptr)->SetClient(std::move(client_ptr));
+
+    GetContentClient()->browser()->OnNetworkServiceCreated(
+        g_network_service_ptr->get());
   }
   return g_network_service_ptr->get();
 }
@@ -75,7 +78,6 @@ network::NetworkService* GetNetworkServiceImpl() {
 
 void FlushNetworkServiceInstanceForTesting() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
-  DCHECK(base::FeatureList::IsEnabled(network::features::kNetworkService));
 
   if (g_network_service_ptr)
     g_network_service_ptr->FlushForTesting();

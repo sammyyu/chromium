@@ -12,7 +12,7 @@
 #include "base/bind.h"
 #include "base/macros.h"
 #include "base/strings/stringprintf.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "base/time/time.h"
@@ -23,6 +23,7 @@
 #include "chrome/browser/ui/blocked_content/list_item_position.h"
 #include "chrome/browser/ui/blocked_content/popup_tracker.h"
 #include "chrome/browser/ui/blocked_content/tab_under_navigation_throttle.h"
+#include "chrome/common/pref_names.h"
 #include "chrome/test/base/chrome_render_view_host_test_harness.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
@@ -198,14 +199,14 @@ TEST_F(PopupOpenerTabHelperTest, FirstNavigation_NoLogging) {
   histogram_tester()->ExpectTotalCount(kTabUnderVisibleTime, 0);
 }
 
-TEST_F(PopupOpenerTabHelperTest, VisibleNavigation_LogsMetrics) {
+TEST_F(PopupOpenerTabHelperTest, VisibleNavigation_NoLogging) {
   NavigateAndCommitWithoutGesture(GURL("https://first.test/"));
   SimulatePopup();
   web_contents()->WasShown();
   NavigateAndCommitWithoutGesture(GURL("https://example.test/"));
   raw_clock()->Advance(base::TimeDelta::FromMinutes(1));
   DeleteContents();
-  histogram_tester()->ExpectTotalCount(kTabUnderVisibleTime, 1);
+  histogram_tester()->ExpectTotalCount(kTabUnderVisibleTime, 0);
 }
 
 // This is counter intuitive, but we want to log metrics in the dry-run state if
@@ -703,9 +704,58 @@ TEST_F(BlockTabUnderTest, SiteEngagement_Some) {
   auto* site_engagement_service = SiteEngagementService::Get(profile());
   site_engagement_service->AddPointsForTesting(blocked_url, 1);
 
+  EXPECT_TRUE(NavigateAndCommitWithoutGesture(blocked_url));
+  ExpectUIShown(false);
+  histogram_tester()->ExpectTotalCount(kEngagementScore, 1);
+  auto samples = histogram_tester()->GetAllSamples(kEngagementScore);
+  EXPECT_LT(0, samples[0].min);
+}
+
+TEST_F(BlockTabUnderTest, SiteEngagementNoThreshold_Blocks) {
+  base::test::ScopedFeatureList scoped_features;
+  scoped_features.InitAndEnableFeatureWithParameters(
+      TabUnderNavigationThrottle::kBlockTabUnders,
+      {{"engagement_threshold", "-1"}});
+
+  EXPECT_TRUE(NavigateAndCommitWithoutGesture(GURL("https://first.test/")));
+  SimulatePopup();
+  const GURL blocked_url("https://example.test/");
+
+  auto* site_engagement_service = SiteEngagementService::Get(profile());
+  site_engagement_service->AddPointsForTesting(blocked_url, 1);
+
   EXPECT_FALSE(NavigateAndCommitWithoutGesture(blocked_url));
   ExpectUIShown(true);
   histogram_tester()->ExpectTotalCount(kEngagementScore, 1);
   auto samples = histogram_tester()->GetAllSamples(kEngagementScore);
   EXPECT_LT(0, samples[0].min);
+}
+
+// Ensure that even though the *redirect* occurred in the background, if the
+// navigation started in the foreground there is no blocking.
+TEST_F(BlockTabUnderTest,
+       TabUnderCrossOriginRedirectFromForeground_IsNotBlocked) {
+  EXPECT_TRUE(NavigateAndCommitWithoutGesture(GURL("https://first.test/")));
+  SimulatePopup();
+
+  web_contents()->WasShown();
+
+  // Navigate to a same-origin URL that redirects cross origin.
+  const GURL same_origin("https://first.test/path");
+  const GURL cross_origin("https://example.test/");
+  std::unique_ptr<content::NavigationSimulator> simulator =
+      content::NavigationSimulator::CreateRendererInitiated(same_origin,
+                                                            main_rfh());
+  simulator->SetHasUserGesture(false);
+  simulator->Start();
+  EXPECT_EQ(content::NavigationThrottle::PROCEED,
+            simulator->GetLastThrottleCheckResult());
+
+  web_contents()->WasHidden();
+
+  simulator->Redirect(cross_origin);
+  EXPECT_EQ(content::NavigationThrottle::PROCEED,
+            simulator->GetLastThrottleCheckResult());
+  simulator->Commit();
+  ExpectUIShown(false);
 }

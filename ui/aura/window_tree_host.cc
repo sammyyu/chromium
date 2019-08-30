@@ -5,6 +5,7 @@
 #include "ui/aura/window_tree_host.h"
 
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
@@ -13,6 +14,7 @@
 #include "ui/aura/client/cursor_client.h"
 #include "ui/aura/env.h"
 #include "ui/aura/scoped_keyboard_hook.h"
+#include "ui/aura/scoped_simple_keyboard_hook.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_event_dispatcher.h"
 #include "ui/aura/window_port.h"
@@ -21,12 +23,14 @@
 #include "ui/base/ime/input_method.h"
 #include "ui/base/ime/input_method_factory.h"
 #include "ui/base/layout.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/view_prop.h"
 #include "ui/compositor/compositor_switches.h"
 #include "ui/compositor/dip_util.h"
 #include "ui/compositor/layer.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
+#include "ui/events/keycodes/dom/dom_code.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/point3_f.h"
@@ -34,11 +38,49 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/gfx/icc_profile.h"
+#include "ui/platform_window/platform_window_init_properties.h"
 
 namespace aura {
 
+namespace {
+
 const char kWindowTreeHostForAcceleratedWidget[] =
     "__AURA_WINDOW_TREE_HOST_ACCELERATED_WIDGET__";
+
+bool ShouldAllocateLocalSurfaceId() {
+  // When running with the window service (either in 'mus' or 'mash' mode), the
+  // LocalSurfaceId allocation for the WindowTreeHost is managed by the
+  // WindowTreeClient and WindowTreeHostMus.
+  return Env::GetInstance()->mode() == Env::Mode::LOCAL;
+}
+
+#if DCHECK_IS_ON()
+class ScopedLocalSurfaceIdValidator {
+ public:
+  explicit ScopedLocalSurfaceIdValidator(Window* window)
+      : window_(window),
+        local_surface_id_(window ? window->GetLocalSurfaceId()
+                                 : viz::LocalSurfaceId()) {}
+  ~ScopedLocalSurfaceIdValidator() {
+    if (ShouldAllocateLocalSurfaceId() && window_) {
+      DCHECK_EQ(local_surface_id_, window_->GetLocalSurfaceId());
+    }
+  }
+
+ private:
+  Window* const window_;
+  const viz::LocalSurfaceId local_surface_id_;
+  DISALLOW_COPY_AND_ASSIGN(ScopedLocalSurfaceIdValidator);
+};
+#else
+class ScopedLocalSurfaceIdValidator {
+ public:
+  explicit ScopedLocalSurfaceIdValidator(Window* window) {}
+  ~ScopedLocalSurfaceIdValidator() {}
+};
+#endif
+
+}  // namespace
 
 ////////////////////////////////////////////////////////////////////////////////
 // WindowTreeHost, public:
@@ -65,8 +107,8 @@ void WindowTreeHost::InitHost() {
       display::Screen::GetScreen()->GetDisplayNearestWindow(window());
   device_scale_factor_ = display.device_scale_factor();
 
+  UpdateRootWindowSizeInPixels();
   InitCompositor();
-  UpdateRootWindowSizeInPixels(GetBoundsInPixels().size());
   Env::GetInstance()->NotifyHostInitialized(this);
 }
 
@@ -91,7 +133,7 @@ gfx::Transform WindowTreeHost::GetRootTransform() const {
 
 void WindowTreeHost::SetRootTransform(const gfx::Transform& transform) {
   window()->SetTransform(transform);
-  UpdateRootWindowSizeInPixels(GetBoundsInPixels().size());
+  UpdateRootWindowSizeInPixels();
 }
 
 gfx::Transform WindowTreeHost::GetInverseRootTransform() const {
@@ -116,14 +158,14 @@ gfx::Transform WindowTreeHost::GetInverseRootTransformForLocalEventCoordinates()
   return invert;
 }
 
-void WindowTreeHost::UpdateRootWindowSizeInPixels(
-    const gfx::Size& host_size_in_pixels) {
-  gfx::Rect bounds(host_size_in_pixels.width(), host_size_in_pixels.height());
-  gfx::RectF new_bounds =
-      gfx::ScaleRect(gfx::RectF(bounds), 1.0f / device_scale_factor_);
-  window()->layer()->transform().TransformRect(&new_bounds);
-  window()->SetBounds(gfx::ToEnclosingRect(new_bounds));
-  window()->SetDeviceScaleFactor(device_scale_factor_);
+void WindowTreeHost::UpdateRootWindowSizeInPixels() {
+  // Validate that the LocalSurfaceId does not change.
+  bool compositor_inited = !!compositor()->root_layer();
+  ScopedLocalSurfaceIdValidator lsi_validator(compositor_inited ? window()
+                                                                : nullptr);
+  gfx::Rect transformed_bounds_in_pixels =
+      GetTransformedRootWindowBoundsInPixels(GetBoundsInPixels().size());
+  window()->SetBounds(transformed_bounds_in_pixels);
 }
 
 void WindowTreeHost::ConvertDIPToScreenInPixels(gfx::Point* point) const {
@@ -235,9 +277,17 @@ void WindowTreeHost::Hide() {
     compositor()->SetVisible(false);
 }
 
+gfx::Size WindowTreeHost::GetCompositorSizeInPixels() const {
+  return GetBoundsInPixels().size();
+}
+
 std::unique_ptr<ScopedKeyboardHook> WindowTreeHost::CaptureSystemKeyEvents(
-    base::Optional<base::flat_set<int>> keys) {
-  if (CaptureSystemKeyEventsImpl(std::move(keys)))
+    base::Optional<base::flat_set<ui::DomCode>> dom_codes) {
+  // TODO(joedow): Remove the simple hook class/logic once this flag is removed.
+  if (!base::FeatureList::IsEnabled(features::kSystemKeyboardLock))
+    return std::make_unique<ScopedSimpleKeyboardHook>(std::move(dom_codes));
+
+  if (CaptureSystemKeyEventsImpl(std::move(dom_codes)))
     return std::make_unique<ScopedKeyboardHook>(weak_factory_.GetWeakPtr());
   return nullptr;
 }
@@ -281,7 +331,8 @@ void WindowTreeHost::DestroyDispatcher() {
 
 void WindowTreeHost::CreateCompositor(const viz::FrameSinkId& frame_sink_id,
                                       bool force_software_compositor,
-                                      bool external_begin_frames_enabled) {
+                                      bool external_begin_frames_enabled,
+                                      bool are_events_in_pixels) {
   DCHECK(Env::GetInstance());
   ui::ContextFactory* context_factory = Env::GetInstance()->context_factory();
   DCHECK(context_factory);
@@ -305,13 +356,15 @@ void WindowTreeHost::CreateCompositor(const viz::FrameSinkId& frame_sink_id,
     window()->Init(ui::LAYER_NOT_DRAWN);
     window()->set_host(this);
     window()->SetName("RootWindow");
-    dispatcher_.reset(new WindowEventDispatcher(this));
+    dispatcher_ =
+        std::make_unique<WindowEventDispatcher>(this, are_events_in_pixels);
   }
 }
 
 void WindowTreeHost::InitCompositor() {
   DCHECK(!compositor_->root_layer());
-  compositor_->SetScaleAndSize(device_scale_factor_, GetBoundsInPixels().size(),
+  compositor_->SetScaleAndSize(device_scale_factor_,
+                               GetCompositorSizeInPixels(),
                                window()->GetLocalSurfaceId());
   compositor_->SetRootLayer(window()->layer());
 
@@ -336,20 +389,22 @@ void WindowTreeHost::OnHostMovedInPixels(
 }
 
 void WindowTreeHost::OnHostResizedInPixels(
-    const gfx::Size& new_size_in_pixels) {
+    const gfx::Size& new_size_in_pixels,
+    const viz::LocalSurfaceId& new_local_surface_id) {
   display::Display display =
       display::Screen::GetScreen()->GetDisplayNearestWindow(window());
   device_scale_factor_ = display.device_scale_factor();
+  UpdateRootWindowSizeInPixels();
 
-  gfx::Size layer_size = GetBoundsInPixels().size();
-  // The layer, and the observers should be notified of the
-  // transformed size of the root window.
-  UpdateRootWindowSizeInPixels(layer_size);
-
-  // The compositor should have the same size as the native root window host.
-  // Get the latest scale from display because it might have been changed.
+  // Allocate a new LocalSurfaceId for the new state.
+  auto local_surface_id = new_local_surface_id;
+  if (ShouldAllocateLocalSurfaceId() && !new_local_surface_id.is_valid()) {
+    window_->AllocateLocalSurfaceId();
+    local_surface_id = window_->GetLocalSurfaceId();
+  }
+  ScopedLocalSurfaceIdValidator lsi_validator(window());
   compositor_->SetScaleAndSize(device_scale_factor_, new_size_in_pixels,
-                               window()->GetLocalSurfaceId());
+                               local_surface_id);
 
   for (WindowTreeHostObserver& observer : observers_)
     observer.OnHostResized(this);
@@ -406,6 +461,15 @@ void WindowTreeHost::OnDisplayMetricsChanged(const display::Display& display,
       compositor_->SetDisplayColorSpace(display.color_space());
     }
   }
+}
+
+gfx::Rect WindowTreeHost::GetTransformedRootWindowBoundsInPixels(
+    const gfx::Size& size_in_pixels) const {
+  gfx::Rect bounds(size_in_pixels);
+  gfx::RectF new_bounds =
+      gfx::ScaleRect(gfx::RectF(bounds), 1.0f / device_scale_factor_);
+  window()->layer()->transform().TransformRect(&new_bounds);
+  return gfx::ToEnclosingRect(new_bounds);
 }
 
 ////////////////////////////////////////////////////////////////////////////////

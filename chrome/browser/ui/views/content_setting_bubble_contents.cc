@@ -96,42 +96,67 @@ class MediaComboboxModel : public ui::ComboboxModel {
   DISALLOW_COPY_AND_ASSIGN(MediaComboboxModel);
 };
 
-// A view representing a label and combobox pair that allows the user to select
-// which device is being used for the media type (either microphone or camera).
-class MediaMenuRow : public views::View {
+// A view representing one or more rows, each containing a label and combobox
+// pair, that allow the user to select a device for each media type (microphone
+// and/or camera).
+class MediaMenuBlock : public views::View {
  public:
-  MediaMenuRow(views::ComboboxListener* listener,
-               content::MediaStreamType stream_type,
-               const ContentSettingBubbleModel::MediaMenu& menu) {
+  MediaMenuBlock(views::ComboboxListener* listener,
+                 ContentSettingBubbleModel::MediaMenuMap media) {
     const ChromeLayoutProvider* provider = ChromeLayoutProvider::Get();
-    SetLayoutManager(std::make_unique<views::BoxLayout>(
-        views::BoxLayout::kHorizontal, gfx::Insets(),
+
+    views::GridLayout* layout =
+        SetLayoutManager(std::make_unique<views::GridLayout>(this));
+    constexpr int kColumnSetId = 0;
+    views::ColumnSet* column_set = layout->AddColumnSet(kColumnSetId);
+    column_set->AddColumn(views::GridLayout::LEADING, views::GridLayout::CENTER,
+                          views::GridLayout::kFixedSize,
+                          views::GridLayout::USE_PREF, 0, 0);
+    column_set->AddPaddingColumn(
+        views::GridLayout::kFixedSize,
         provider->GetDistanceMetric(
-            views::DISTANCE_RELATED_CONTROL_HORIZONTAL)));
+            views::DISTANCE_RELATED_CONTROL_HORIZONTAL));
+    column_set->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL, 1.0,
+                          views::GridLayout::FIXED, 0, 0);
 
-    views::Label* label = new views::Label(menu.label);
-    label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
-    AddChildView(label);
+    bool first_row = true;
+    for (auto i = media.cbegin(); i != media.cend(); ++i) {
+      if (!first_row) {
+        layout->AddPaddingRow(views::GridLayout::kFixedSize,
+                              provider->GetDistanceMetric(
+                                  views::DISTANCE_RELATED_CONTROL_VERTICAL));
+      }
+      first_row = false;
 
-    auto combobox_model = std::make_unique<MediaComboboxModel>(stream_type);
-    // Disable the device selection when the website is managing the devices
-    // itself or if there are no devices present.
-    const bool combobox_enabled =
-        !menu.disabled && !combobox_model->GetDevices().empty();
-    const int combobox_selected_index =
-        combobox_model->GetDevices().empty()
-            ? 0
-            : combobox_model->GetDeviceIndex(menu.selected_device);
-    // The combobox takes ownership of the model.
-    views::Combobox* combobox = new views::Combobox(std::move(combobox_model));
-    combobox->SetEnabled(combobox_enabled);
-    combobox->set_listener(listener);
-    combobox->SetSelectedIndex(combobox_selected_index);
-    AddChildView(combobox);
+      layout->StartRow(views::GridLayout::kFixedSize, kColumnSetId);
+      content::MediaStreamType stream_type = i->first;
+      const ContentSettingBubbleModel::MediaMenu& menu = i->second;
+
+      views::Label* label = new views::Label(menu.label);
+      label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
+      layout->AddView(label);
+
+      auto combobox_model = std::make_unique<MediaComboboxModel>(stream_type);
+      // Disable the device selection when the website is managing the devices
+      // itself or if there are no devices present.
+      const bool combobox_enabled =
+          !menu.disabled && !combobox_model->GetDevices().empty();
+      const int combobox_selected_index =
+          combobox_model->GetDevices().empty()
+              ? 0
+              : combobox_model->GetDeviceIndex(menu.selected_device);
+      // The combobox takes ownership of the model.
+      views::Combobox* combobox =
+          new views::Combobox(std::move(combobox_model));
+      combobox->SetEnabled(combobox_enabled);
+      combobox->set_listener(listener);
+      combobox->SetSelectedIndex(combobox_selected_index);
+      layout->AddView(combobox);
+    }
   }
 
  private:
-  DISALLOW_COPY_AND_ASSIGN(MediaMenuRow);
+  DISALLOW_COPY_AND_ASSIGN(MediaMenuBlock);
 };
 
 }  // namespace
@@ -287,7 +312,7 @@ void ContentSettingBubbleContents::ListItemContainer::RemoveRowAtIndex(
   delete children.second;
   list_item_views_.erase(list_item_views_.begin() + index);
 
-  // As views::GridLayout can't remove rows, we have to rebuild it entirely.
+  // As GridLayout can't remove rows, we have to rebuild it entirely.
   ResetLayout();
   for (size_t i = 0; i < list_item_views_.size(); i++)
     AddRowToLayout(list_item_views_[i]);
@@ -304,18 +329,20 @@ int ContentSettingBubbleContents::ListItemContainer::GetRowIndexOf(
 }
 
 void ContentSettingBubbleContents::ListItemContainer::ResetLayout() {
-  using views::GridLayout;
-  GridLayout* layout =
+  views::GridLayout* layout =
       SetLayoutManager(std::make_unique<views::GridLayout>(this));
   views::ColumnSet* item_list_column_set = layout->AddColumnSet(0);
-  item_list_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL, 0,
-                                  GridLayout::USE_PREF, 0, 0);
+  item_list_column_set->AddColumn(
+      views::GridLayout::LEADING, views::GridLayout::FILL,
+      views::GridLayout::kFixedSize, views::GridLayout::USE_PREF, 0, 0);
   const int related_control_horizontal_spacing =
       ChromeLayoutProvider::Get()->GetDistanceMetric(
           views::DISTANCE_RELATED_CONTROL_HORIZONTAL);
-  item_list_column_set->AddPaddingColumn(0, related_control_horizontal_spacing);
-  item_list_column_set->AddColumn(GridLayout::LEADING, GridLayout::FILL, 1,
-                                  GridLayout::USE_PREF, 0, 0);
+  item_list_column_set->AddPaddingColumn(views::GridLayout::kFixedSize,
+                                         related_control_horizontal_spacing);
+  item_list_column_set->AddColumn(views::GridLayout::LEADING,
+                                  views::GridLayout::FILL, 1.0,
+                                  views::GridLayout::USE_PREF, 0, 0);
   auto* scroll_view = views::ScrollView::GetScrollViewForContents(this);
   // When this function is called from the constructor, the view has not yet
   // been placed into a ScrollView.
@@ -328,7 +355,7 @@ void ContentSettingBubbleContents::ListItemContainer::AddRowToLayout(
   views::GridLayout* layout =
       static_cast<views::GridLayout*>(GetLayoutManager());
   DCHECK(layout);
-  layout->StartRow(0, 0);
+  layout->StartRow(views::GridLayout::kFixedSize, 0);
   layout->AddView(row.first);
   layout->AddView(row.second);
 
@@ -368,6 +395,10 @@ ContentSettingBubbleContents::~ContentSettingBubbleContents() {
   // Must remove the children here so the comboboxes get destroyed before
   // their associated models.
   RemoveAllChildViews(true);
+}
+
+void ContentSettingBubbleContents::WindowClosing() {
+  content_setting_bubble_model_->CommitChanges();
 }
 
 gfx::Size ContentSettingBubbleContents::CalculatePreferredSize() const {
@@ -411,6 +442,16 @@ void ContentSettingBubbleContents::OnListItemRemovedAt(int index) {
   DCHECK(list_item_container_);
   list_item_container_->RemoveRowAtIndex(index);
   SizeToContents();
+}
+
+int ContentSettingBubbleContents::GetSelectedRadioOption() {
+  for (RadioGroup::const_iterator i(radio_group_.begin());
+       i != radio_group_.end(); ++i) {
+    if ((*i)->checked())
+      return i - radio_group_.begin();
+  }
+  NOTREACHED();
+  return 0;
 }
 
 void ContentSettingBubbleContents::OnNativeThemeChanged(
@@ -469,7 +510,6 @@ void ContentSettingBubbleContents::Init() {
          i != radio_group.radio_items.end(); ++i) {
       auto radio = std::make_unique<views::RadioButton>(*i, 0);
       radio->SetEnabled(bubble_content.radio_group_enabled);
-      radio->set_listener(this);
       radio->SetMultiLine(true);
       radio_group_.push_back(radio.get());
       rows.push_back({std::move(radio), LayoutRowType::INDENTED});
@@ -482,12 +522,9 @@ void ContentSettingBubbleContents::Init() {
 
   // Layout code for the media device menus.
   if (content_setting_bubble_model_->AsMediaStreamBubbleModel()) {
-    for (ContentSettingBubbleModel::MediaMenuMap::const_iterator i(
-         bubble_content.media_menus.begin());
-         i != bubble_content.media_menus.end(); ++i) {
-      rows.push_back({std::make_unique<MediaMenuRow>(this, i->first, i->second),
-                      LayoutRowType::INDENTED});
-    }
+    rows.push_back(
+        {std::make_unique<MediaMenuBlock>(this, bubble_content.media_menus),
+         LayoutRowType::INDENTED});
   }
 
   for (std::vector<ContentSettingBubbleModel::DomainList>::const_iterator i(
@@ -512,8 +549,7 @@ void ContentSettingBubbleContents::Init() {
   if (bubble_content.manage_text_style ==
       ContentSettingBubbleModel::ManageTextStyle::kCheckbox) {
     auto manage_checkbox =
-        std::make_unique<views::Checkbox>(bubble_content.manage_text);
-    manage_checkbox->set_listener(this);
+        std::make_unique<views::Checkbox>(bubble_content.manage_text, this);
     manage_checkbox_ = manage_checkbox.get();
     rows.push_back({std::move(manage_checkbox), LayoutRowType::DEFAULT});
   }
@@ -537,8 +573,7 @@ void ContentSettingBubbleContents::Init() {
     AddChildView(row.view.release());
   }
 
-  if (list_item_container_)
-    content_setting_bubble_model_->set_owner(this);
+  content_setting_bubble_model_->set_owner(this);
 }
 
 views::View* ContentSettingBubbleContents::CreateExtraView() {
@@ -581,7 +616,6 @@ views::View* ContentSettingBubbleContents::CreateExtraView() {
 }
 
 bool ContentSettingBubbleContents::Accept() {
-  content_setting_bubble_model_->OnDoneClicked();
   return true;
 }
 
@@ -645,10 +679,7 @@ void ContentSettingBubbleContents::ButtonPressed(views::Button* sender,
     GetWidget()->Close();
     content_setting_bubble_model_->OnManageButtonClicked();
   } else {
-    RadioGroup::const_iterator i(
-        std::find(radio_group_.begin(), radio_group_.end(), sender));
-    DCHECK(i != radio_group_.end());
-    content_setting_bubble_model_->OnRadioClicked(i - radio_group_.begin());
+    NOTREACHED();
   }
 }
 

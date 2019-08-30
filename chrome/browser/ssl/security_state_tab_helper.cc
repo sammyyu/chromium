@@ -14,10 +14,10 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/safe_browsing/safe_browsing_service.h"
 #include "chrome/browser/safe_browsing/ui_manager.h"
+#include "chrome/common/pref_names.h"
 #include "components/prefs/pref_service.h"
 #include "components/safe_browsing/features.h"
 #include "components/security_state/content/content_utils.h"
-#include "components/ssl_config/ssl_config_prefs.h"
 #include "components/toolbar/toolbar_field_trial.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/navigation_entry.h"
@@ -141,7 +141,8 @@ void SecurityStateTabHelper::DidFinishNavigation(
         "https://goo.gl/y8SRRv.");
   }
   if (net::IsCertStatusError(security_info.cert_status) &&
-      !net::IsCertStatusMinorError(security_info.cert_status)) {
+      !net::IsCertStatusMinorError(security_info.cert_status) &&
+      !navigation_handle->IsErrorPage()) {
     // Record each time a user visits a site after having clicked through a
     // certificate warning interstitial. This is used as a baseline for
     // interstitial.ssl.did_user_revoke_decision2 in order to determine how
@@ -270,20 +271,33 @@ SecurityStateTabHelper::GetMaliciousContentStatus() const {
         return security_state::MALICIOUS_CONTENT_STATUS_MALWARE;
       case safe_browsing::SB_THREAT_TYPE_URL_UNWANTED:
         return security_state::MALICIOUS_CONTENT_STATUS_UNWANTED_SOFTWARE;
-      case safe_browsing::SB_THREAT_TYPE_PASSWORD_REUSE:
+      case safe_browsing::SB_THREAT_TYPE_SIGN_IN_PASSWORD_REUSE:
 #if defined(SAFE_BROWSING_DB_LOCAL)
-        if (base::FeatureList::IsEnabled(
-                safe_browsing::kGoogleBrandedPhishingWarning)) {
-          if (safe_browsing::ChromePasswordProtectionService::
-                  ShouldShowChangePasswordSettingUI(Profile::FromBrowserContext(
-                      web_contents()->GetBrowserContext()))) {
-            return security_state::MALICIOUS_CONTENT_STATUS_PASSWORD_REUSE;
-          }
-          // If user has already changed Gaia password, returns the regular
-          // social engineering content status.
-          return security_state::MALICIOUS_CONTENT_STATUS_SOCIAL_ENGINEERING;
+        if (safe_browsing::ChromePasswordProtectionService::
+                ShouldShowPasswordReusePageInfoBubble(
+                    web_contents(),
+                    safe_browsing::LoginReputationClientRequest::
+                        PasswordReuseEvent::SIGN_IN_PASSWORD)) {
+          return security_state::
+              MALICIOUS_CONTENT_STATUS_SIGN_IN_PASSWORD_REUSE;
         }
-        break;
+        // If user has already changed Gaia password, returns the regular
+        // social engineering content status.
+        return security_state::MALICIOUS_CONTENT_STATUS_SOCIAL_ENGINEERING;
+#endif
+      case safe_browsing::SB_THREAT_TYPE_ENTERPRISE_PASSWORD_REUSE:
+#if defined(SAFE_BROWSING_DB_LOCAL)
+        if (safe_browsing::ChromePasswordProtectionService::
+                ShouldShowPasswordReusePageInfoBubble(
+                    web_contents(),
+                    safe_browsing::LoginReputationClientRequest::
+                        PasswordReuseEvent::ENTERPRISE_PASSWORD)) {
+          return security_state::
+              MALICIOUS_CONTENT_STATUS_ENTERPRISE_PASSWORD_REUSE;
+        }
+        // If user has already changed Gaia password, returns the regular
+        // social engineering content status.
+        return security_state::MALICIOUS_CONTENT_STATUS_SOCIAL_ENGINEERING;
 #endif
       case safe_browsing::
           DEPRECATED_SB_THREAT_TYPE_URL_PASSWORD_PROTECTION_PHISHING:

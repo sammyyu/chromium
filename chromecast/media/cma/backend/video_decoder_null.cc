@@ -52,7 +52,9 @@ void VideoDecoderNull::OnEndOfStream() {
   delegate_->OnEndOfStream();
 }
 
-void VideoDecoderNull::Initialize() {}
+bool VideoDecoderNull::Initialize() {
+  return true;
+}
 
 bool VideoDecoderNull::Start(int64_t start_pts, bool need_avsync) {
   return true;
@@ -68,16 +70,32 @@ bool VideoDecoderNull::Resume() {
   return true;
 }
 
-int64_t VideoDecoderNull::GetCurrentPts() const {
-  return 0;
+bool VideoDecoderNull::GetCurrentPts(int64_t* timestamp, int64_t* pts) const {
+  return false;
 }
 
 bool VideoDecoderNull::SetPlaybackRate(float rate) {
   return true;
 }
 
-bool VideoDecoderNull::SetCurrentPts(int64_t pts) {
+bool VideoDecoderNull::SetPts(int64_t timestamp, int64_t pts) {
   return true;
+}
+
+int64_t VideoDecoderNull::GetDroppedFrames() {
+  return 0;
+}
+
+int64_t VideoDecoderNull::GetRepeatedFrames() {
+  return 0;
+}
+
+int64_t VideoDecoderNull::GetOutputRefreshRate() {
+  return 0;
+}
+
+int64_t VideoDecoderNull::GetCurrentContentRefreshRate() {
+  return 0;
 }
 
 }  // namespace media

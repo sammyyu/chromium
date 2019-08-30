@@ -4,9 +4,17 @@
 
 #include "content/browser/url_loader_factory_getter.h"
 
+#include <memory>
+#include <utility>
+
 #include "base/bind.h"
+#include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/lazy_instance.h"
 #include "content/browser/storage_partition_impl.h"
+#include "content/common/service_worker/service_worker_utils.h"
+#include "content/public/common/content_switches.h"
+#include "services/network/public/cpp/features.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 
@@ -71,6 +79,12 @@ class URLLoaderFactoryGetter::URLLoaderFactoryForIOThread
         std::move(client), traffic_annotation);
   }
 
+  void Clone(network::mojom::URLLoaderFactoryRequest request) override {
+    if (!factory_getter_)
+      return;
+    factory_getter_->GetURLLoaderFactory()->Clone(std::move(request));
+  }
+
   // SharedURLLoaderFactory implementation:
   std::unique_ptr<network::SharedURLLoaderFactoryInfo> Clone() override {
     NOTREACHED() << "This isn't supported. If you need a SharedURLLoaderFactory"
@@ -101,20 +115,28 @@ URLLoaderFactoryGetter::URLLoaderFactoryGetter() {}
 
 void URLLoaderFactoryGetter::Initialize(StoragePartitionImpl* partition) {
   DCHECK(partition);
+  DCHECK(!pending_network_factory_request_.is_pending());
+
   partition_ = partition;
-
   network::mojom::URLLoaderFactoryPtr network_factory;
-  HandleNetworkFactoryRequestOnUIThread(MakeRequest(&network_factory));
+  pending_network_factory_request_ = MakeRequest(&network_factory);
 
-  network::mojom::URLLoaderFactoryPtr blob_factory;
-  partition_->GetBlobURLLoaderFactory()->HandleRequest(
-      mojo::MakeRequest(&blob_factory));
+  // If NetworkService is disabled, HandleFactoryRequests should be called after
+  // NetworkContext in |partition_| is ready.
+  if (base::FeatureList::IsEnabled(network::features::kNetworkService))
+    HandleFactoryRequests();
 
   BrowserThread::PostTask(
       BrowserThread::IO, FROM_HERE,
       base::BindOnce(&URLLoaderFactoryGetter::InitializeOnIOThread, this,
-                     network_factory.PassInterface(),
-                     blob_factory.PassInterface()));
+                     network_factory.PassInterface()));
+}
+
+void URLLoaderFactoryGetter::HandleFactoryRequests() {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  DCHECK(pending_network_factory_request_.is_pending());
+  HandleNetworkFactoryRequestOnUIThread(
+      std::move(pending_network_factory_request_));
 }
 
 void URLLoaderFactoryGetter::OnStoragePartitionDestroyed() {
@@ -160,11 +182,6 @@ void URLLoaderFactoryGetter::CloneNetworkFactory(
   GetURLLoaderFactory()->Clone(std::move(network_factory_request));
 }
 
-network::mojom::URLLoaderFactory* URLLoaderFactoryGetter::GetBlobFactory() {
-  DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  return blob_factory_.get();
-}
-
 void URLLoaderFactoryGetter::SetNetworkFactoryForTesting(
     network::mojom::URLLoaderFactory* test_factory) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
@@ -201,10 +218,8 @@ void URLLoaderFactoryGetter::FlushNetworkInterfaceForTesting() {
 URLLoaderFactoryGetter::~URLLoaderFactoryGetter() {}
 
 void URLLoaderFactoryGetter::InitializeOnIOThread(
-    network::mojom::URLLoaderFactoryPtrInfo network_factory,
-    network::mojom::URLLoaderFactoryPtrInfo blob_factory) {
+    network::mojom::URLLoaderFactoryPtrInfo network_factory) {
   network_factory_.Bind(std::move(network_factory));
-  blob_factory_.Bind(std::move(blob_factory));
 }
 
 void URLLoaderFactoryGetter::HandleNetworkFactoryRequestOnUIThread(
@@ -214,8 +229,15 @@ void URLLoaderFactoryGetter::HandleNetworkFactoryRequestOnUIThread(
   // still held by consumers.
   if (!partition_)
     return;
+  network::mojom::URLLoaderFactoryParamsPtr params =
+      network::mojom::URLLoaderFactoryParams::New();
+  params->process_id = network::mojom::kBrowserProcessId;
+  params->is_corb_enabled = false;
+  params->disable_web_security =
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kDisableWebSecurity);
   partition_->GetNetworkContext()->CreateURLLoaderFactory(
-      std::move(network_factory_request), 0);
+      std::move(network_factory_request), std::move(params));
 }
 
 }  // namespace content

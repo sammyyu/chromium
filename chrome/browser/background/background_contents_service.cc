@@ -11,7 +11,6 @@
 #include "base/compiler_specific.h"
 #include "base/location.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
@@ -19,7 +18,7 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "chrome/browser/apps/app_load_service.h"
+#include "chrome/browser/apps/platform_apps/app_load_service.h"
 #include "chrome/browser/background/background_contents_service_factory.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -99,7 +98,8 @@ class CrashNotificationDelegate : public message_center::NotificationDelegate {
         extension_id_(extension->id()) {
   }
 
-  void Click() override {
+  void Click(const base::Optional<int>& button_index,
+             const base::Optional<base::string16>& reply) override {
     // http://crbug.com/247790 involves a crash notification balloon being
     // clicked while the extension isn't in the TERMINATED state. In that case,
     // any of the "reload" methods called below can unload the extension, which
@@ -163,7 +163,6 @@ void NotificationImageReady(const std::string extension_name,
       message_center::NotifierId(message_center::NotifierId::SYSTEM_COMPONENT,
                                  kNotifierId),
       {}, delegate);
-  notification.set_clickable(true);
 
   NotificationDisplayService::GetForProfile(profile)->Display(
       NotificationHandler::Type::TRANSIENT, notification);
@@ -374,7 +373,7 @@ void BackgroundContentsService::Observe(
           content::Details<BackgroundContents>(details).ptr();
       Profile* profile = content::Source<Profile>(source).ptr();
       const std::string& appid = GetParentApplicationId(bgcontents);
-      ExtensionService* extension_service =
+      extensions::ExtensionService* extension_service =
           extensions::ExtensionSystem::Get(profile)->extension_service();
       // extension_service can be nullptr when running tests.
       if (extension_service) {
@@ -441,7 +440,7 @@ void BackgroundContentsService::OnExtensionLoaded(
     // app, then blow away registered urls in the pref.
     ShutdownAssociatedBackgroundContents(extension->id());
 
-    ExtensionService* service =
+    extensions::ExtensionService* service =
         extensions::ExtensionSystem::Get(browser_context)->extension_service();
     if (service && service->is_ready()) {
       // Now load the manifest-specified background page. If service isn't
@@ -563,8 +562,8 @@ void BackgroundContentsService::LoadBackgroundContentsFromPrefs(
       prefs_->GetDictionary(prefs::kRegisteredBackgroundContents);
   if (!contents)
     return;
-  ExtensionService* extensions_service =
-          extensions::ExtensionSystem::Get(profile)->extension_service();
+  extensions::ExtensionService* extensions_service =
+      extensions::ExtensionSystem::Get(profile)->extension_service();
   DCHECK(extensions_service);
   for (base::DictionaryValue::Iterator it(*contents);
        !it.IsAtEnd(); it.Advance()) {
@@ -638,7 +637,7 @@ void BackgroundContentsService::LoadBackgroundContentsFromDictionary(
     Profile* profile,
     const std::string& extension_id,
     const base::DictionaryValue* contents) {
-  ExtensionService* extensions_service =
+  extensions::ExtensionService* extensions_service =
       extensions::ExtensionSystem::Get(profile)->extension_service();
   DCHECK(extensions_service);
 
@@ -816,15 +815,14 @@ const std::string& BackgroundContentsService::GetParentApplicationId(
 }
 
 void BackgroundContentsService::AddWebContents(
-    WebContents* new_contents,
+    std::unique_ptr<WebContents> new_contents,
     WindowOpenDisposition disposition,
     const gfx::Rect& initial_rect,
-    bool user_gesture,
     bool* was_blocked) {
   Browser* browser = chrome::FindLastActiveWithProfile(
       Profile::FromBrowserContext(new_contents->GetBrowserContext()));
   if (browser) {
-    chrome::AddWebContents(browser, nullptr, new_contents, disposition,
-                           initial_rect, user_gesture);
+    chrome::AddWebContents(browser, nullptr, std::move(new_contents),
+                           disposition, initial_rect);
   }
 }

@@ -13,8 +13,9 @@
 #include "base/optional.h"
 #include "base/strings/string16.h"
 #include "content/public/browser/browser_message_filter.h"
+#include "content/public/browser/browser_thread.h"
 #include "services/network/public/mojom/cookie_manager.mojom.h"
-#include "third_party/WebKit/public/platform/modules/permissions/permission_status.mojom.h"
+#include "third_party/blink/public/platform/modules/permissions/permission_status.mojom.h"
 
 class GURL;
 
@@ -70,17 +71,11 @@ class LayoutTestMessageFilter : public BrowserMessageFilter {
       std::string* filesystem_id);
   void OnClearAllDatabases();
   void OnSetDatabaseQuota(int quota);
-  void OnGrantWebNotificationPermission(const GURL& origin,
-                                        bool permission_granted);
-  void OnClearWebNotificationPermissions();
   void OnSimulateWebNotificationClick(
       const std::string& title,
       const base::Optional<int>& action_index,
       const base::Optional<base::string16>& reply);
   void OnSimulateWebNotificationClose(const std::string& title, bool by_user);
-  void OnSetPushMessagingPermission(const GURL& origin, bool allowed);
-  void OnClearPushMessagingPermissions();
-  void OnBlockThirdPartyCookies(bool block);
   void OnDeleteAllCookies();
   void OnDeleteAllCookiesForNetworkService();
   void OnSetPermission(const std::string& name,
@@ -91,6 +86,8 @@ class LayoutTestMessageFilter : public BrowserMessageFilter {
   void OnLayoutTestRuntimeFlagsChanged(
       const base::DictionaryValue& changed_layout_test_runtime_flags);
   void OnTestFinishedInSecondaryRenderer();
+  void OnInitiateCaptureDump(bool capture_navigation_history,
+                             bool capture_pixels);
   void OnInspectSecondaryWindow();
 
   int render_process_id_;

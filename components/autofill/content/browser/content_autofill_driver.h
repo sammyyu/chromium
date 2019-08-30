@@ -51,6 +51,7 @@ class ContentAutofillDriver : public AutofillDriver,
   // AutofillDriver:
   bool IsIncognito() const override;
   net::URLRequestContextGetter* GetURLRequestContext() override;
+  scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   bool RendererIsAvailable() override;
   void SendFormDataToRenderer(int query_id,
                               RendererFormDataAction action,
@@ -61,7 +62,7 @@ class ContentAutofillDriver : public AutofillDriver,
       const std::vector<FormStructure*>& forms) override;
   void RendererShouldAcceptDataListSuggestion(
       const base::string16& value) override;
-  void RendererShouldClearFilledForm() override;
+  void RendererShouldClearFilledSection() override;
   void RendererShouldClearPreviewedForm() override;
   void RendererShouldFillFieldWithValue(const base::string16& value) override;
   void RendererShouldPreviewFieldWithValue(
@@ -91,7 +92,8 @@ class ContentAutofillDriver : public AutofillDriver,
   void QueryFormFieldAutofill(int32_t id,
                               const FormData& form,
                               const FormFieldData& field,
-                              const gfx::RectF& bounding_box) override;
+                              const gfx::RectF& bounding_box,
+                              bool autoselect_first_suggestion) override;
   void HidePopup() override;
   void FocusNoLongerOnForm() override;
   void FocusOnFormField(const FormData& form,
@@ -103,6 +105,7 @@ class ContentAutofillDriver : public AutofillDriver,
   void DidEndTextFieldEditing() override;
   void SetDataList(const std::vector<base::string16>& values,
                    const std::vector<base::string16>& labels) override;
+  void SelectFieldOptionsDidChange(const FormData& form) override;
 
   // Called when the main frame has navigated. Explicitely will not trigger for
   // subframe navigations. See navigation_handle.h for details.

@@ -7,18 +7,26 @@
 #include <utility>
 
 #include "base/macros.h"
-#include "base/run_loop.h"
+#include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "chrome/browser/chrome_notification_types.h"
-#include "chrome/browser/chromeos/login/ui/login_display_webui.h"
+#include "chrome/browser/chromeos/login/screens/gaia_view.h"
+#include "chrome/browser/chromeos/login/ui/login_display_host.h"
 #include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
 #include "chrome/browser/chromeos/policy/login_policy_test_base.h"
 #include "chrome/browser/chromeos/policy/user_policy_test_helper.h"
 #include "chrome/browser/prefs/session_startup_pref.h"
+#include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
+#include "chrome/browser/ui/webui/chromeos/login/oobe_ui.h"
+#include "components/arc/arc_features.h"
+#include "components/arc/arc_prefs.h"
+#include "components/policy/core/browser/browser_policy_connector.h"
 #include "components/policy/policy_constants.h"
+#include "components/prefs/pref_service.h"
 #include "components/user_manager/known_user.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
@@ -30,7 +38,15 @@
 namespace {
 // The Gaia ID supplied by FakeGaia for our mocked-out signin.
 const char kTestGaiaId[] = "12345";
-const char kConsumerAccount[] = "test_user@gmail.com";
+
+const char kIdTokenChildAccount[] =
+    "dummy-header."
+    // base64 encoded: { "services": ["uca"] }
+    "eyAic2VydmljZXMiOiBbInVjYSJdIH0="
+    ".dummy-signature";
+
+// Services list for the child user. (This must be a correct JSON array.)
+const char kChildServices[] = "[\"uca\"]";
 
 // Helper class that counts the number of notifications of the specified
 // type that have been received.
@@ -90,7 +106,7 @@ IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerTest, StartSession) {
             user_manager::known_user::GetProfileRequiresPolicy(account_id));
 
   SkipToLoginScreen();
-  LogIn(kAccountId, kAccountPassword);
+  LogIn(kAccountId, kAccountPassword, kEmptyServices);
 
   // User should be marked as having a valid OAuth token.
   const user_manager::UserManager* const user_manager =
@@ -117,6 +133,12 @@ IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerTest, StartSession) {
   // User should be marked as requiring policy.
   EXPECT_EQ(user_manager::known_user::ProfileRequiresPolicy::kPolicyRequired,
             user_manager::known_user::GetProfileRequiresPolicy(account_id));
+
+  // It is expected that if ArcEnabled policy is not set then it is managed
+  // by default and user is not able manually set it.
+  EXPECT_TRUE(
+      ProfileManager::GetActiveUserProfile()->GetPrefs()->IsManagedPreference(
+          arc::prefs::kArcEnabled));
 }
 
 IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerTest, ErrorLoadingPolicy) {
@@ -126,8 +148,11 @@ IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerTest, ErrorLoadingPolicy) {
   CountNotificationObserver observer(
       chrome::NOTIFICATION_SESSION_STARTED,
       content::NotificationService::AllSources());
-  GetLoginDisplay()->ShowSigninScreenForCreds(kAccountId, kAccountPassword);
-  base::RunLoop().Run();
+  chromeos::LoginDisplayHost::default_host()
+      ->GetOobeUI()
+      ->GetGaiaScreenView()
+      ->ShowSigninScreenForTest(kAccountId, kAccountPassword, kEmptyServices);
+  RunUntilBrowserProcessQuits();
   // Should not receive a SESSION_STARTED notification.
   ASSERT_EQ(0, observer.notification_count());
 
@@ -155,7 +180,7 @@ IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerTest,
   // Delete the policy file - this will cause a 500 error on policy requests.
   user_policy_helper()->DeletePolicyFile();
   SkipToLoginScreen();
-  LogIn(kAccountId, kAccountPassword);
+  LogIn(kAccountId, kAccountPassword, kEmptyServices);
 
   // User should be marked as having a valid OAuth token.
   const user_manager::UserManager* const user_manager =
@@ -194,7 +219,7 @@ IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerTest, MigrateForExistingUser) {
   // Delete the policy file - this will cause a 500 error on policy requests.
   user_policy_helper()->DeletePolicyFile();
   SkipToLoginScreen();
-  LogIn(kAccountId, kAccountPassword);
+  LogIn(kAccountId, kAccountPassword, kEmptyServices);
 
   // User should be marked as having a valid OAuth token.
   EXPECT_EQ(user_manager::User::OAUTH2_TOKEN_STATUS_VALID,
@@ -209,16 +234,44 @@ IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerTest, MigrateForExistingUser) {
             user_manager::known_user::GetProfileRequiresPolicy(account_id));
 }
 
-IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerTest, NoPolicyForConsumer) {
+class UserCloudPolicyManagerNonEnterpriseTest
+    : public UserCloudPolicyManagerTest {
+ protected:
+  UserCloudPolicyManagerNonEnterpriseTest() = default;
+  ~UserCloudPolicyManagerNonEnterpriseTest() override = default;
+
+  // UserCloudPolicyManagerTest:
+  void SetUp() override {
+    // Recognize example.com as non-enterprise account. We don't use any
+    // available public domain such as gmail.com in order to prevent possible
+    // leak of verification keys/signatures.
+    policy::BrowserPolicyConnector::SetNonEnterpriseDomainForTesting(
+        "example.com");
+    UserCloudPolicyManagerTest::SetUp();
+  }
+
+  void TearDown() override {
+    UserCloudPolicyManagerTest::TearDown();
+    policy::BrowserPolicyConnector::SetNonEnterpriseDomainForTesting(nullptr);
+  }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(UserCloudPolicyManagerNonEnterpriseTest);
+};
+
+IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerNonEnterpriseTest,
+                       NoPolicyForConsumer) {
+  EXPECT_TRUE(
+      policy::BrowserPolicyConnector::IsNonEnterpriseUser(GetAccount()));
   // If a user signs in with a known non-enterprise account there should be no
   // policy.
   AccountId account_id =
-      AccountId::FromUserEmailGaiaId(kConsumerAccount, kTestGaiaId);
+      AccountId::FromUserEmailGaiaId(GetAccount(), kTestGaiaId);
   EXPECT_EQ(user_manager::known_user::ProfileRequiresPolicy::kUnknown,
             user_manager::known_user::GetProfileRequiresPolicy(account_id));
 
   SkipToLoginScreen();
-  LogIn(kConsumerAccount, kAccountPassword);
+  LogIn(GetAccount(), kAccountPassword, kEmptyServices);
 
   // User should be marked as having a valid OAuth token.
   const user_manager::UserManager* const user_manager =
@@ -231,6 +284,60 @@ IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerTest, NoPolicyForConsumer) {
   // User should be marked as not requiring policy.
   EXPECT_EQ(user_manager::known_user::ProfileRequiresPolicy::kNoPolicyRequired,
             user_manager::known_user::GetProfileRequiresPolicy(account_id));
+}
+
+class UserCloudPolicyManagerChildTest
+    : public UserCloudPolicyManagerNonEnterpriseTest {
+ protected:
+  UserCloudPolicyManagerChildTest() = default;
+  ~UserCloudPolicyManagerChildTest() override = default;
+
+  // LoginPolicyTestBase:
+  std::string GetIdToken() const override { return kIdTokenChildAccount; }
+
+  // UserCloudPolicyManagerNonEnterpriseTest:
+  void SetUp() override {
+    scoped_feature_list_.InitAndEnableFeature(
+        arc::kAvailableForChildAccountFeature);
+    UserCloudPolicyManagerNonEnterpriseTest::SetUp();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+
+  DISALLOW_COPY_AND_ASSIGN(UserCloudPolicyManagerChildTest);
+};
+
+IN_PROC_BROWSER_TEST_F(UserCloudPolicyManagerChildTest, PolicyForChildUser) {
+  EXPECT_TRUE(
+      policy::BrowserPolicyConnector::IsNonEnterpriseUser(GetAccount()));
+  // If a user signs in with a known non-enterprise account there should be no
+  // policy in case user type is child.
+  AccountId account_id =
+      AccountId::FromUserEmailGaiaId(GetAccount(), kTestGaiaId);
+  EXPECT_EQ(user_manager::known_user::ProfileRequiresPolicy::kUnknown,
+            user_manager::known_user::GetProfileRequiresPolicy(account_id));
+
+  SkipToLoginScreen();
+  LogIn(GetAccount(), kAccountPassword, kChildServices);
+
+  // User should be marked as having a valid OAuth token.
+  const user_manager::UserManager* const user_manager =
+      user_manager::UserManager::Get();
+  EXPECT_EQ(user_manager::User::OAUTH2_TOKEN_STATUS_VALID,
+            user_manager->GetActiveUser()->oauth_token_status());
+
+  EXPECT_TRUE(user_manager->GetActiveUser()->profile_ever_initialized());
+
+  // User of CHILD type should be marked as requiring policy.
+  EXPECT_EQ(user_manager::known_user::ProfileRequiresPolicy::kPolicyRequired,
+            user_manager::known_user::GetProfileRequiresPolicy(account_id));
+
+  // It is expected that if ArcEnabled policy is not set then it is not managed
+  // by default and user is able manually set it.
+  EXPECT_FALSE(
+      ProfileManager::GetActiveUserProfile()->GetPrefs()->IsManagedPreference(
+          arc::prefs::kArcEnabled));
 }
 
 }  // namespace policy

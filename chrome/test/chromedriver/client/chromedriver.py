@@ -49,7 +49,7 @@ class NoSuchSession(ChromeDriverException):
   pass
 class UnexpectedAlertOpen(ChromeDriverException):
   pass
-class NoAlertOpen(ChromeDriverException):
+class NoSuchAlert(ChromeDriverException):
   pass
 class NoSuchCookie(ChromeDriverException):
   pass
@@ -79,7 +79,7 @@ def _ExceptionForLegacyResponse(response):
     23: NoSuchWindow,
     24: InvalidCookieDomain,
     26: UnexpectedAlertOpen,
-    27: NoAlertOpen,
+    27: NoSuchAlert,
     28: ScriptTimeout,
     32: InvalidSelector,
     33: SessionNotCreatedException,
@@ -105,7 +105,7 @@ def _ExceptionForStandardResponse(response):
     'no such window': NoSuchWindow,
     'invalid cookie domain': InvalidCookieDomain,
     'unexpected alert open': UnexpectedAlertOpen,
-    'no alert open': NoAlertOpen,
+    'no such alert': NoSuchAlert,
     'asynchronous script timeout': ScriptTimeout,
     'invalid selector': InvalidSelector,
     'session not created exception': SessionNotCreatedException,
@@ -308,7 +308,7 @@ class ChromeDriver(object):
     return self.ExecuteCommand(Command.GET_CURRENT_WINDOW_HANDLE)
 
   def CloseWindow(self):
-    self.ExecuteCommand(Command.CLOSE)
+    return self.ExecuteCommand(Command.CLOSE)
 
   def Load(self, url):
     self.ExecuteCommand(Command.GET, {'url': url})
@@ -483,6 +483,9 @@ class ChromeDriver(object):
 
   def MaximizeWindow(self):
     self.ExecuteCommand(Command.MAXIMIZE_WINDOW, {'windowHandle': 'current'})
+
+  def MinimizeWindow(self):
+    return self.ExecuteCommand(Command.MINIMIZE_WINDOW, {'windowHandle': 'current'})
 
   def FullScreenWindow(self):
     self.ExecuteCommand(Command.FULLSCREEN_WINDOW)

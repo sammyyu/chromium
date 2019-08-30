@@ -4,7 +4,6 @@
 
 #include "chrome/test/base/javascript_browser_test.h"
 
-#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
@@ -12,7 +11,6 @@
 #include "components/nacl/common/buildflags.h"
 #include "content/public/browser/web_ui.h"
 #include "net/base/filename_util.h"
-#include "ui/base/resource/resource_bundle.h"
 
 // static
 const base::FilePath::CharType
@@ -47,7 +45,8 @@ JavaScriptBrowserTest::~JavaScriptBrowserTest() {
 
 void JavaScriptBrowserTest::SetUpOnMainThread() {
   base::FilePath test_data_directory;
-  ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &test_data_directory));
+  ASSERT_TRUE(
+      base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_directory));
   test_data_directory = test_data_directory.Append(kWebUITestFolder);
   library_search_paths_.push_back(test_data_directory);
 
@@ -58,16 +57,17 @@ void JavaScriptBrowserTest::SetUpOnMainThread() {
 // enabled. Also, it seems some ChromeOS-specific tests use the
 // js2gtest GN template.
 #if (!defined(MEMORY_SANITIZER) && !defined(ADDRESS_SANITIZER) && \
-     !defined(LEAK_SANITIZER) && !defined(SYZYASAN)) ||           \
+     !defined(LEAK_SANITIZER)) ||                                 \
     BUILDFLAG(ENABLE_NACL) || defined(OS_CHROMEOS)
   base::FilePath gen_test_data_directory;
-  ASSERT_TRUE(
-      PathService::Get(chrome::DIR_GEN_TEST_DATA, &gen_test_data_directory));
+  ASSERT_TRUE(base::PathService::Get(chrome::DIR_GEN_TEST_DATA,
+                                     &gen_test_data_directory));
   library_search_paths_.push_back(gen_test_data_directory);
 #endif
 
   base::FilePath source_root_directory;
-  ASSERT_TRUE(PathService::Get(base::DIR_SOURCE_ROOT, &source_root_directory));
+  ASSERT_TRUE(
+      base::PathService::Get(base::DIR_SOURCE_ROOT, &source_root_directory));
   library_search_paths_.push_back(source_root_directory);
 
   AddLibrary(base::FilePath(kMockJSPath));

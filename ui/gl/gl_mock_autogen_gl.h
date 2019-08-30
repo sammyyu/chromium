@@ -28,6 +28,8 @@ MOCK_METHOD3(BindFragDataLocation,
 MOCK_METHOD4(
     BindFragDataLocationIndexed,
     void(GLuint program, GLuint colorNumber, GLuint index, const char* name));
+MOCK_METHOD3(BindFragmentInputLocationCHROMIUM,
+             void(GLuint program, GLint location, const char* name));
 MOCK_METHOD2(BindFramebufferEXT, void(GLenum target, GLuint framebuffer));
 MOCK_METHOD7(BindImageTextureEXT,
              void(GLuint index,
@@ -419,14 +421,14 @@ MOCK_METHOD5(GetBufferPointervRobustANGLE,
                   GLsizei* length,
                   void** params));
 MOCK_METHOD8(GetDebugMessageLog,
-             void(GLuint count,
-                  GLsizei bufSize,
-                  GLenum* sources,
-                  GLenum* types,
-                  GLuint* ids,
-                  GLenum* severities,
-                  GLsizei* lengths,
-                  char* messageLog));
+             GLuint(GLuint count,
+                    GLsizei bufSize,
+                    GLenum* sources,
+                    GLenum* types,
+                    GLuint* ids,
+                    GLenum* severities,
+                    GLsizei* lengths,
+                    char* messageLog));
 MOCK_METHOD0(GetError, GLenum());
 MOCK_METHOD3(GetFenceivNV, void(GLuint fence, GLenum pname, GLint* params));
 MOCK_METHOD2(GetFloatv, void(GLenum pname, GLfloat* params));

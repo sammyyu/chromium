@@ -161,7 +161,7 @@ class HistoryService : public syncer::SyncableService, public KeyedService {
 
   // Gets the counts and most recent visit date of URLs that belong to |origins|
   // in the history database.
-  void GetCountsAndLastVisitForOrigins(
+  void GetCountsAndLastVisitForOriginsForTesting(
       const std::set<GURL>& origins,
       const GetCountsAndLastVisitForOriginsCallback& callback) const;
 
@@ -188,6 +188,10 @@ class HistoryService : public syncer::SyncableService, public KeyedService {
   // information that can be performed on the given URL. The 'nav_entry_id'
   // should be the unique ID of the current navigation entry in the given
   // process.
+  //
+  // TODO(avi): This is no longer true. 'page id' was removed years ago, and
+  // their uses replaced by globally-unique nav_entry_ids. Is ContextID still
+  // needed? https://crbug.com/859902
   //
   // 'redirects' is an array of redirect URLs leading to this page, with the
   // page itself as the last item (so when there is no redirect, it will have
@@ -370,6 +374,12 @@ class HistoryService : public syncer::SyncableService, public KeyedService {
   void ExpireHistory(const std::vector<ExpireHistoryArgs>& expire_list,
                      const base::Closure& callback,
                      base::CancelableTaskTracker* tracker);
+
+  // Expires all visits before and including the given time, updating the URLs
+  // accordingly.
+  void ExpireHistoryBeforeForTesting(base::Time end_time,
+                                     base::OnceClosure callback,
+                                     base::CancelableTaskTracker* tracker);
 
   // Removes all visits to the given URLs in the specified time range. Calls
   // ExpireHistoryBetween() to delete local visits, and handles deletion of
@@ -605,16 +615,8 @@ class HistoryService : public syncer::SyncableService, public KeyedService {
   void NotifyURLsModified(const URLRows& changed_urls);
 
   // Notify all HistoryServiceObservers registered that URLs have been deleted.
-  // |all_history| is set to true, if all the URLs are deleted.
-  //               When set to true, |deleted_rows| and |favicon_urls| are
-  //               undefined.
-  // |expired| is set to true, if the URL deletion is due to expiration.
-  // |deleted_rows| list of the deleted URLs.
-  // |favicon_urls| list of favicon URLs that correspond to the deleted URLs.
-  void NotifyURLsDeleted(const DeletionTimeRange& time_range,
-                         bool expired,
-                         const URLRows& deleted_rows,
-                         const std::set<GURL>& favicon_urls);
+  // |deletion_info| describes the urls that have been removed from history.
+  void NotifyURLsDeleted(const DeletionInfo& deletion_info);
 
   // Notify all HistoryServiceObservers registered that the
   // HistoryService has finished loading.

@@ -6,9 +6,9 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/plugins/plugin_finder.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
@@ -16,6 +16,7 @@
 #include "components/prefs/pref_service.h"
 #include "content/public/common/service_manager_connection.h"
 #include "services/data_decoder/public/cpp/safe_json_parser.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
 
 namespace {
@@ -82,7 +83,8 @@ PluginsResourceService::PluginsResourceService(PrefService* local_state)
           prefs::kPluginsResourceCacheUpdate,
           kStartResourceFetchDelayMs,
           kCacheUpdateDelayMs,
-          g_browser_process->system_request_context(),
+          g_browser_process->system_network_context_manager()
+              ->GetSharedURLLoaderFactory(),
           switches::kDisableBackgroundNetworking,
           base::Bind(data_decoder::SafeJsonParser::Parse,
                      content::ServiceManagerConnection::GetForProcess()

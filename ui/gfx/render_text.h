@@ -27,6 +27,7 @@
 #include "ui/gfx/font_render_params.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/geometry/size_f.h"
 #include "ui/gfx/geometry/vector2d.h"
 #include "ui/gfx/range/range.h"
@@ -88,6 +89,7 @@ class StyleIterator {
  public:
   StyleIterator(const BreakList<SkColor>& colors,
                 const BreakList<BaselineStyle>& baselines,
+                const BreakList<int>& font_size_overrides,
                 const BreakList<Font::Weight>& weights,
                 const std::vector<BreakList<bool>>& styles);
   ~StyleIterator();
@@ -95,6 +97,7 @@ class StyleIterator {
   // Get the colors and styles at the current iterator position.
   SkColor color() const { return color_->second; }
   BaselineStyle baseline() const { return baseline_->second; }
+  int font_size_override() const { return font_size_override_->second; }
   bool style(TextStyle s) const { return style_[s]->second; }
   Font::Weight weight() const { return weight_->second; }
 
@@ -107,11 +110,13 @@ class StyleIterator {
  private:
   BreakList<SkColor> colors_;
   BreakList<BaselineStyle> baselines_;
+  BreakList<int> font_size_overrides_;
   BreakList<Font::Weight> weights_;
   std::vector<BreakList<bool> > styles_;
 
   BreakList<SkColor>::const_iterator color_;
   BreakList<BaselineStyle>::const_iterator baseline_;
+  BreakList<int>::const_iterator font_size_override_;
   BreakList<Font::Weight>::const_iterator weight_;
   std::vector<BreakList<bool>::const_iterator> style_;
 
@@ -237,6 +242,13 @@ class GFX_EXPORT RenderText {
   }
   void set_selection_background_focused_color(SkColor color) {
     selection_background_focused_color_ = color;
+  }
+
+  bool symmetric_selection_visual_bounds() const {
+    return symmetric_selection_visual_bounds_;
+  }
+  void set_symmetric_selection_visual_bounds(bool symmetric) {
+    symmetric_selection_visual_bounds_ = symmetric;
   }
 
   bool focused() const { return focused_; }
@@ -365,10 +377,16 @@ class GFX_EXPORT RenderText {
   void SetColor(SkColor value);
   void ApplyColor(SkColor value, const Range& range);
 
+  // DEPRECATED.
   // Set the baseline style over the entire text or a logical character range.
   // The |range| should be valid, non-reversed, and within [0, text().length()].
+  // TODO(tapted): Remove this. The only client is moving to
+  // ApplyFontSizeOverride.
   void SetBaselineStyle(BaselineStyle value);
   void ApplyBaselineStyle(BaselineStyle value, const Range& range);
+
+  // Alters the font size in |range|.
+  void ApplyFontSizeOverride(int font_size_override, const Range& range);
 
   // Set various text styles over the entire text or a logical character range.
   // The respective |style| is applied if |value| is true, or removed if false.
@@ -480,6 +498,9 @@ class GFX_EXPORT RenderText {
   // chosen.
   virtual std::vector<FontSpan> GetFontSpansForTesting() = 0;
 
+  // Returns rectangle surrounding the current string (from origin to size)
+  RectF GetStringRect();
+
   // Get the visual bounds containing the logical substring within the |range|.
   // If |range| is empty, the result is empty. These bounds could be visually
   // discontinuous if the substring is split by a LTR/RTL level change.
@@ -537,6 +558,9 @@ class GFX_EXPORT RenderText {
 
   const BreakList<SkColor>& colors() const { return colors_; }
   const BreakList<BaselineStyle>& baselines() const { return baselines_; }
+  const BreakList<int>& font_size_overrides() const {
+    return font_size_overrides_;
+  }
   const BreakList<Font::Weight>& weights() const { return weights_; }
   const std::vector<BreakList<bool> >& styles() const { return styles_; }
   SkScalar strike_thickness_factor() const { return strike_thickness_factor_; }
@@ -680,6 +704,11 @@ class GFX_EXPORT RenderText {
   static int DetermineBaselineCenteringText(const int display_height,
                                             const FontList& font_list);
 
+  // Returns an expanded version of |rect| that is vertically symmetric with
+  // respect to the center of |display_rect|.
+  static gfx::Rect ExpandToBeVerticallySymmetric(const gfx::Rect& rect,
+                                                 const gfx::Rect& display_rect);
+
  private:
   friend class test::RenderTextTestApi;
 
@@ -766,6 +795,11 @@ class GFX_EXPORT RenderText {
   // The background color used for drawing the selection when focused.
   SkColor selection_background_focused_color_;
 
+  // Whether the selection visual bounds should be expanded vertically to be
+  // vertically symmetric with respect to the display rect. Note this flag has
+  // no effect on multi-line text.
+  bool symmetric_selection_visual_bounds_ = false;
+
   // The focus state of the text.
   bool focused_;
 
@@ -777,6 +811,7 @@ class GFX_EXPORT RenderText {
   // TODO(msw): Expand to support cursor, selection, background, etc. colors.
   BreakList<SkColor> colors_;
   BreakList<BaselineStyle> baselines_;
+  BreakList<int> font_size_overrides_;
   BreakList<Font::Weight> weights_;
   std::vector<BreakList<bool> > styles_;
 

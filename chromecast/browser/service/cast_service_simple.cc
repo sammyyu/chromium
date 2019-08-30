@@ -9,6 +9,7 @@
 #include "base/command_line.h"
 #include "base/files/file_util.h"
 #include "base/time/time.h"
+#include "chromecast/browser/cast_browser_process.h"
 #include "chromecast/browser/cast_content_window.h"
 #include "chromecast/browser/cast_web_contents_manager.h"
 #include "chromecast/browser/cast_web_view_factory.h"
@@ -48,6 +49,8 @@ CastServiceSimple::CastServiceSimple(content::BrowserContext* browser_context,
           std::make_unique<CastWebContentsManager>(browser_context,
                                                    web_view_factory_.get())) {
   DCHECK(window_manager_);
+  shell::CastBrowserProcess::GetInstance()->SetWebViewFactory(
+      web_view_factory_.get());
 }
 
 CastServiceSimple::~CastServiceSimple() {
@@ -73,7 +76,9 @@ void CastServiceSimple::StartInternal() {
                                            nullptr,         /* extension */
                                            GURL() /* initial_url */);
   cast_web_view_->LoadUrl(startup_url_);
-  cast_web_view_->CreateWindow(window_manager_, true /* is_visible */);
+  cast_web_view_->InitializeWindow(
+      window_manager_, true /* is_visible */, CastWindowManager::APP,
+      chromecast::shell::VisibilityPriority::STICKY_ACTIVITY);
 }
 
 void CastServiceSimple::StopInternal() {
@@ -100,9 +105,13 @@ bool CastServiceSimple::OnAddMessageToConsoleReceived(
   return false;
 }
 
+bool CastServiceSimple::CanHandleGesture(GestureType gesture_type) {
+  return false;
+}
+
 bool CastServiceSimple::ConsumeGesture(GestureType gesture_type) {
   return false;
-};
+}
 
 void CastServiceSimple::OnVisibilityChange(VisibilityType visibility_type) {}
 

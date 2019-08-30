@@ -39,18 +39,19 @@ const base::FilePath::CharType kDocRoot[] =
 class MockAutofillClient : public TestAutofillClient {
  public:
   MockAutofillClient() {}
-  virtual ~MockAutofillClient() {}
+  ~MockAutofillClient() override {}
 
-  virtual PrefService* GetPrefs() { return &prefs_; }
+  PrefService* GetPrefs() override { return &prefs_; }
 
   user_prefs::PrefRegistrySyncable* GetPrefRegistry() {
     return prefs_.registry();
   }
 
-  MOCK_METHOD4(ShowAutofillPopup,
+  MOCK_METHOD5(ShowAutofillPopup,
                void(const gfx::RectF& element_bounds,
                     base::i18n::TextDirection text_direction,
                     const std::vector<autofill::Suggestion>& suggestions,
+                    bool autoselect_first_suggestion,
                     base::WeakPtr<AutofillPopupDelegate> delegate));
 
   MOCK_METHOD0(HideAutofillPopup, void());
@@ -84,7 +85,7 @@ class ContentAutofillDriverBrowserTest : public InProcessBrowserTest,
                                          public content::WebContentsObserver {
  public:
   ContentAutofillDriverBrowserTest() {}
-  virtual ~ContentAutofillDriverBrowserTest() {}
+  ~ContentAutofillDriverBrowserTest() override {}
 
   void SetUpOnMainThread() override {
     content::WebContents* web_contents =

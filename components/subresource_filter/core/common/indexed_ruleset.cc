@@ -22,7 +22,9 @@ using FindRuleStrategy =
 // RulesetIndexer --------------------------------------------------------------
 
 // static
-const int RulesetIndexer::kIndexedFormatVersion = 19;
+// Keep this in sync with the version number in
+// tools/perf/core/default_local_state.json.
+const int RulesetIndexer::kIndexedFormatVersion = 20;
 
 RulesetIndexer::RulesetIndexer()
     : blacklist_(&builder_), whitelist_(&builder_), deactivation_(&builder_) {}
@@ -64,12 +66,15 @@ void RulesetIndexer::Finish() {
 
 // static
 bool IndexedRulesetMatcher::Verify(const uint8_t* buffer, size_t size) {
-  TRACE_EVENT0(TRACE_DISABLED_BY_DEFAULT("loading"),
-               "IndexedRulesetMatcher::Verify");
+  TRACE_EVENT_BEGIN1(TRACE_DISABLED_BY_DEFAULT("loading"),
+                     "IndexedRulesetMatcher::Verify", "size", size);
   SCOPED_UMA_HISTOGRAM_TIMER(
       "SubresourceFilter.IndexRuleset.Verify2.WallDuration");
   flatbuffers::Verifier verifier(buffer, size);
-  return flat::VerifyIndexedRulesetBuffer(verifier);
+  bool valid = flat::VerifyIndexedRulesetBuffer(verifier);
+  TRACE_EVENT_END1(TRACE_DISABLED_BY_DEFAULT("loading"),
+                   "IndexedRulesetMatcher::Verify", "valid", valid);
+  return valid;
 }
 
 IndexedRulesetMatcher::IndexedRulesetMatcher(const uint8_t* buffer, size_t size)

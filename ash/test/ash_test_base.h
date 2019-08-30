@@ -12,14 +12,11 @@
 
 #include "ash/public/cpp/shell_window_ids.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
 #include "base/threading/thread.h"
 #include "components/user_manager/user_type.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/aura/client/window_types.h"
-#include "ui/aura/env_observer.h"
-#include "ui/aura/window_tree_host_observer.h"
 #include "ui/display/display.h"
 
 namespace aura {
@@ -44,6 +41,11 @@ namespace ui {
 namespace test {
 class EventGenerator;
 }
+namespace ws2 {
+class TestWindowTreeClient;
+class WindowTree;
+class WindowTreeTestHelper;
+}  // namespace ws2
 }
 
 namespace views {
@@ -60,10 +62,9 @@ class Shelf;
 class SystemTray;
 class TestScreenshotDelegate;
 class TestSessionControllerClient;
+class UnifiedSystemTray;
 
-class AshTestBase : public testing::Test,
-                    public aura::EnvObserver,
-                    public aura::WindowTreeHostObserver {
+class AshTestBase : public testing::Test {
  public:
   AshTestBase();
   ~AshTestBase() override;
@@ -77,6 +78,9 @@ class AshTestBase : public testing::Test,
 
   // Returns the system tray on the primary display.
   static SystemTray* GetPrimarySystemTray();
+
+  // Returns the unified system tray on the primary display.
+  static UnifiedSystemTray* GetPrimaryUnifiedSystemTray();
 
   // Update the display configuration as given in |display_specs|.
   // See ash::DisplayManagerTestApi::UpdateDisplay for more details.
@@ -99,15 +103,19 @@ class AshTestBase : public testing::Test,
   // window, otherwise the window is added to the display matching
   // |bounds_in_screen|. |shell_window_id| is the shell window id to give to
   // the new window.
+  //
+  // In classic mode this simulates creating a window as a client of Ash would.
+  // That is, it goes through the WindowService.
+  //
   // TODO(sky): convert existing CreateTestWindow() functions into this one.
   std::unique_ptr<aura::Window> CreateTestWindow(
       const gfx::Rect& bounds_in_screen = gfx::Rect(),
       aura::client::WindowType type = aura::client::WINDOW_TYPE_NORMAL,
       int shell_window_id = kShellWindowId_Invalid);
 
-  // Creates a visible top-level window. For Config::CLASSIC and Config::MUS
-  // this creates a Window with a delegate. For Config::MASH this creates a
-  // window as if the client requested a top-level window.
+  // Creates a visible top-level window. For Config::CLASSIC this creates a
+  // Window with a delegate. For Config::MASH_DEPRECATED this creates a window
+  // as if the client requested a top-level window.
   std::unique_ptr<aura::Window> CreateToplevelTestWindow(
       const gfx::Rect& bounds_in_screen = gfx::Rect(),
       int shell_window_id = kShellWindowId_Invalid);
@@ -141,16 +149,16 @@ class AshTestBase : public testing::Test,
   void ParentWindowInPrimaryRootWindow(aura::Window* window);
 
   // Returns the EventGenerator that uses screen coordinates and works
-  // across multiple displays. It createse a new generator if it
+  // across multiple displays. It creates a new generator if it
   // hasn't been created yet.
-  ui::test::EventGenerator& GetEventGenerator();
+  ui::test::EventGenerator* GetEventGenerator();
 
   // Convenience method to return the DisplayManager.
   display::DisplayManager* display_manager();
 
   // Test if moving a mouse to |point_in_screen| warps it to another
   // display.
-  bool TestIfMouseWarpsAt(ui::test::EventGenerator& event_generator,
+  bool TestIfMouseWarpsAt(ui::test::EventGenerator* event_generator,
                           const gfx::Point& point_in_screen);
 
  protected:
@@ -173,6 +181,8 @@ class AshTestBase : public testing::Test,
 
   AshTestHelper* ash_test_helper() { return ash_test_helper_.get(); }
 
+  // Deprecated. Using this triggers a preprocessor warning, use
+  // base::RunLoop().RunUntilIdle() instead.
   void RunAllPendingInMessageLoop();
 
   TestScreenshotDelegate* GetScreenshotDelegate();
@@ -188,6 +198,9 @@ class AshTestBase : public testing::Test,
   // Simulates a user sign-in. It creates a new user session, adds it to
   // existing user sessions and makes it the active user session.
   void SimulateUserLogin(const std::string& user_email);
+
+  // Simular to SimulateUserLogin but for a newly created user first ever login.
+  void SimulateNewUserFirstLogin(const std::string& user_email);
 
   // Similar to SimulateUserLogin but for a guest user.
   void SimulateGuestLogin();
@@ -220,13 +233,13 @@ class AshTestBase : public testing::Test,
   display::Display GetPrimaryDisplay();
   display::Display GetSecondaryDisplay();
 
- private:
-  // aura::EnvObserver:
-  void OnWindowInitialized(aura::Window* window) override;
-  void OnHostInitialized(aura::WindowTreeHost* host) override;
+  // Returns the WindowTreeTestHelper, creating if necessary.
+  ui::ws2::WindowTreeTestHelper* GetWindowTreeTestHelper();
+  ui::ws2::TestWindowTreeClient* GetTestWindowTreeClient();
+  ui::ws2::WindowTree* GetWindowTree();
 
-  // aura::WindowTreeHostObserver:
-  void OnHostResized(aura::WindowTreeHost* host) override;
+ private:
+  void CreateWindowTreeIfNecessary();
 
   bool setup_called_;
   bool teardown_called_;
@@ -238,6 +251,10 @@ class AshTestBase : public testing::Test,
   std::unique_ptr<AshTestEnvironment> ash_test_environment_;
   std::unique_ptr<AshTestHelper> ash_test_helper_;
   std::unique_ptr<ui::test::EventGenerator> event_generator_;
+
+  std::unique_ptr<ui::ws2::TestWindowTreeClient> window_tree_client_;
+  std::unique_ptr<ui::ws2::WindowTree> window_tree_;
+  std::unique_ptr<ui::ws2::WindowTreeTestHelper> window_tree_test_helper_;
 
   DISALLOW_COPY_AND_ASSIGN(AshTestBase);
 };

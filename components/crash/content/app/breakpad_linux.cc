@@ -55,6 +55,7 @@
 #include <sys/stat.h>
 
 #include "base/android/build_info.h"
+#include "base/android/java_exception_reporter.h"
 #include "base/android/path_utils.h"
 #include "base/debug/leak_annotations.h"
 #endif
@@ -109,6 +110,21 @@ uint32_t g_dumps_suppressed = 0;
 char* g_process_type = nullptr;
 ExceptionHandler* g_microdump = nullptr;
 int g_signal_code_pipe_fd = -1;
+char* g_java_exception_info = nullptr;
+
+void SetJavaExceptionInfo(const char* exception) {
+  if (g_java_exception_info) {
+    // The old exception should be cleared before setting a new one.
+    DCHECK(!exception);
+    free(g_java_exception_info);
+  }
+
+  if (exception) {
+    g_java_exception_info = strndup(exception, 5 * 4096);
+  } else {
+    g_java_exception_info = nullptr;
+  }
+}
 
 class MicrodumpInfo {
  public:
@@ -559,10 +575,6 @@ void CrashReporterWriter::AddFileContents(const char* filename_msg,
 // $FIREBASE_APP_ID v$VERSION_CODE ($VERSION_NAME)
 void WriteAndroidPackage(MimeWriter& writer,
                          base::android::BuildInfo* android_build_info) {
-  // Don't write the field if no Firebase ID is set.
-  if (android_build_info->firebase_app_id()[0] == '\0') {
-    return;
-  }
   // The actual size limits on packageId and versionName are quite generous.
   // Limit to a reasonable size rather than allocating theoretical limits.
   const int kMaxSize = 1024;
@@ -626,7 +638,8 @@ bool FinalizeCrashDoneAndroid(bool is_browser_process) {
   AndroidLogWriteHorizontalRule();
 
   if (!is_browser_process &&
-      android_build_info->sdk_int() >= 18 &&
+      android_build_info->sdk_int() >=
+          base::android::SDK_VERSION_JELLY_BEAN_MR2 &&
       my_strcmp(android_build_info->build_type(), "eng") != 0 &&
       my_strcmp(android_build_info->build_type(), "userdebug") != 0) {
     // On JB MR2 and later, the system crash handler displays a dialog. For
@@ -779,7 +792,7 @@ void EnableCrashDumping(bool unattended) {
   g_is_crash_reporter_enabled = true;
 
   base::FilePath tmp_path("/tmp");
-  PathService::Get(base::DIR_TEMP, &tmp_path);
+  base::PathService::Get(base::DIR_TEMP, &tmp_path);
 
   base::FilePath dumps_path(tmp_path);
   if (GetCrashReporterClient()->GetCrashDumpLocation(&dumps_path)) {
@@ -995,8 +1008,7 @@ class NonBrowserCrashHandler : public google_breakpad::CrashGenerationClient {
  public:
   NonBrowserCrashHandler()
       : server_fd_(base::GlobalDescriptors::GetInstance()->Get(
-            kCrashDumpSignal)) {
-  }
+            service_manager::kCrashDumpSignal)) {}
 
   ~NonBrowserCrashHandler() override {}
 
@@ -1712,6 +1724,8 @@ void HandleCrashDump(const BreakpadInfo& info) {
     static const char brand[] = "brand";
     static const char board[] = "board";
     static const char exception_info[] = "exception_info";
+    static const char custom_themes[] = "custom_themes";
+    static const char resources_version[] = "resources_version";
 
     base::android::BuildInfo* android_build_info =
         base::android::BuildInfo::GetInstance();
@@ -1737,11 +1751,18 @@ void HandleCrashDump(const BreakpadInfo& info) {
     writer.AddBoundary();
     writer.AddPairString(abi_name, android_build_info->abi_name());
     writer.AddBoundary();
-    WriteAndroidPackage(writer, android_build_info);
+    writer.AddPairString(custom_themes, android_build_info->custom_themes());
     writer.AddBoundary();
-    if (android_build_info->java_exception_info() != nullptr) {
-      writer.AddPairString(exception_info,
-                           android_build_info->java_exception_info());
+    writer.AddPairString(resources_version,
+                         android_build_info->resources_version());
+    writer.AddBoundary();
+    // Don't write the field if no Firebase ID is set.
+    if (android_build_info->firebase_app_id()[0] != '\0') {
+      WriteAndroidPackage(writer, android_build_info);
+      writer.AddBoundary();
+    }
+    if (g_java_exception_info != nullptr) {
+      writer.AddPairString(exception_info, g_java_exception_info);
       writer.AddBoundary();
     }
 #endif
@@ -1936,6 +1957,8 @@ void InitCrashReporter(const std::string& process_type,
 void InitCrashReporter(const std::string& process_type) {
 #endif  // defined(OS_ANDROID)
 #if defined(OS_ANDROID)
+  base::android::SetJavaExceptionCallback(SetJavaExceptionInfo);
+
   // This will guarantee that the BuildInfo has been initialized and subsequent
   // calls will not require memory allocation.
   base::android::BuildInfo::GetInstance();
@@ -2022,6 +2045,8 @@ void InitNonBrowserCrashReporterForAndroid(
     const SanitizationInfo& sanitization_info) {
   const base::CommandLine* command_line =
       base::CommandLine::ForCurrentProcess();
+
+  base::android::SetJavaExceptionCallback(SetJavaExceptionInfo);
 
   // Handler registration is LIFO. Install the microdump handler first, such
   // that if conventional minidump crash reporting is enabled below, it takes

@@ -27,6 +27,10 @@ enum ShaderVariableBaseType {
   SHADER_VARIABLE_UNDEFINED_TYPE = 0x00
 };
 
+// Compiles shader_source into shader and gives informative logging if
+// the compilation fails.
+void CompileShaderWithLog(GLuint shader, const char* shader_source);
+
 // This is used to keep the source code for a shader. This is because in order
 // to emluate GLES2 the shaders will have to be re-written before passed to
 // the underlying OpenGL. But, when the user calls glGetShaderSource they
@@ -206,8 +210,13 @@ class GPU_GLES2_EXPORT Shader : public base::RefCounted<Shader> {
   // of the underlying shader service id.
   void Destroy();
 
-  void IncUseCount();
-  void DecUseCount();
+  void IncUseCount() { ++use_count_; }
+
+  void DecUseCount() {
+    --use_count_;
+    DCHECK_GE(use_count_, 0);
+  }
+
   void MarkForDeletion();
   void DeleteServiceID();
 
@@ -305,7 +314,7 @@ class GPU_GLES2_EXPORT ShaderManager {
   typedef base::hash_map<GLuint, scoped_refptr<Shader> > ShaderMap;
   ShaderMap shaders_;
 
-  void RemoveShader(Shader* shader);
+  void RemoveShaderIfUnused(Shader* shader);
 
   // Used to notify the watchdog thread of progress during destruction,
   // preventing time-outs when destruction takes a long time. May be null when

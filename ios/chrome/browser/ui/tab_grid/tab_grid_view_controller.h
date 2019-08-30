@@ -10,19 +10,18 @@
 #import "ios/chrome/browser/ui/tab_grid/tab_grid_paging.h"
 #import "ios/chrome/browser/ui/tab_grid/transitions/grid_transition_state_providing.h"
 
+@protocol ApplicationCommands;
 @protocol GridConsumer;
 @protocol GridCommands;
 @protocol GridImageDataSource;
-
-// TODO(crbug.com/818198) : Move to constants file.
-// The accessibility label for the done button for use in test automation.
-extern NSString* const kTabGridDoneButtonAccessibilityID;
+@protocol RecentTabsTableConsumer;
+@class RecentTabsTableViewController;
 
 // Delegate protocol for an object that can handle presenting ("opening") tabs
 // from the tab grid.
 @protocol TabPresentationDelegate<NSObject>
-// Show the active tab, presented on top of the tab grid.
-- (void)showActiveTab;
+// Show the active tab in |page|, presented on top of the tab grid.
+- (void)showActiveTabInPage:(TabGridPage)page;
 @end
 
 // View controller representing a tab switcher. The tab switcher has an
@@ -30,12 +29,15 @@ extern NSString* const kTabGridDoneButtonAccessibilityID;
 @interface TabGridViewController
     : UIViewController<TabGridPaging, GridTransitionStateProviding>
 
+@property(nonatomic, weak) id<ApplicationCommands> dispatcher;
+
 // Delegate for this view controller to handle presenting tab UI.
 @property(nonatomic, weak) id<TabPresentationDelegate> tabPresentationDelegate;
 
 // Consumers send updates from the model layer to the UI layer.
 @property(nonatomic, readonly) id<GridConsumer> regularTabsConsumer;
 @property(nonatomic, readonly) id<GridConsumer> incognitoTabsConsumer;
+@property(nonatomic, readonly) id<RecentTabsTableConsumer> remoteTabsConsumer;
 
 // Delegates send updates from the UI layer to the model layer.
 @property(nonatomic, weak) id<GridCommands> regularTabsDelegate;
@@ -44,6 +46,13 @@ extern NSString* const kTabGridDoneButtonAccessibilityID;
 // Data sources provide lazy access to heavy-weight resources.
 @property(nonatomic, weak) id<GridImageDataSource> regularTabsImageDataSource;
 @property(nonatomic, weak) id<GridImageDataSource> incognitoTabsImageDataSource;
+
+// The view controller for remote tabs.
+// TODO(crbug.com/845192) : This was only exposed in the public interface so
+// that TabGridViewController does not need to know about model objects. The
+// model objects used in this view controller should be factored out.
+@property(nonatomic, strong)
+    RecentTabsTableViewController* remoteTabsViewController;
 
 @end
 

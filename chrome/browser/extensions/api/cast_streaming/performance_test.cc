@@ -13,7 +13,6 @@
 
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/trace_event_analyzer.h"
@@ -346,9 +345,8 @@ class TestPatternReceiver : public media::cast::InProcessReceiver {
   DISALLOW_COPY_AND_ASSIGN(TestPatternReceiver);
 };
 
-class CastV2PerformanceTest
-    : public ExtensionApiTest,
-      public testing::WithParamInterface<int> {
+class CastV2PerformanceTest : public extensions::ExtensionApiTest,
+                              public testing::WithParamInterface<int> {
  public:
   CastV2PerformanceTest() {}
 
@@ -402,7 +400,7 @@ class CastV2PerformanceTest
     EnablePixelOutput();
     if (!HasFlag(kUseGpu))
       UseSoftwareCompositing();
-    ExtensionApiTest::SetUp();
+    extensions::ExtensionApiTest::SetUp();
   }
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
@@ -425,7 +423,7 @@ class CastV2PerformanceTest
         extensions::switches::kWhitelistedExtensionID,
         kExtensionId);
 
-    ExtensionApiTest::SetUpCommandLine(command_line);
+    extensions::ExtensionApiTest::SetUpCommandLine(command_line);
   }
 
   void GetTraceEvents(trace_analyzer::TraceAnalyzer* analyzer,

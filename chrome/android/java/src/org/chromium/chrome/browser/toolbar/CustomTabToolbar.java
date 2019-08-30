@@ -12,15 +12,19 @@ import android.app.Activity;
 import android.content.ClipData;
 import android.content.ClipboardManager;
 import android.content.Context;
+import android.content.res.ColorStateList;
 import android.content.res.Configuration;
 import android.content.res.Resources;
 import android.graphics.Color;
 import android.graphics.drawable.ColorDrawable;
 import android.graphics.drawable.Drawable;
 import android.net.Uri;
+import android.support.v4.text.BidiFormatter;
+import android.support.v4.view.MarginLayoutParamsCompat;
+import android.text.SpannableString;
 import android.text.TextUtils;
+import android.text.style.ForegroundColorSpan;
 import android.util.AttributeSet;
-import android.util.Pair;
 import android.util.TypedValue;
 import android.view.GestureDetector;
 import android.view.LayoutInflater;
@@ -39,34 +43,39 @@ import org.chromium.base.metrics.RecordUserAction;
 import org.chromium.chrome.R;
 import org.chromium.chrome.browser.WindowDelegate;
 import org.chromium.chrome.browser.appmenu.AppMenuButtonHelper;
-import org.chromium.chrome.browser.dom_distiller.DomDistillerServiceFactory;
-import org.chromium.chrome.browser.dom_distiller.DomDistillerTabUtils;
 import org.chromium.chrome.browser.ntp.NativePageFactory;
 import org.chromium.chrome.browser.ntp.NewTabPage;
 import org.chromium.chrome.browser.omnibox.LocationBar;
-import org.chromium.chrome.browser.omnibox.LocationBarLayout;
 import org.chromium.chrome.browser.omnibox.UrlBar;
-import org.chromium.chrome.browser.page_info.PageInfoPopup;
+import org.chromium.chrome.browser.omnibox.UrlBarData;
+import org.chromium.chrome.browser.page_info.PageInfoController;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.browser.util.AccessibilityUtil;
 import org.chromium.chrome.browser.util.ColorUtils;
+import org.chromium.chrome.browser.util.FeatureUtilities;
+import org.chromium.chrome.browser.widget.ScrimView;
 import org.chromium.chrome.browser.widget.TintedDrawable;
 import org.chromium.chrome.browser.widget.TintedImageButton;
-import org.chromium.components.dom_distiller.core.DomDistillerService;
-import org.chromium.components.dom_distiller.core.DomDistillerUrlUtils;
+import org.chromium.components.url_formatter.UrlFormatter;
 import org.chromium.content_public.common.ContentUrlConstants;
+import org.chromium.net.GURLUtils;
+import org.chromium.ui.base.DeviceFormFactor;
 import org.chromium.ui.base.WindowAndroid;
 import org.chromium.ui.interpolators.BakedBezierInterpolator;
+import org.chromium.ui.text.SpanApplier;
+import org.chromium.ui.text.SpanApplier.SpanInfo;
 import org.chromium.ui.widget.Toast;
 
 import java.util.List;
+import java.util.regex.Pattern;
 
 /**
  * The Toolbar layout to be used for a custom tab. This is used for both phone and tablet UIs.
  */
 public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
         View.OnLongClickListener {
+    private static final Object ORIGIN_SPAN = new Object();
 
     /**
      * A simple {@link FrameLayout} that prevents its children from getting touch events. This is
@@ -78,16 +87,16 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
 
         public InterceptTouchLayout(Context context, AttributeSet attrs) {
             super(context, attrs);
-            mGestureDetector = new GestureDetector(getContext(),
-                    new GestureDetector.SimpleOnGestureListener() {
+            mGestureDetector = new GestureDetector(
+                    getContext(), new GestureDetector.SimpleOnGestureListener() {
                         @Override
                         public boolean onSingleTapConfirmed(MotionEvent e) {
-                            if (LibraryLoader.isInitialized()) {
+                            if (LibraryLoader.getInstance().isInitialized()) {
                                 RecordUserAction.record("CustomTabs.TapUrlBar");
                             }
                             return super.onSingleTapConfirmed(e);
                         }
-                    });
+                    }, ThreadUtils.getUiThreadHandler());
         }
 
         @Override
@@ -106,6 +115,10 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
     private static final int STATE_DOMAIN_ONLY = 0;
     private static final int STATE_TITLE_ONLY = 1;
     private static final int STATE_DOMAIN_AND_TITLE = 2;
+
+    /** Regular expression for prefixes to strip from publisher hostnames. */
+    private static final Pattern HOSTNAME_PREFIX_PATTERN =
+            Pattern.compile("^(www[0-9]*|web|ftp|wap|home|mobile|amp)\\.");
 
     private View mLocationBarFrameLayout;
     private View mTitleUrlContainer;
@@ -144,20 +157,20 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
     @Override
     protected void onFinishInflate() {
         super.onFinishInflate();
-        setBackground(new ColorDrawable(
-                ApiCompatibilityUtils.getColor(getResources(), R.color.default_primary_color)));
-        mUrlBar = (UrlBar) findViewById(R.id.url_bar);
+        setBackground(new ColorDrawable(ColorUtils.getDefaultThemeColor(
+                getResources(), FeatureUtilities.isChromeModernDesignEnabled(), false)));
+        mUrlBar = findViewById(R.id.url_bar);
         mUrlBar.setHint("");
         mUrlBar.setDelegate(this);
         mUrlBar.setEnabled(false);
         mUrlBar.setAllowFocus(false);
-        mTitleBar = (TextView) findViewById(R.id.title_bar);
+        mTitleBar = findViewById(R.id.title_bar);
         mLocationBarFrameLayout = findViewById(R.id.location_bar_frame_layout);
         mTitleUrlContainer = findViewById(R.id.title_url_container);
         mTitleUrlContainer.setOnLongClickListener(this);
-        mSecurityButton = (TintedImageButton) findViewById(R.id.security_button);
+        mSecurityButton = findViewById(R.id.security_button);
         mCustomActionButtons = findViewById(R.id.action_buttons);
-        mCloseButton = (ImageButton) findViewById(R.id.close_button);
+        mCloseButton = findViewById(R.id.close_button);
         mCloseButton.setOnLongClickListener(this);
         mAnimDelegate = new CustomTabToolbarAnimationDelegate(mSecurityButton, mTitleUrlContainer);
     }
@@ -172,18 +185,13 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
     @Override
     public void onNativeLibraryReady() {
         super.onNativeLibraryReady();
-        mSecurityButton.setOnClickListener(new OnClickListener() {
-            @Override
-            public void onClick(View v) {
-                Tab currentTab = getToolbarDataProvider().getTab();
-                if (currentTab == null || currentTab.getWebContents() == null) return;
-                Activity activity = currentTab.getWindowAndroid().getActivity().get();
-                if (activity == null) return;
-                String publisherName = mState == STATE_TITLE_ONLY
-                        ? parsePublisherNameFromUrl(currentTab.getUrl()) : null;
-                PageInfoPopup.show(
-                        activity, currentTab, publisherName, PageInfoPopup.OPENED_FROM_TOOLBAR);
-            }
+        mSecurityButton.setOnClickListener(v -> {
+            Tab currentTab = getToolbarDataProvider().getTab();
+            if (currentTab == null || currentTab.getWebContents() == null) return;
+            Activity activity = currentTab.getWindowAndroid().getActivity().get();
+            if (activity == null) return;
+            PageInfoController.show(activity, currentTab, getContentPublisher(),
+                    PageInfoController.OpenedFromSource.TOOLBAR);
         });
     }
 
@@ -215,7 +223,8 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
 
     @Override
     public void updateCustomActionButton(int index, Drawable drawable, String description) {
-        ImageButton button = (ImageButton) mCustomActionButtons.getChildAt(index);
+        ImageButton button = (ImageButton) mCustomActionButtons.getChildAt(
+                mCustomActionButtons.getChildCount() - 1 - index);
         assert button != null;
         updateCustomActionButtonVisuals(button, drawable, description);
     }
@@ -267,8 +276,8 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
     }
 
     @Override
-    public boolean shouldEmphasizeHttpsScheme() {
-        return !mToolbarDataProvider.isUsingBrandColor();
+    public boolean shouldCutCopyVerbatim() {
+        return false;
     }
 
     @Override
@@ -316,10 +325,15 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
 
     @Override
     public String getContentPublisher() {
-        if (mState == STATE_TITLE_ONLY) {
-            if (getToolbarDataProvider().getTab() == null) return null;
-            return parsePublisherNameFromUrl(getToolbarDataProvider().getTab().getUrl());
-        }
+        Tab tab = getToolbarDataProvider().getTab();
+        if (tab == null) return null;
+
+        String publisherUrl = tab.getTrustedCdnPublisherUrl();
+        if (publisherUrl != null) return extractPublisherFromPublisherUrl(publisherUrl);
+
+        // TODO(bauerb): Remove this once trusted CDN publisher URLs have rolled out completely.
+        if (mState == STATE_TITLE_ONLY) return parsePublisherNameFromUrl(tab.getUrl());
+
         return null;
     }
 
@@ -359,14 +373,24 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
         updateSecurityIcon();
     }
 
+    @VisibleForTesting
+    public static String extractPublisherFromPublisherUrl(String publisherUrl) {
+        String publisher =
+                UrlFormatter.formatUrlForDisplayOmitScheme(GURLUtils.getOrigin(publisherUrl));
+
+        String trimmedPublisher = HOSTNAME_PREFIX_PATTERN.matcher(publisher).replaceFirst("");
+        return BidiFormatter.getInstance().unicodeWrap(trimmedPublisher);
+    }
+
     @Override
     public void setUrlToPageUrl() {
         if (getCurrentTab() == null) {
-            mUrlBar.setUrl("", null);
+            mUrlBar.setUrl(UrlBarData.EMPTY);
             return;
         }
 
-        String url = getCurrentTab().getUrl().trim();
+        String publisherUrl = getCurrentTab().getTrustedCdnPublisherUrl();
+        String url = publisherUrl != null ? publisherUrl : getCurrentTab().getUrl().trim();
         if (mState == STATE_TITLE_ONLY) {
             if (!TextUtils.isEmpty(getToolbarDataProvider().getTitle())) setTitleToPageTitle();
         }
@@ -376,40 +400,33 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
         // is "about:blank". We should not display it.
         if (NativePageFactory.isNativePageUrl(url, getCurrentTab().isIncognito())
                 || ContentUrlConstants.ABOUT_BLANK_DISPLAY_URL.equals(url)) {
-            mUrlBar.setUrl("", null);
+            mUrlBar.setUrl(UrlBarData.EMPTY);
             return;
         }
-        String displayText = getToolbarDataProvider().getText();
-        Pair<String, String> urlText = LocationBarLayout.splitPathFromUrlDisplayText(displayText);
-        displayText = urlText.first;
-
-        if (DomDistillerUrlUtils.isDistilledPage(url)) {
-            if (isStoredArticle(url)) {
-                Profile profile = getCurrentTab().getProfile();
-                DomDistillerService domDistillerService =
-                        DomDistillerServiceFactory.getForProfile(profile);
-                String originalUrl = domDistillerService.getUrlForEntry(
-                        DomDistillerUrlUtils.getValueForKeyInUrl(url, "entry_id"));
-                displayText =
-                        DomDistillerTabUtils.getFormattedUrlFromOriginalDistillerUrl(originalUrl);
-            } else if (DomDistillerUrlUtils.getOriginalUrlFromDistillerUrl(url) != null) {
-                String originalUrl = DomDistillerUrlUtils.getOriginalUrlFromDistillerUrl(url);
-                displayText =
-                        DomDistillerTabUtils.getFormattedUrlFromOriginalDistillerUrl(originalUrl);
-            }
+        final CharSequence displayText;
+        final int originStart;
+        final int originEnd;
+        if (publisherUrl != null) {
+            // TODO(bauerb): Move this into the ToolbarDataProvider as well?
+            String plainDisplayText = getContext().getString(R.string.custom_tab_amp_publisher_url,
+                    extractPublisherFromPublisherUrl(publisherUrl));
+            ColorStateList tint = mUseDarkColors ? mDarkModeTint : mLightModeTint;
+            SpannableString formattedDisplayText = SpanApplier.applySpans(plainDisplayText,
+                    new SpanInfo("<pub>", "</pub>", ORIGIN_SPAN),
+                    new SpanInfo("<bg>", "</bg>", new ForegroundColorSpan(tint.getDefaultColor())));
+            originStart = formattedDisplayText.getSpanStart(ORIGIN_SPAN);
+            originEnd = formattedDisplayText.getSpanEnd(ORIGIN_SPAN);
+            formattedDisplayText.removeSpan(ORIGIN_SPAN);
+            displayText = formattedDisplayText;
+        } else {
+            UrlBarData urlBarData = getToolbarDataProvider().getUrlBarData();
+            displayText = urlBarData.displayText.subSequence(
+                    urlBarData.originStartIndex, urlBarData.originEndIndex);
+            originStart = 0;
+            originEnd = displayText.length();
         }
 
-        if (mUrlBar.setUrl(url, displayText)) {
-            mUrlBar.emphasizeUrl();
-        }
-    }
-
-    private boolean isStoredArticle(String url) {
-        DomDistillerService domDistillerService =
-                DomDistillerServiceFactory.getForProfile(Profile.getLastUsedProfile());
-        String entryIdFromUrl = DomDistillerUrlUtils.getValueForKeyInUrl(url, "entry_id");
-        if (TextUtils.isEmpty(entryIdFromUrl)) return false;
-        return domDistillerService.hasEntry(entryIdFromUrl);
+        mUrlBar.setUrl(UrlBarData.create(url, displayText, originStart, originEnd, url));
     }
 
     @Override
@@ -433,7 +450,9 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
         Resources resources = getResources();
         updateSecurityIcon();
         updateButtonsTint();
-        mUrlBar.setUseDarkTextColors(mUseDarkColors);
+        if (mUrlBar.setUseDarkTextColors(mUseDarkColors)) {
+            setUrlToPageUrl();
+        }
 
         int titleTextColor = mUseDarkColors
                 ? ApiCompatibilityUtils.getColor(resources, R.color.url_emphasis_default_text)
@@ -455,7 +474,7 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
     }
 
     private void updateButtonsTint() {
-        mMenuButton.setTint(mUseDarkColors ? mDarkModeTint : mLightModeTint);
+        getMenuButton().setTint(mUseDarkColors ? mDarkModeTint : mLightModeTint);
         updateButtonTint(mCloseButton);
         int numCustomActionButtons = mCustomActionButtons.getChildCount();
         for (int i = 0; i < numCustomActionButtons; i++) {
@@ -491,25 +510,20 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
     public void updateSecurityIcon() {
         if (mState == STATE_TITLE_ONLY) return;
 
-        boolean showSecurityButton = true;
-        if (!getToolbarDataProvider().shouldShowSecurityIcon()) {
+        int securityIconResource = getToolbarDataProvider().getSecurityIconResource(
+                DeviceFormFactor.isNonMultiDisplayContextOnTablet(getContext()));
+        if (securityIconResource == 0) {
             // Hide the button if we don't have an actual icon to display.
-            showSecurityButton = false;
             mSecurityButton.setImageDrawable(null);
+            mAnimDelegate.hideSecurityButton();
         } else {
             // ImageView#setImageResource is no-op if given resource is the current one.
-            mSecurityButton.setImageResource(getToolbarDataProvider().getSecurityIconResource());
-            mSecurityButton.setTint(
-                    LocationBarLayout.getColorStateList(getToolbarDataProvider(), getResources()));
-        }
-
-        if (showSecurityButton) {
+            mSecurityButton.setImageResource(securityIconResource);
+            mSecurityButton.setTint(getToolbarDataProvider().getSecurityIconColorStateList());
             mAnimDelegate.showSecurityButton();
-        } else {
-            mAnimDelegate.hideSecurityButton();
         }
 
-        mUrlBar.emphasizeUrl();
+        setUrlToPageUrl();
         mUrlBar.invalidate();
     }
 
@@ -581,8 +595,8 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
                         R.dimen.custom_tabs_toolbar_horizontal_margin_no_close);
             } else if (childView.getVisibility() != GONE) {
                 LayoutParams childLayoutParams = (LayoutParams) childView.getLayoutParams();
-                if (ApiCompatibilityUtils.getMarginStart(childLayoutParams) != startMargin) {
-                    ApiCompatibilityUtils.setMarginStart(childLayoutParams, startMargin);
+                if (MarginLayoutParamsCompat.getMarginStart(childLayoutParams) != startMargin) {
+                    MarginLayoutParamsCompat.setMarginStart(childLayoutParams, startMargin);
                     childView.setLayoutParams(childLayoutParams);
                 }
                 if (childView == mLocationBarFrameLayout) {
@@ -626,8 +640,8 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
         }
         LayoutParams urlLayoutParams = (LayoutParams) mLocationBarFrameLayout.getLayoutParams();
 
-        if (ApiCompatibilityUtils.getMarginEnd(urlLayoutParams) != locationBarLayoutEndMargin) {
-            ApiCompatibilityUtils.setMarginEnd(urlLayoutParams, locationBarLayoutEndMargin);
+        if (MarginLayoutParamsCompat.getMarginEnd(urlLayoutParams) != locationBarLayoutEndMargin) {
+            MarginLayoutParamsCompat.setMarginEnd(urlLayoutParams, locationBarLayoutEndMargin);
             mLocationBarFrameLayout.setLayoutParams(urlLayoutParams);
         }
 
@@ -730,11 +744,6 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
     public void revertChanges() {}
 
     @Override
-    public long getFirstUrlBarFocusTime() {
-        return 0;
-    }
-
-    @Override
     public void hideSuggestions() {}
 
     @Override
@@ -763,7 +772,7 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
     @Override
     public View getMenuButtonWrapper() {
         // This class has no menu button wrapper, so return the menu button instead.
-        return mMenuButton;
+        return getMenuButton();
     }
 
     @Override
@@ -788,4 +797,12 @@ public class CustomTabToolbar extends ToolbarLayout implements LocationBar,
     public boolean useModernDesign() {
         return false;
     }
+
+    @Override
+    public int getUrlContainerMarginEnd() {
+        return 0;
+    }
+
+    @Override
+    public void setScrim(ScrimView scrim) {}
 }

@@ -66,6 +66,9 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
     // Controls whether drag selection after a longpress is enabled.
     // Defaults to false.
     bool enable_longpress_drag_selection;
+
+    // Should we hide the active handle.
+    bool hide_active_handle;
   };
 
   TouchSelectionController(TouchSelectionControllerClient* client,
@@ -120,6 +123,10 @@ class UI_TOUCH_SELECTION_EXPORT TouchSelectionController
   // these values will be identical.
   gfx::RectF GetStartHandleRect() const;
   gfx::RectF GetEndHandleRect() const;
+
+  // Return the handle height of visible touch handle. This value will be zero
+  // when no handle is visible.
+  float GetTouchHandleHeight() const;
 
   // Returns the focal point of the start and end bounds, as defined by
   // their bottom coordinate.

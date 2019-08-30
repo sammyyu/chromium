@@ -6,6 +6,7 @@
 
 #include <algorithm>
 #include <cmath>
+#include <utility>
 
 #include "base/allocator/allocator_shim.h"
 #include "base/allocator/buildflags.h"
@@ -16,8 +17,14 @@
 #include "base/no_destructor.h"
 #include "base/partition_alloc_buildflags.h"
 #include "base/rand_util.h"
+#include "base/sampling_heap_profiler/lock_free_address_hash_set.h"
 #include "base/threading/thread_local_storage.h"
 #include "build/build_config.h"
+
+#if defined(OS_ANDROID) && BUILDFLAG(CAN_UNWIND_WITH_CFI_TABLE) && \
+    defined(OFFICIAL_BUILD)
+#include "base/trace_event/cfi_backtrace_android.h"
+#endif
 
 namespace base {
 
@@ -39,19 +46,11 @@ bool g_deterministic;
 // A positive value if profiling is running, otherwise it's zero.
 Atomic32 g_running;
 
-// Number of lock-free safe (not causing rehashing) accesses to samples_ map
-// currently being performed.
-Atomic32 g_operations_in_flight;
-
-// Controls if new incoming lock-free accesses are allowed.
-// When set to true, threads should not enter lock-free paths.
-Atomic32 g_fast_path_is_closed;
+// Pointer to the current |LockFreeAddressHashSet|.
+AtomicWord g_sampled_addresses_set;
 
 // Sampling interval parameter, the mean value for intervals between samples.
 AtomicWord g_sampling_interval = kDefaultSamplingIntervalBytes;
-
-// Last generated sample ordinal number.
-uint32_t g_last_sample_ordinal = 0;
 
 void (*g_hooks_install_callback)();
 Atomic32 g_hooks_installed;
@@ -181,6 +180,11 @@ SamplingHeapProfiler* SamplingHeapProfiler::instance_;
 
 SamplingHeapProfiler::SamplingHeapProfiler() {
   instance_ = this;
+  auto sampled_addresses = std::make_unique<LockFreeAddressHashSet>(64);
+  base::subtle::NoBarrier_Store(
+      &g_sampled_addresses_set,
+      reinterpret_cast<AtomicWord>(sampled_addresses.get()));
+  sampled_addresses_stack_.push(std::move(sampled_addresses));
 }
 
 // static
@@ -232,9 +236,17 @@ void SamplingHeapProfiler::SetHooksInstallCallback(
 }
 
 uint32_t SamplingHeapProfiler::Start() {
+#if defined(OS_ANDROID) && BUILDFLAG(CAN_UNWIND_WITH_CFI_TABLE) && \
+    defined(OFFICIAL_BUILD)
+  if (!base::trace_event::CFIBacktraceAndroid::GetInitializedInstance()
+           ->can_unwind_stack_frames()) {
+    LOG(WARNING) << "Sampling heap profiler: Stack unwinding is not available.";
+    return 0;
+  }
+#endif
   InstallAllocatorHooksOnce();
   base::subtle::Barrier_AtomicIncrement(&g_running, 1);
-  return g_last_sample_ordinal;
+  return last_sample_ordinal_;
 }
 
 void SamplingHeapProfiler::Stop() {
@@ -279,6 +291,8 @@ void SamplingHeapProfiler::RecordAlloc(void* address,
                                        uint32_t skip_frames) {
   if (UNLIKELY(!base::subtle::NoBarrier_Load(&g_running)))
     return;
+  if (UNLIKELY(base::ThreadLocalStorage::HasBeenDestroyed()))
+    return;
 
   // TODO(alph): On MacOS it may call the hook several times for a single
   // allocation. Handle the case.
@@ -308,16 +322,31 @@ void SamplingHeapProfiler::RecordAlloc(void* address,
 void SamplingHeapProfiler::RecordStackTrace(Sample* sample,
                                             uint32_t skip_frames) {
 #if !defined(OS_NACL)
-  // TODO(alph): Consider using debug::TraceStackFramePointers. It should be
-  // somewhat faster than base::debug::StackTrace.
-  base::debug::StackTrace trace;
-  size_t count;
-  void* const* addresses = const_cast<void* const*>(trace.Addresses(&count));
-  const uint32_t kSkipProfilerOwnFrames = 2;
+  constexpr uint32_t kMaxStackEntries = 256;
+  constexpr uint32_t kSkipProfilerOwnFrames = 2;
   skip_frames += kSkipProfilerOwnFrames;
+#if defined(OS_ANDROID) && BUILDFLAG(CAN_UNWIND_WITH_CFI_TABLE) && \
+    defined(OFFICIAL_BUILD)
+  const void* frames[kMaxStackEntries];
+  size_t frame_count =
+      base::trace_event::CFIBacktraceAndroid::GetInitializedInstance()->Unwind(
+          frames, kMaxStackEntries);
+#elif BUILDFLAG(CAN_UNWIND_WITH_FRAME_POINTERS)
+  const void* frames[kMaxStackEntries];
+  size_t frame_count = base::debug::TraceStackFramePointers(
+      frames, kMaxStackEntries, skip_frames);
+  skip_frames = 0;
+#else
+  // Fall-back to capturing the stack with base::debug::StackTrace,
+  // which is likely slower, but more reliable.
+  base::debug::StackTrace stack_trace(kMaxStackEntries);
+  size_t frame_count = 0;
+  const void* const* frames = stack_trace.Addresses(&frame_count);
+#endif
+
   sample->stack.insert(
-      sample->stack.end(), &addresses[skip_frames],
-      &addresses[std::max(count, static_cast<size_t>(skip_frames))]);
+      sample->stack.end(), const_cast<void**>(&frames[skip_frames]),
+      const_cast<void**>(&frames[std::max<size_t>(frame_count, skip_frames)]));
 #endif
 }
 
@@ -327,53 +356,76 @@ void SamplingHeapProfiler::DoRecordAlloc(size_t total_allocated,
                                          uint32_t skip_frames) {
   if (entered_.Get())
     return;
-  base::AutoLock lock(mutex_);
   entered_.Set(true);
-
-  Sample sample(size, total_allocated, ++g_last_sample_ordinal);
-  RecordStackTrace(&sample, skip_frames);
-
-  // Close the fast-path as inserting an element into samples_ may cause
-  // rehashing that invalidates iterators affecting all the concurrent
-  // readers.
-  base::subtle::Release_Store(&g_fast_path_is_closed, 1);
-  while (base::subtle::Acquire_Load(&g_operations_in_flight)) {
-    while (base::subtle::NoBarrier_Load(&g_operations_in_flight)) {
-    }
+  {
+    base::AutoLock lock(mutex_);
+    Sample sample(size, total_allocated, ++last_sample_ordinal_);
+    RecordStackTrace(&sample, skip_frames);
+    for (auto* observer : observers_)
+      observer->SampleAdded(sample.ordinal, size, total_allocated);
+    samples_.emplace(address, std::move(sample));
+    // TODO(alph): Sometimes RecordAlloc is called twice in a row without
+    // a RecordFree in between. Investigate it.
+    if (!sampled_addresses_set().Contains(address))
+      sampled_addresses_set().Insert(address);
+    BalanceAddressesHashSet();
   }
-  for (auto* observer : observers_)
-    observer->SampleAdded(sample.ordinal, size, total_allocated);
-  // TODO(alph): We can do better by keeping the fast-path open when
-  // we know insert won't cause rehashing.
-  samples_.emplace(address, std::move(sample));
-  base::subtle::Release_Store(&g_fast_path_is_closed, 0);
-
   entered_.Set(false);
 }
 
 // static
 void SamplingHeapProfiler::RecordFree(void* address) {
-  bool maybe_sampled = true;  // Pessimistically assume allocation was sampled.
-  base::subtle::Barrier_AtomicIncrement(&g_operations_in_flight, 1);
-  if (LIKELY(!base::subtle::NoBarrier_Load(&g_fast_path_is_closed)))
-    maybe_sampled = instance_->samples_.count(address);
-  base::subtle::Barrier_AtomicIncrement(&g_operations_in_flight, -1);
-  if (maybe_sampled)
+  if (UNLIKELY(address == nullptr))
+    return;
+  if (UNLIKELY(sampled_addresses_set().Contains(address)))
     instance_->DoRecordFree(address);
 }
 
 void SamplingHeapProfiler::DoRecordFree(void* address) {
+  if (UNLIKELY(base::ThreadLocalStorage::HasBeenDestroyed()))
+    return;
   if (entered_.Get())
     return;
-  base::AutoLock lock(mutex_);
   entered_.Set(true);
-  auto it = samples_.find(address);
-  if (it != samples_.end()) {
+  {
+    base::AutoLock lock(mutex_);
+    auto it = samples_.find(address);
+    CHECK(it != samples_.end());
     for (auto* observer : observers_)
       observer->SampleRemoved(it->second.ordinal);
     samples_.erase(it);
+    sampled_addresses_set().Remove(address);
   }
   entered_.Set(false);
+}
+
+void SamplingHeapProfiler::BalanceAddressesHashSet() {
+  // Check if the load_factor of the current addresses hash set becomes higher
+  // than 1, allocate a new twice larger one, copy all the data,
+  // and switch to using it.
+  // During the copy process no other writes are made to both sets
+  // as it's behind the lock.
+  // All the readers continue to use the old one until the atomic switch
+  // process takes place.
+  LockFreeAddressHashSet& current_set = sampled_addresses_set();
+  if (current_set.load_factor() < 1)
+    return;
+  auto new_set =
+      std::make_unique<LockFreeAddressHashSet>(current_set.buckets_count() * 2);
+  new_set->Copy(current_set);
+  // Atomically switch all the new readers to the new set.
+  base::subtle::Release_Store(&g_sampled_addresses_set,
+                              reinterpret_cast<AtomicWord>(new_set.get()));
+  // We still have to keep all the old maps alive to resolve the theoretical
+  // race with readers in |RecordFree| that have already obtained the map,
+  // but haven't yet managed to access it.
+  sampled_addresses_stack_.push(std::move(new_set));
+}
+
+// static
+LockFreeAddressHashSet& SamplingHeapProfiler::sampled_addresses_set() {
+  return *reinterpret_cast<LockFreeAddressHashSet*>(
+      base::subtle::NoBarrier_Load(&g_sampled_addresses_set));
 }
 
 // static
@@ -388,33 +440,39 @@ void SamplingHeapProfiler::SuppressRandomnessForTest(bool suppress) {
 }
 
 void SamplingHeapProfiler::AddSamplesObserver(SamplesObserver* observer) {
-  base::AutoLock lock(mutex_);
   CHECK(!entered_.Get());
   entered_.Set(true);
-  observers_.push_back(observer);
+  {
+    base::AutoLock lock(mutex_);
+    observers_.push_back(observer);
+  }
   entered_.Set(false);
 }
 
 void SamplingHeapProfiler::RemoveSamplesObserver(SamplesObserver* observer) {
-  base::AutoLock lock(mutex_);
   CHECK(!entered_.Get());
   entered_.Set(true);
-  auto it = std::find(observers_.begin(), observers_.end(), observer);
-  CHECK(it != observers_.end());
-  observers_.erase(it);
+  {
+    base::AutoLock lock(mutex_);
+    auto it = std::find(observers_.begin(), observers_.end(), observer);
+    CHECK(it != observers_.end());
+    observers_.erase(it);
+  }
   entered_.Set(false);
 }
 
 std::vector<SamplingHeapProfiler::Sample> SamplingHeapProfiler::GetSamples(
     uint32_t profile_id) {
-  base::AutoLock lock(mutex_);
   CHECK(!entered_.Get());
   entered_.Set(true);
   std::vector<Sample> samples;
-  for (auto& it : samples_) {
-    Sample& sample = it.second;
-    if (sample.ordinal > profile_id)
-      samples.push_back(sample);
+  {
+    base::AutoLock lock(mutex_);
+    for (auto& it : samples_) {
+      Sample& sample = it.second;
+      if (sample.ordinal > profile_id)
+        samples.push_back(sample);
+    }
   }
   entered_.Set(false);
   return samples;

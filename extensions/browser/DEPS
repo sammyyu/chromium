@@ -8,7 +8,7 @@ include_rules = [
   "+components/sync",
   "+components/sync_preferences",
   "+components/update_client",
-  "+components/unzip_service/public",
+  "+components/services/unzip/public",
   "+components/variations",
   "+components/version_info",
   "+components/web_cache",
@@ -23,23 +23,26 @@ include_rules = [
   "+grit/extensions_strings.h",
   "+net",
   # This directory contains build flags and does not pull all of PPAPI in.
-  "+ppapi/features",
+  "+ppapi/buildflags",
   "+services/data_decoder/public",
   "+services/network/public/cpp",
   "+services/network/public/mojom",
+  "+services/network",
   "+services/preferences/public/cpp",
   "+services/service_manager/public/cpp",
   "+skia/ext/image_operations.h",
   "+third_party/leveldatabase",
   "+third_party/re2",
-  "+third_party/WebKit/public/platform",
-  "+third_party/WebKit/public/web",
+  "+third_party/blink/public/mojom",
+  "+third_party/blink/public/platform",
+  "+third_party/blink/public/web",
   "+third_party/zlib/google",
   "+ui/display",
 ]
 
 specific_include_rules = {
   ".*(test|test_util)\.(cc|h)$": [
+    "+components/app_modal",
     "+components/user_prefs",
 
     "+storage/browser/test",
@@ -47,7 +50,7 @@ specific_include_rules = {
     # Temporarily allowed testing includes.  See above.
     # TODO(devlin): Ideally, we'd remove these (or move the tests into
     # //chrome). See https://crbug.com/773004.
-    "+chrome/browser/apps/app_browsertest_util.h",
+    "+chrome/browser/apps/platform_apps/app_browsertest_util.h",
     "+chrome/browser/extensions/api/permissions/permissions_api.h",
     "+chrome/browser/extensions/extension_apitest.h",
     "+chrome/browser/extensions/extension_function_test_utils.h",
@@ -58,7 +61,7 @@ specific_include_rules = {
     "+chrome/test/base/ui_test_utils.h",
   ],
   "sandboxed_unpacker_unittest.cc": [
-    "+components/unzip_service",
+    "+components/services/unzip",
     "+services/data_decoder",
   ],
 }

@@ -9,7 +9,8 @@ namespace resource_coordinator {
 PageResourceCoordinator::PageResourceCoordinator(
     service_manager::Connector* connector)
     : ResourceCoordinatorInterface(), weak_ptr_factory_(this) {
-  CoordinationUnitID new_cu_id(CoordinationUnitType::kPage, std::string());
+  CoordinationUnitID new_cu_id(CoordinationUnitType::kPage,
+                               CoordinationUnitID::RANDOM_ID);
   ResourceCoordinatorInterface::ConnectToService(connector, new_cu_id);
 }
 
@@ -45,10 +46,12 @@ void PageResourceCoordinator::OnTitleUpdated() {
   service_->OnTitleUpdated();
 }
 
-void PageResourceCoordinator::OnMainFrameNavigationCommitted() {
+void PageResourceCoordinator::OnMainFrameNavigationCommitted(
+    uint64_t navigation_id,
+    const std::string& url) {
   if (!service_)
     return;
-  service_->OnMainFrameNavigationCommitted();
+  service_->OnMainFrameNavigationCommitted(navigation_id, url);
 }
 
 void PageResourceCoordinator::AddFrame(const FrameResourceCoordinator& frame) {
@@ -57,8 +60,8 @@ void PageResourceCoordinator::AddFrame(const FrameResourceCoordinator& frame) {
     return;
   // We could keep the ID around ourselves, but this hop ensures that the child
   // has been created on the service-side.
-  frame.service()->GetID(base::Bind(&PageResourceCoordinator::AddFrameByID,
-                                    weak_ptr_factory_.GetWeakPtr()));
+  frame.service()->GetID(base::BindOnce(&PageResourceCoordinator::AddFrameByID,
+                                        weak_ptr_factory_.GetWeakPtr()));
 }
 
 void PageResourceCoordinator::RemoveFrame(
@@ -66,8 +69,9 @@ void PageResourceCoordinator::RemoveFrame(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (!service_)
     return;
-  frame.service()->GetID(base::Bind(&PageResourceCoordinator::RemoveFrameByID,
-                                    weak_ptr_factory_.GetWeakPtr()));
+  frame.service()->GetID(
+      base::BindOnce(&PageResourceCoordinator::RemoveFrameByID,
+                     weak_ptr_factory_.GetWeakPtr()));
 }
 
 void PageResourceCoordinator::ConnectToService(

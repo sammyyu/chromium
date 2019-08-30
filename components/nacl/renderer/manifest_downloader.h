@@ -13,7 +13,7 @@
 
 #include "base/callback.h"
 #include "components/nacl/renderer/ppb_nacl_private.h"
-#include "third_party/WebKit/public/web/WebAssociatedURLLoaderClient.h"
+#include "third_party/blink/public/web/web_associated_url_loader_client.h"
 
 namespace blink {
 class WebAssociatedURLLoader;
@@ -49,7 +49,7 @@ class ManifestDownloader : public blink::WebAssociatedURLLoaderClient {
   // WebAssociatedURLLoaderClient implementation.
   void DidReceiveResponse(const blink::WebURLResponse& response) override;
   void DidReceiveData(const char* data, int data_length) override;
-  void DidFinishLoading(double finish_time) override;
+  void DidFinishLoading() override;
   void DidFail(const blink::WebURLError& error) override;
 
   std::unique_ptr<blink::WebAssociatedURLLoader> url_loader_;

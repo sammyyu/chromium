@@ -20,6 +20,7 @@
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/ntp_tiles/most_visited_sites.h"
 #include "components/ntp_tiles/ntp_tile.h"
+#include "components/prefs/pref_registry_simple.h"
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "url/gurl.h"
@@ -58,6 +59,9 @@ class InstantService : public KeyedService,
   void AddObserver(InstantServiceObserver* observer);
   void RemoveObserver(InstantServiceObserver* observer);
 
+  // Register prefs associated with the NTP.
+  static void RegisterProfilePrefs(PrefRegistrySimple* registry);
+
 #if defined(UNIT_TEST)
   int GetInstantProcessCount() const {
     return process_ids_.size();
@@ -90,6 +94,22 @@ class InstantService : public KeyedService,
   // Sends the current NTP URL to a renderer process.
   void SendNewTabPageURLToRenderer(content::RenderProcessHost* rph);
 
+  // Invoked when a custom background is selected on the NTP.
+  void SetCustomBackgroundURL(const GURL& url);
+
+  // Invoked when a custom background with attributions is selected on the NTP.
+  void SetCustomBackgroundURLWithAttributions(
+      const GURL& background_url,
+      const std::string& attribution_line_1,
+      const std::string& attribution_line_2,
+      const GURL& action_url);
+
+  // Invoked when a user selected the "Upload an image" option on the NTP.
+  void SelectLocalBackgroundImage(const base::FilePath& path);
+
+  // Used for testing.
+  ThemeBackgroundInfo* GetThemeInfoForTesting() { return theme_info_.get(); }
+
  private:
   friend class InstantExtendedTest;
   friend class InstantUnitTestBase;
@@ -119,6 +139,14 @@ class InstantService : public KeyedService,
 
   void BuildThemeInfo();
 
+  void ApplyOrResetCustomBackgroundThemeInfo();
+
+  void ResetCustomBackgroundThemeInfo();
+
+  // Update the background pref to point to
+  // chrome-search://local-ntp/background.jpg
+  void SetBackgroundToLocalResource();
+
   Profile* const profile_;
 
   // The process ids associated with Instant processes.
@@ -138,6 +166,8 @@ class InstantService : public KeyedService,
 
   // Data source for NTP tiles (aka Most Visited tiles). May be null.
   std::unique_ptr<ntp_tiles::MostVisitedSites> most_visited_sites_;
+
+  base::WeakPtrFactory<InstantService> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(InstantService);
 };

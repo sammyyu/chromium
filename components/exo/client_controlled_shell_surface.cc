@@ -4,6 +4,13 @@
 
 #include "components/exo/client_controlled_shell_surface.h"
 
+#include <utility>
+
+#include "ash/frame/caption_buttons/caption_button_model.h"
+#include "ash/frame/custom_frame_view_ash.h"
+#include "ash/frame/header_view.h"
+#include "ash/frame/wide_frame_view.h"
+#include "ash/public/cpp/immersive/immersive_fullscreen_controller.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/public/cpp/window_properties.h"
 #include "ash/public/cpp/window_state_type.h"
@@ -20,7 +27,8 @@
 #include "ash/wm/window_state_delegate.h"
 #include "ash/wm/window_util.h"
 #include "base/logging.h"
-#include "base/memory/ptr_util.h"
+#include "base/no_destructor.h"
+#include "base/strings/utf_string_conversions.h"
 #include "base/trace_event/trace_event.h"
 #include "base/trace_event/trace_event_argument.h"
 #include "components/exo/surface.h"
@@ -38,8 +46,14 @@
 #include "ui/wm/core/window_util.h"
 
 namespace exo {
+
 namespace {
-ClientControlledShellSurface::DelegateFactoryCallback g_factory_callback;
+
+ClientControlledShellSurface::DelegateFactoryCallback& GetFactoryForTesting() {
+  using CallbackType = ClientControlledShellSurface::DelegateFactoryCallback;
+  static base::NoDestructor<CallbackType> factory;
+  return *factory;
+}
 
 // Maximum amount of time to wait for contents that match the display's
 // orientation in tablet mode.
@@ -89,8 +103,6 @@ class ClientControlledStateDelegate
   void HandleBoundsRequest(ash::wm::WindowState* window_state,
                            ash::mojom::WindowStateType requested_state,
                            const gfx::Rect& bounds) override {
-    bool is_resize = window_state->window()->bounds().size() != bounds.size();
-
     gfx::Rect bounds_in_screen(bounds);
     ::wm::ConvertRectToScreen(window_state->window()->GetRootWindow(),
                               &bounds_in_screen);
@@ -100,7 +112,7 @@ class ClientControlledStateDelegate
 
     shell_surface_->OnBoundsChangeEvent(
         window_state->GetStateType(), requested_state, display_id,
-        bounds_in_screen, is_resize,
+        bounds_in_screen,
         window_state->drag_details()
             ? window_state->drag_details()->bounds_change
             : 0);
@@ -125,11 +137,9 @@ class ClientControlledWindowStateDelegate
   // Overridden from ash::wm::WindowStateDelegate:
   bool ToggleFullscreen(ash::wm::WindowState* window_state) override {
     ash::mojom::WindowStateType next_state;
-    // ash::mojom::WindowStateType current_state = window_state->GetStateType();
     aura::Window* window = window_state->window();
     switch (window_state->GetStateType()) {
       case ash::mojom::WindowStateType::DEFAULT:
-      // current_state = ash::mojom::WindowStateType::NORMAL;
       case ash::mojom::WindowStateType::NORMAL:
         window->SetProperty(aura::client::kPreFullscreenShowStateKey,
                             ui::SHOW_STATE_NORMAL);
@@ -198,11 +208,35 @@ bool IsPinned(const ash::wm::WindowState* window_state) {
   return window_state->IsPinned() || window_state->IsTrustedPinned();
 }
 
+class CaptionButtonModel : public ash::CaptionButtonModel {
+ public:
+  CaptionButtonModel(uint32_t visible_button_mask, uint32_t enabled_button_mask)
+      : visible_button_mask_(visible_button_mask),
+        enabled_button_mask_(enabled_button_mask) {}
+
+  // Overridden from ash::CaptionButtonModel:
+  bool IsVisible(ash::CaptionButtonIcon icon) const override {
+    return visible_button_mask_ & (1 << icon);
+  }
+  bool IsEnabled(ash::CaptionButtonIcon icon) const override {
+    return enabled_button_mask_ & (1 << icon);
+  }
+  bool InZoomMode() const override {
+    return visible_button_mask_ & (1 << ash::CAPTION_BUTTON_ICON_ZOOM);
+  }
+
+ private:
+  uint32_t visible_button_mask_;
+  uint32_t enabled_button_mask_;
+
+  DISALLOW_COPY_AND_ASSIGN(CaptionButtonModel);
+};
+
 }  // namespace
 
 class ClientControlledShellSurface::ScopedSetBoundsLocally {
  public:
-  ScopedSetBoundsLocally(ClientControlledShellSurface* shell_surface)
+  explicit ScopedSetBoundsLocally(ClientControlledShellSurface* shell_surface)
       : state_(shell_surface->client_controlled_state_) {
     state_->set_bounds_locally(true);
   }
@@ -216,7 +250,7 @@ class ClientControlledShellSurface::ScopedSetBoundsLocally {
 
 class ClientControlledShellSurface::ScopedLockedToRoot {
  public:
-  ScopedLockedToRoot(views::Widget* widget)
+  explicit ScopedLockedToRoot(views::Widget* widget)
       : window_(widget->GetNativeWindow()) {
     window_->SetProperty(ash::kLockedToRootKey, true);
   }
@@ -242,6 +276,9 @@ ClientControlledShellSurface::ClientControlledShellSurface(Surface* surface,
 }
 
 ClientControlledShellSurface::~ClientControlledShellSurface() {
+  if (wide_frame_)
+    wide_frame_->Close();
+
   WMHelper::GetInstance()->RemoveDisplayConfigurationObserver(this);
   display::Screen::GetScreen()->RemoveObserver(this);
 }
@@ -276,6 +313,11 @@ void ClientControlledShellSurface::SetSnappedToLeft() {
 void ClientControlledShellSurface::SetSnappedToRight() {
   TRACE_EVENT0("exo", "ClientControlledShellSurface::SetSnappedToRight");
   pending_window_state_ = ash::mojom::WindowStateType::RIGHT_SNAPPED;
+}
+
+void ClientControlledShellSurface::SetPip() {
+  TRACE_EVENT0("exo", "ClientControlledShellSurface::SetPip");
+  pending_window_state_ = ash::mojom::WindowStateType::PIP;
 }
 
 void ClientControlledShellSurface::SetPinned(ash::mojom::WindowPinType type) {
@@ -360,25 +402,18 @@ void ClientControlledShellSurface::SetResizeOutset(int outset) {
 void ClientControlledShellSurface::OnWindowStateChangeEvent(
     ash::mojom::WindowStateType current_state,
     ash::mojom::WindowStateType next_state) {
-  if (!state_changed_callback_.is_null())
+  if (state_changed_callback_)
     state_changed_callback_.Run(current_state, next_state);
 }
 
-void ClientControlledShellSurface::StartResize(int component) {
-  TRACE_EVENT1("exo", "ClientControlledShellSurface::StartResize", "component",
-               component);
+void ClientControlledShellSurface::StartDrag(int component,
+                                             const gfx::Point& location) {
+  TRACE_EVENT2("exo", "ClientControlledShellSurface::StartDrag", "component",
+               component, "location", location.ToString());
 
-  if (!widget_ || client_controlled_move_resize_)
+  if (!widget_ || (client_controlled_move_resize_ && component != HTCAPTION))
     return;
-  AttemptToStartDrag(component, GetMouseLocation());
-}
-
-void ClientControlledShellSurface::StartMove(const gfx::Point& location) {
-  TRACE_EVENT0("exo", "ClientControlledShellSurface::StartMove");
-
-  if (!widget_)
-    return;
-  AttemptToStartDrag(HTCAPTION, location);
+  AttemptToStartDrag(component, location);
 }
 
 void ClientControlledShellSurface::AttemptToStartDrag(
@@ -394,7 +429,6 @@ void ClientControlledShellSurface::AttemptToStartDrag(
   // 2) mouse was pressed on the target or its subsurfaces.
   if (toplevel_handler->gesture_target() ||
       (mouse_pressed_handler && target->Contains(mouse_pressed_handler))) {
-
     gfx::Point point_in_root(location);
     wm::ConvertPointFromScreen(target->GetRootWindow(), &point_in_root);
     toplevel_handler->AttemptToStartDrag(
@@ -411,35 +445,104 @@ void ClientControlledShellSurface::SetCanMaximize(bool can_maximize) {
     widget_->OnSizeConstraintsChanged();
 }
 
+void ClientControlledShellSurface::UpdateAutoHideFrame() {
+  if (immersive_fullscreen_controller_) {
+    bool enabled = (frame_type_ == SurfaceFrameType::AUTOHIDE &&
+                    GetWindowState()->IsMaximizedOrFullscreenOrPinned());
+    immersive_fullscreen_controller_->SetEnabled(
+        ash::ImmersiveFullscreenController::WINDOW_TYPE_OTHER, enabled);
+  }
+}
+
+void ClientControlledShellSurface::SetFrameButtons(
+    uint32_t visible_button_mask,
+    uint32_t enabled_button_mask) {
+  if (frame_visible_button_mask_ == visible_button_mask &&
+      frame_enabled_button_mask_ == enabled_button_mask) {
+    return;
+  }
+  frame_visible_button_mask_ = visible_button_mask;
+  frame_enabled_button_mask_ = enabled_button_mask;
+
+  if (widget_)
+    UpdateCaptionButtonModel();
+}
+
+void ClientControlledShellSurface::SetExtraTitle(
+    const base::string16& extra_title) {
+  TRACE_EVENT1("exo", "ClientControlledShellSurface::SetExtraTitle",
+               "extra_title", base::UTF16ToUTF8(extra_title));
+
+  if (!widget_)
+    return;
+
+  GetFrameView()->GetHeaderView()->GetFrameHeader()->SetFrameTextOverride(
+      extra_title);
+}
+
+void ClientControlledShellSurface::SetOrientationLock(
+    ash::OrientationLockType orientation_lock) {
+  TRACE_EVENT1("exo", "ClientControlledShellSurface::SetOrientationLock",
+               "orientation_lock", static_cast<int>(orientation_lock));
+
+  if (!widget_) {
+    initial_orientation_lock_ = orientation_lock;
+    return;
+  }
+
+  ash::Shell* shell = ash::Shell::Get();
+  shell->screen_orientation_controller()->LockOrientationForWindow(
+      widget_->GetNativeWindow(), orientation_lock);
+}
+
 void ClientControlledShellSurface::OnBoundsChangeEvent(
     ash::mojom::WindowStateType current_state,
     ash::mojom::WindowStateType requested_state,
     int64_t display_id,
-    const gfx::Rect& bounds,
-    bool is_resize,
+    const gfx::Rect& window_bounds,
     int bounds_change) {
-  if (!bounds.IsEmpty() && !bounds_changed_callback_.is_null()) {
+  // Do no update the bounds unless we have geometry from client.
+  if (!geometry().IsEmpty() && !window_bounds.IsEmpty() &&
+      bounds_changed_callback_) {
+    // Sends the client bounds, which matches the geometry
+    // when frame is enabled.
+    ash::CustomFrameViewAsh* frame_view = GetFrameView();
+
+    // The client's geometry uses fullscreen in client controlled,
+    // (but the surface is placed under the frame), so just use
+    // the window bounds instead for maximixed stte.
+    gfx::Rect client_bounds =
+        widget_->IsMaximized()
+            ? window_bounds
+            : frame_view->GetClientBoundsForWindowBounds(window_bounds);
+    gfx::Size current_size = frame_view->GetBoundsForClientView().size();
+    bool is_resize = client_bounds.size() != current_size;
     bounds_changed_callback_.Run(current_state, requested_state, display_id,
-                                 bounds, is_resize, bounds_change);
+                                 client_bounds, is_resize, bounds_change);
   }
 }
 
 void ClientControlledShellSurface::OnDragStarted(int component) {
-  if (!drag_started_callback_.is_null())
+  if (drag_started_callback_)
     drag_started_callback_.Run(component);
 }
 
 void ClientControlledShellSurface::OnDragFinished(bool canceled,
                                                   const gfx::Point& location) {
-  if (!drag_finished_callback_.is_null())
+  if (drag_finished_callback_)
     drag_finished_callback_.Run(location.x(), location.y(), canceled);
 }
 ////////////////////////////////////////////////////////////////////////////////
 // SurfaceDelegate overrides:
 
 void ClientControlledShellSurface::OnSurfaceCommit() {
-  if (!widget_)
+  if (!widget_) {
+    // Modify the |origin_| to the |pending_geometry_| to place the window
+    // on the intended display. See b/77472684 for the details.
+    if (!pending_geometry_.IsEmpty())
+      origin_ = pending_geometry_.origin();
     CreateShellSurfaceWidget(ash::ToWindowShowState(pending_window_state_));
+  }
 
   ash::wm::WindowState* window_state = GetWindowState();
   if (window_state->GetStateType() != pending_window_state_) {
@@ -470,10 +573,10 @@ void ClientControlledShellSurface::OnSurfaceCommit() {
   }
 
   ShellSurfaceBase::OnSurfaceCommit();
-
+  UpdateFrame();
   UpdateBackdrop();
 
-  if (!geometry_changed_callback_.is_null())
+  if (geometry_changed_callback_)
     geometry_changed_callback_.Run(GetVisibleBounds());
 
   // Apply new top inset height.
@@ -509,6 +612,22 @@ bool ClientControlledShellSurface::IsInputEnabled(Surface* surface) const {
   return surface == root_surface();
 }
 
+void ClientControlledShellSurface::OnSetFrame(SurfaceFrameType type) {
+  ShellSurfaceBase::OnSetFrame(type);
+  frame_type_ = type;
+  UpdateAutoHideFrame();
+}
+
+void ClientControlledShellSurface::OnSetFrameColors(SkColor active_color,
+                                                    SkColor inactive_color) {
+  ShellSurfaceBase::OnSetFrameColors(active_color, inactive_color);
+  if (wide_frame_) {
+    aura::Window* window = wide_frame_->GetWidget()->GetNativeWindow();
+    window->SetProperty(ash::kFrameActiveColorKey, active_color);
+    window->SetProperty(ash::kFrameInactiveColorKey, inactive_color);
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // aura::WindowObserver overrides:
 void ClientControlledShellSurface::OnWindowBoundsChanged(
@@ -519,6 +638,7 @@ void ClientControlledShellSurface::OnWindowBoundsChanged(
 
 void ClientControlledShellSurface::OnWindowAddedToRootWindow(
     aura::Window* window) {
+  ScopedSetBoundsLocally scoped_set_bounds(this);
   ScopedLockedToRoot scoped_locked_to_root(widget_);
   UpdateWidgetBounds();
 }
@@ -534,9 +654,9 @@ views::NonClientFrameView*
 ClientControlledShellSurface::CreateNonClientFrameView(views::Widget* widget) {
   ash::wm::WindowState* window_state = GetWindowState();
   std::unique_ptr<ash::wm::ClientControlledState::Delegate> delegate =
-      g_factory_callback.is_null()
-          ? std::make_unique<ClientControlledStateDelegate>(this)
-          : g_factory_callback.Run();
+      GetFactoryForTesting()
+          ? GetFactoryForTesting().Run()
+          : std::make_unique<ClientControlledStateDelegate>(this);
 
   auto window_delegate = std::make_unique<ClientControlledWindowStateDelegate>(
       this, delegate.get());
@@ -545,7 +665,13 @@ ClientControlledShellSurface::CreateNonClientFrameView(views::Widget* widget) {
   client_controlled_state_ = state.get();
   window_state->SetStateObject(std::move(state));
   window_state->SetDelegate(std::move(window_delegate));
-  return ShellSurfaceBase::CreateNonClientFrameView(widget);
+  ash::CustomFrameViewAsh* frame_view = static_cast<ash::CustomFrameViewAsh*>(
+      ShellSurfaceBase::CreateNonClientFrameView(widget));
+  immersive_fullscreen_controller_ =
+      std::make_unique<ash::ImmersiveFullscreenController>();
+  frame_view->InitImmersiveFullscreenControllerForView(
+      immersive_fullscreen_controller_.get());
+  return frame_view;
 }
 
 void ClientControlledShellSurface::SaveWindowPlacement(
@@ -570,6 +696,12 @@ gfx::Size ClientControlledShellSurface::GetMaximumSize() const {
   // ClientControlledShellSurface is used only to tell the resizability,
   // but not real maximum size.
   return gfx::Size();
+}
+
+void ClientControlledShellSurface::OnDeviceScaleFactorChanged(float old_dsf,
+                                                              float new_dsf) {
+  views::View::OnDeviceScaleFactorChanged(old_dsf, new_dsf);
+  UpdateFrameWidth();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -639,23 +771,37 @@ void ClientControlledShellSurface::CompositorLockTimedOut() {
 // ShellSurface overrides:
 
 void ClientControlledShellSurface::SetWidgetBounds(const gfx::Rect& bounds) {
-  if ((!client_controlled_move_resize_ && !GetWindowState()->is_dragged()) ||
-      (client_controlled_move_resize_ &&
-       (!resizer_ || resizer_->details().window_component != HTCAPTION))) {
+  if (((!client_controlled_move_resize_ && !GetWindowState()->is_dragged()) ||
+       client_controlled_move_resize_) &&
+      !client_controlled_state_->set_bounds_locally()) {
     {
       // Calculate a minimum window visibility required bounds.
       aura::Window* window = widget_->GetNativeWindow();
-      gfx::Rect rect(bounds);
-      wm::ConvertRectFromScreen(window->GetRootWindow(), &rect);
+      gfx::Rect root_rect(bounds);
+      wm::ConvertRectFromScreen(window->GetRootWindow(), &root_rect);
       ash::wm::ClientControlledState::AdjustBoundsForMinimumWindowVisibility(
-          window, &rect);
-      wm::ConvertRectToScreen(window->GetRootWindow(), &rect);
-
-      if (bounds != rect) {
+          window, &root_rect);
+      gfx::Rect screen_rect(root_rect);
+      wm::ConvertRectToScreen(window->GetRootWindow(), &screen_rect);
+      if (bounds != screen_rect &&
+          !GetWindowState()->IsMaximizedOrFullscreenOrPinned()) {
+        {
+          ScopedSetBoundsLocally scoped_set_bounds(this);
+          window->SetBounds(root_rect);
+        }
         // Request the client a new bounds to ensure that it has enough visible
         // area.
-        window->SetBounds(rect);
+        auto state_type = GetWindowState()->GetStateType();
+        int64_t display_id =
+            display::Screen::GetScreen()
+                ->GetDisplayNearestWindow(window->GetRootWindow())
+                .id();
+        OnBoundsChangeEvent(state_type, state_type, display_id, screen_rect, 0);
       } else {
+        // TODO(oshima|domlaskowski): This prevent a client from moving a window
+        // between display. This is ok for now because a user needs to take an
+        // action to move right now. This will be fixed by new API.
+        ScopedLockedToRoot scoped_locked_to_root(widget_);
         ScopedSetBoundsLocally scoped_set_bounds(this);
         widget_->SetBounds(bounds);
       }
@@ -680,14 +826,20 @@ void ClientControlledShellSurface::SetWidgetBounds(const gfx::Rect& bounds) {
     widget_->GetNativeWindow()->SetBounds(gfx::Rect(origin, bounds.size()));
   }
   UpdateSurfaceBounds();
-
-  // Render phantom windows when beyond the current display.
-  if (resizer_)
-    resizer_->Drag(GetMouseLocation(), 0);
 }
 
 gfx::Rect ClientControlledShellSurface::GetShadowBounds() const {
   gfx::Rect shadow_bounds = ShellSurfaceBase::GetShadowBounds();
+  const ash::CustomFrameViewAsh* frame_view = GetFrameView();
+  if (frame_view->visible()) {
+    // The client controlled geometry is only for the client
+    // area. When the chrome side frame is enabled, the shadow height
+    // has to include the height of the frame, and the total height is
+    // equals to the window height computed by
+    // |GetWindowBoundsForClientBounds|.
+    shadow_bounds.set_size(
+        frame_view->GetWindowBoundsForClientBounds(shadow_bounds).size());
+  }
 
   if (geometry_changed_callback_.is_null()) {
     aura::Window* window = widget_->GetNativeWindow();
@@ -711,60 +863,94 @@ void ClientControlledShellSurface::InitializeWindowState(
   window_state->set_ignore_keyboard_bounds_change(true);
   if (container_ == ash::kShellWindowId_SystemModalContainer)
     DisableMovement();
+  ash::CustomFrameViewAsh* frame_view = GetFrameView();
+  frame_view->SetCaptionButtonModel(std::make_unique<CaptionButtonModel>(
+      frame_visible_button_mask_, frame_enabled_button_mask_));
+  UpdateAutoHideFrame();
+  UpdateFrameWidth();
+  if (initial_orientation_lock_ != ash::OrientationLockType::kAny)
+    SetOrientationLock(initial_orientation_lock_);
 }
 
 float ClientControlledShellSurface::GetScale() const {
   return scale_;
 }
 
-aura::Window* ClientControlledShellSurface::GetDragWindow() {
-  // Set capture on the root surface rather than the focus surface, because
-  // the client may destroy the latter during dragging/resizing.
-  return root_surface() ? root_surface()->window() : nullptr;
-}
-
-std::unique_ptr<ash::WindowResizer>
-ClientControlledShellSurface::CreateWindowResizer(aura::Window* window,
-                                                  int component) {
-  ash::wm::WindowState* window_state = GetWindowState();
-  DCHECK(!window_state->drag_details());
-  window_state->CreateDragDetails(GetMouseLocation(), component,
-                                  wm::WINDOW_MOVE_SOURCE_MOUSE);
-
-  std::unique_ptr<ash::WindowResizer> resizer =
-      std::make_unique<CustomWindowResizer>(window_state);
-
-  if (component == HTCAPTION) {
-    // Chained with a CustomWindowResizer, DragWindowResizer does not handle
-    // dragging. It only renders phantom windows and moves the window to the
-    // target root window when dragging ends.
-    resizer.reset(
-        ash::DragWindowResizer::Create(resizer.release(), window_state));
+gfx::Rect ClientControlledShellSurface::GetWidgetBounds() const {
+  const ash::CustomFrameViewAsh* frame_view = GetFrameView();
+  if (frame_view->visible()) {
+    // The client's geometry uses entire display area in client
+    // controlled in maximized, and the surface is placed under the
+    // frame. Just use the visible bounds (geometry) for the widget
+    // bounds.
+    if (widget_->IsMaximized())
+      return GetVisibleBounds();
+    return frame_view->GetWindowBoundsForClientBounds(GetVisibleBounds());
   }
 
-  return resizer;
-}
-
-bool ClientControlledShellSurface::OnMouseDragged(const ui::MouseEvent&) {
-  // TODO(domlaskowski): When VKEY_ESCAPE is pressed during dragging, the client
-  // destroys the window, but should instead revert the drag to be consistent
-  // with ShellSurface::OnKeyEvent. See crbug.com/699746.
-  return false;
-}
-
-gfx::Point ClientControlledShellSurface::GetWidgetOrigin() const {
-  return GetVisibleBounds().origin() - origin_offset_;
+  gfx::Rect bounds(GetVisibleBounds());
+  bounds.Offset(-origin_offset_.x(), -origin_offset_.y());
+  return bounds;
 }
 
 gfx::Point ClientControlledShellSurface::GetSurfaceOrigin() const {
   DCHECK(resize_component_ == HTCAPTION);
-  if (!geometry_changed_callback_.is_null())
+  if (geometry_changed_callback_)
     return gfx::Point();
-  return gfx::Point() - GetWidgetOrigin().OffsetFromOrigin();
+  // TODO(oshima): geometry_changed_callback_ must be always set by now, so
+  // this is not necessary any more. Remove this.
+  return gfx::Point() -
+         (GetVisibleBounds().origin() - origin_offset_).OffsetFromOrigin();
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // ClientControlledShellSurface, private:
+
+void ClientControlledShellSurface::UpdateFrame() {
+  if (!widget_ || !GetFrameView()->visible())
+    return;
+  gfx::Rect work_area =
+      display::Screen::GetScreen()
+          ->GetDisplayNearestWindow(widget_->GetNativeWindow())
+          .work_area();
+
+  ash::wm::WindowState* window_state = GetWindowState();
+  if (window_state->IsMaximizedOrFullscreenOrPinned() &&
+      work_area.width() != geometry().width()) {
+    if (!wide_frame_) {
+      wide_frame_ = ash::WideFrameView::Create(widget_);
+      immersive_fullscreen_controller_->SetEnabled(
+          ash::ImmersiveFullscreenController::WINDOW_TYPE_OTHER, false);
+      wide_frame_->Init(immersive_fullscreen_controller_.get());
+      wide_frame_->Show();
+      UpdateCaptionButtonModel();
+    }
+  } else {
+    if (wide_frame_) {
+      wide_frame_->Close();
+      wide_frame_ = nullptr;
+      immersive_fullscreen_controller_->SetEnabled(
+          ash::ImmersiveFullscreenController::WINDOW_TYPE_OTHER, false);
+      GetFrameView()->InitImmersiveFullscreenControllerForView(
+          immersive_fullscreen_controller_.get());
+      UpdateCaptionButtonModel();
+    }
+    UpdateFrameWidth();
+  }
+  // The autohide should be applied when the window state is in
+  // maximzied, fullscreen or pinned. Update the auto hide state
+  // inside commit.
+  UpdateAutoHideFrame();
+}
+
+void ClientControlledShellSurface::UpdateCaptionButtonModel() {
+  auto model = std::make_unique<CaptionButtonModel>(frame_visible_button_mask_,
+                                                    frame_enabled_button_mask_);
+  if (wide_frame_)
+    wide_frame_->SetCaptionButtonModel(std::move(model));
+  else
+    GetFrameView()->SetCaptionButtonModel(std::move(model));
+}
 
 void ClientControlledShellSurface::UpdateBackdrop() {
   aura::Window* window = widget_->GetNativeWindow();
@@ -773,9 +959,24 @@ void ClientControlledShellSurface::UpdateBackdrop() {
   bool enable_backdrop =
       (widget_->IsFullscreen() || widget_->IsMaximized()) &&
       !widget_->GetWindowBoundsInScreen().Contains(display.work_area());
+  ash::BackdropWindowMode target_backdrop_mode =
+      enable_backdrop ? ash::BackdropWindowMode::kEnabled
+                      : ash::BackdropWindowMode::kAuto;
 
-  if (window->GetProperty(aura::client::kHasBackdrop) != enable_backdrop)
-    window->SetProperty(aura::client::kHasBackdrop, enable_backdrop);
+  if (window->GetProperty(ash::kBackdropWindowMode) != target_backdrop_mode)
+    window->SetProperty(ash::kBackdropWindowMode, target_backdrop_mode);
+}
+
+void ClientControlledShellSurface::UpdateFrameWidth() {
+  int width = -1;
+  if (shadow_bounds_) {
+    float device_scale_factor =
+        GetWidget()->GetNativeWindow()->layer()->device_scale_factor();
+    float dsf_to_default_dsf = device_scale_factor / scale_;
+    width = gfx::ToRoundedInt(shadow_bounds_->width() * dsf_to_default_dsf);
+  }
+  static_cast<ash::HeaderView*>(GetFrameView()->GetHeaderView())
+      ->SetWidthInPixels(width);
 }
 
 void ClientControlledShellSurface::
@@ -792,11 +993,23 @@ ash::wm::WindowState* ClientControlledShellSurface::GetWindowState() {
   return ash::wm::GetWindowState(widget_->GetNativeWindow());
 }
 
+ash::CustomFrameViewAsh* ClientControlledShellSurface::GetFrameView() {
+  return static_cast<ash::CustomFrameViewAsh*>(
+      widget_->non_client_view()->frame_view());
+}
+
+const ash::CustomFrameViewAsh* ClientControlledShellSurface::GetFrameView()
+    const {
+  return static_cast<const ash::CustomFrameViewAsh*>(
+      widget_->non_client_view()->frame_view());
+}
+
 // static
 void ClientControlledShellSurface::
     SetClientControlledStateDelegateFactoryForTest(
         const DelegateFactoryCallback& callback) {
-  g_factory_callback = callback;
+  auto& factory = GetFactoryForTesting();
+  factory = callback;
 }
 
 }  // namespace exo

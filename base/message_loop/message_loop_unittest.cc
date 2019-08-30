@@ -15,13 +15,18 @@
 #include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_current.h"
+#include "base/message_loop/message_pump_for_io.h"
 #include "base/pending_task.h"
 #include "base/posix/eintr_wrapper.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/task_scheduler/task_scheduler.h"
+#include "base/test/gtest_util.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/test_simple_task_runner.h"
+#include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/sequence_local_storage_slot.h"
 #include "base/threading/thread.h"
@@ -233,7 +238,7 @@ void RecursiveFunc(TaskList* order, int cookie, int depth,
   order->RecordStart(RECURSIVE, cookie);
   if (depth > 0) {
     if (is_reentrant)
-      MessageLoop::current()->SetNestableTasksAllowed(true);
+      MessageLoopCurrent::Get()->SetNestableTasksAllowed(true);
     ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE,
         BindOnce(&RecursiveFunc, order, cookie, depth - 1, is_reentrant));
@@ -388,7 +393,7 @@ TEST_P(MessageLoopTest, RunTasksWhileShuttingDownJavaThread) {
 #if defined(OS_WIN)
 
 void SubPumpFunc() {
-  MessageLoop::current()->SetNestableTasksAllowed(true);
+  MessageLoopCurrent::Get()->SetNestableTasksAllowed(true);
   MSG msg;
   while (GetMessage(&msg, NULL, 0, 0)) {
     TranslateMessage(&msg);
@@ -446,7 +451,7 @@ const wchar_t kMessageBoxTitle[] = L"MessageLoop Unit Test";
 void MessageBoxFunc(TaskList* order, int cookie, bool is_reentrant) {
   order->RecordStart(MESSAGEBOX, cookie);
   if (is_reentrant)
-    MessageLoop::current()->SetNestableTasksAllowed(true);
+    MessageLoopCurrent::Get()->SetNestableTasksAllowed(true);
   MessageBox(NULL, L"Please wait...", kMessageBoxTitle, MB_OK);
   order->RecordEnd(MESSAGEBOX, cookie);
 }
@@ -606,11 +611,11 @@ void PostNTasksThenQuit(int posts_remaining) {
 
 #if defined(OS_WIN)
 
-class TestIOHandler : public MessageLoopForIO::IOHandler {
+class TestIOHandler : public MessagePumpForIO::IOHandler {
  public:
   TestIOHandler(const wchar_t* name, HANDLE signal, bool wait);
 
-  void OnIOCompleted(MessageLoopForIO::IOContext* context,
+  void OnIOCompleted(MessagePumpForIO::IOContext* context,
                      DWORD bytes_transfered,
                      DWORD error) override;
 
@@ -621,7 +626,7 @@ class TestIOHandler : public MessageLoopForIO::IOHandler {
 
  private:
   char buffer_[48];
-  MessageLoopForIO::IOContext context_;
+  MessagePumpForIO::IOContext context_;
   HANDLE signal_;
   win::ScopedHandle file_;
   bool wait_;
@@ -637,7 +642,7 @@ TestIOHandler::TestIOHandler(const wchar_t* name, HANDLE signal, bool wait)
 }
 
 void TestIOHandler::Init() {
-  MessageLoopForIO::current()->RegisterIOHandler(file_.Get(), this);
+  MessageLoopCurrentForIO::Get()->RegisterIOHandler(file_.Get(), this);
 
   DWORD read;
   EXPECT_FALSE(ReadFile(file_.Get(), buffer_, size(), &read, context()));
@@ -646,15 +651,16 @@ void TestIOHandler::Init() {
     WaitForIO();
 }
 
-void TestIOHandler::OnIOCompleted(MessageLoopForIO::IOContext* context,
-                                  DWORD bytes_transfered, DWORD error) {
+void TestIOHandler::OnIOCompleted(MessagePumpForIO::IOContext* context,
+                                  DWORD bytes_transfered,
+                                  DWORD error) {
   ASSERT_TRUE(context == &context_);
   ASSERT_TRUE(SetEvent(signal_));
 }
 
 void TestIOHandler::WaitForIO() {
-  EXPECT_TRUE(MessageLoopForIO::current()->WaitForIOCompletion(300, this));
-  EXPECT_TRUE(MessageLoopForIO::current()->WaitForIOCompletion(400, this));
+  EXPECT_TRUE(MessageLoopCurrentForIO::Get()->WaitForIOCompletion(300, this));
+  EXPECT_TRUE(MessageLoopCurrentForIO::Get()->WaitForIOCompletion(400, this));
 }
 
 void RunTest_IOHandler() {
@@ -1093,7 +1099,7 @@ void NestingFunc(int* depth) {
     ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
                                             BindOnce(&NestingFunc, depth));
 
-    MessageLoop::current()->SetNestableTasksAllowed(true);
+    MessageLoopCurrent::Get()->SetNestableTasksAllowed(true);
     RunLoop().Run();
   }
   base::RunLoop::QuitCurrentWhenIdleDeprecated();
@@ -1114,7 +1120,7 @@ TEST_P(MessageLoopTypedTest, Nesting) {
 TEST_P(MessageLoopTypedTest, RecursiveDenial1) {
   MessageLoop loop(GetMessageLoopType());
 
-  EXPECT_TRUE(MessageLoop::current()->NestableTasksAllowed());
+  EXPECT_TRUE(MessageLoopCurrent::Get()->NestableTasksAllowed());
   TaskList order;
   ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, BindOnce(&RecursiveFunc, &order, 1, 2, false));
@@ -1163,7 +1169,7 @@ void OrderedFunc(TaskList* order, int cookie) {
 TEST_P(MessageLoopTypedTest, RecursiveDenial3) {
   MessageLoop loop(GetMessageLoopType());
 
-  EXPECT_TRUE(MessageLoop::current()->NestableTasksAllowed());
+  EXPECT_TRUE(MessageLoopCurrent::Get()->NestableTasksAllowed());
   TaskList order;
   ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, BindOnce(&RecursiveSlowFunc, &order, 1, 2, false));
@@ -1257,10 +1263,7 @@ namespace {
 
 void FuncThatPumps(TaskList* order, int cookie) {
   order->RecordStart(PUMPS, cookie);
-  {
-    MessageLoop::ScopedNestableTaskAllower allow(MessageLoop::current());
-    RunLoop().RunUntilIdle();
-  }
+  RunLoop(RunLoop::Type::kNestableTasksAllowed).RunUntilIdle();
   order->RecordEnd(PUMPS, cookie);
 }
 
@@ -1315,7 +1318,7 @@ namespace {
 void FuncThatRuns(TaskList* order, int cookie, RunLoop* run_loop) {
   order->RecordStart(RUNS, cookie);
   {
-    MessageLoop::ScopedNestableTaskAllower allow(MessageLoop::current());
+    MessageLoopCurrent::ScopedNestableTaskAllower allow;
     run_loop->Run();
   }
   order->RecordEnd(RUNS, cookie);
@@ -1625,6 +1628,8 @@ TEST_P(MessageLoopTypedTest, RunLoopQuitOrderAfter) {
   ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE,
                                           BindOnce(&FuncThatQuitsNow));
 
+  run_loop.allow_quit_current_deprecated_ = true;
+
   RunLoop outer_run_loop;
   outer_run_loop.Run();
 
@@ -1649,7 +1654,13 @@ TEST_P(MessageLoopTypedTest, RunLoopQuitOrderAfter) {
 // On Linux, the pipe buffer size is 64KiB by default. The bug caused one
 // byte accumulated in the pipe per two posts, so we should repeat 128K
 // times to reproduce the bug.
-TEST_P(MessageLoopTypedTest, RecursivePosts) {
+#if defined(OS_FUCHSIA)
+// TODO(crbug.com/810077): This is flaky on Fuchsia.
+#define MAYBE_RecursivePosts DISABLED_RecursivePosts
+#else
+#define MAYBE_RecursivePosts RecursivePosts
+#endif
+TEST_P(MessageLoopTypedTest, MAYBE_RecursivePosts) {
   const int kNumTimes = 1 << 17;
   MessageLoop loop(GetMessageLoopType());
   loop.task_runner()->PostTask(FROM_HERE,
@@ -1659,7 +1670,7 @@ TEST_P(MessageLoopTypedTest, RecursivePosts) {
 
 TEST_P(MessageLoopTypedTest, NestableTasksAllowedAtTopLevel) {
   MessageLoop loop(GetMessageLoopType());
-  EXPECT_TRUE(MessageLoop::current()->NestableTasksAllowed());
+  EXPECT_TRUE(MessageLoopCurrent::Get()->NestableTasksAllowed());
 }
 
 // Nestable tasks shouldn't be allowed to run reentrantly by default (regression
@@ -1671,7 +1682,7 @@ TEST_P(MessageLoopTypedTest, NestableTasksDisallowedByDefault) {
       FROM_HERE,
       BindOnce(
           [](RunLoop* run_loop) {
-            EXPECT_FALSE(MessageLoop::current()->NestableTasksAllowed());
+            EXPECT_FALSE(MessageLoopCurrent::Get()->NestableTasksAllowed());
             run_loop->Quit();
           },
           Unretained(&run_loop)));
@@ -1699,7 +1710,7 @@ TEST_P(MessageLoopTypedTest, NestableTasksProcessedWhenRunLoopAllows) {
                       // nestable tasks are by default disallowed from this
                       // layer.
                       EXPECT_FALSE(
-                          MessageLoop::current()->NestableTasksAllowed());
+                          MessageLoopCurrent::Get()->NestableTasksAllowed());
                       nested_run_loop->Quit();
                     },
                     Unretained(&nested_run_loop)));
@@ -1719,11 +1730,11 @@ TEST_P(MessageLoopTypedTest, NestableTasksAllowedExplicitlyInScope) {
       BindOnce(
           [](RunLoop* run_loop) {
             {
-              MessageLoop::ScopedNestableTaskAllower allow_nestable_tasks(
-                  MessageLoop::current());
-              EXPECT_TRUE(MessageLoop::current()->NestableTasksAllowed());
+              MessageLoopCurrent::ScopedNestableTaskAllower
+                  allow_nestable_tasks;
+              EXPECT_TRUE(MessageLoopCurrent::Get()->NestableTasksAllowed());
             }
-            EXPECT_FALSE(MessageLoop::current()->NestableTasksAllowed());
+            EXPECT_FALSE(MessageLoopCurrent::Get()->NestableTasksAllowed());
             run_loop->Quit();
           },
           Unretained(&run_loop)));
@@ -1737,15 +1748,42 @@ TEST_P(MessageLoopTypedTest, NestableTasksAllowedManually) {
       FROM_HERE,
       BindOnce(
           [](RunLoop* run_loop) {
-            EXPECT_FALSE(MessageLoop::current()->NestableTasksAllowed());
-            MessageLoop::current()->SetNestableTasksAllowed(true);
-            EXPECT_TRUE(MessageLoop::current()->NestableTasksAllowed());
-            MessageLoop::current()->SetNestableTasksAllowed(false);
-            EXPECT_FALSE(MessageLoop::current()->NestableTasksAllowed());
+            EXPECT_FALSE(MessageLoopCurrent::Get()->NestableTasksAllowed());
+            MessageLoopCurrent::Get()->SetNestableTasksAllowed(true);
+            EXPECT_TRUE(MessageLoopCurrent::Get()->NestableTasksAllowed());
+            MessageLoopCurrent::Get()->SetNestableTasksAllowed(false);
+            EXPECT_FALSE(MessageLoopCurrent::Get()->NestableTasksAllowed());
             run_loop->Quit();
           },
           Unretained(&run_loop)));
   run_loop.Run();
+}
+
+#if defined(OS_MACOSX)
+// This metric is a bit broken on Mac OS because CFRunLoop doesn't
+// deterministically invoke MessageLoop::DoIdleWork(). This being a temporary
+// diagnosis metric, we let this fly and simply not test it on Mac.
+#define MAYBE_MetricsOnlyFromUILoops DISABLED_MetricsOnlyFromUILoops
+#else
+#define MAYBE_MetricsOnlyFromUILoops MetricsOnlyFromUILoops
+#endif
+
+TEST_P(MessageLoopTypedTest, MAYBE_MetricsOnlyFromUILoops) {
+  MessageLoop loop(GetMessageLoopType());
+
+  const bool histograms_expected = GetMessageLoopType() == MessageLoop::TYPE_UI;
+
+  HistogramTester histogram_tester;
+
+  // Loop that goes idle with one pending task.
+  RunLoop run_loop;
+  loop.task_runner()->PostDelayedTask(FROM_HERE, run_loop.QuitClosure(),
+                                      TimeDelta::FromMilliseconds(1));
+  run_loop.Run();
+
+  histogram_tester.ExpectTotalCount(
+      "MessageLoop.DelayedTaskQueueForUI.PendingTasksCountOnIdle",
+      histograms_expected ? 1 : 0);
 }
 
 INSTANTIATE_TEST_CASE_P(
@@ -1772,6 +1810,57 @@ INSTANTIATE_TEST_CASE_P(
     MessageLoopTypedTest::ParamInfoToString);
 
 #if defined(OS_WIN)
+// Verifies that the MessageLoop ignores WM_QUIT, rather than quitting.
+// Users of MessageLoop typically expect to control when their RunLoops stop
+// Run()ning explicitly, via QuitClosure() etc (see https://crbug.com/720078)
+TEST_P(MessageLoopTest, WmQuitIsIgnored) {
+  MessageLoop loop(MessageLoop::TYPE_UI);
+
+  // Post a WM_QUIT message to the current thread.
+  ::PostQuitMessage(0);
+
+  // Post a task to the current thread, with a small delay to make it less
+  // likely that we process the posted task before looking for WM_* messages.
+  bool task_was_run = false;
+  RunLoop run_loop;
+  loop.task_runner()->PostDelayedTask(
+      FROM_HERE,
+      BindOnce(
+          [](bool* flag, OnceClosure closure) {
+            *flag = true;
+            std::move(closure).Run();
+          },
+          &task_was_run, run_loop.QuitClosure()),
+      TestTimeouts::tiny_timeout());
+
+  // Run the loop, and ensure that the posted task is processed before we quit.
+  run_loop.Run();
+  EXPECT_TRUE(task_was_run);
+}
+
+TEST_P(MessageLoopTest, WmQuitIsNotIgnoredWithEnableWmQuit) {
+  MessageLoop loop(MessageLoop::TYPE_UI);
+  static_cast<MessageLoopForUI*>(&loop)->EnableWmQuit();
+
+  // Post a WM_QUIT message to the current thread.
+  ::PostQuitMessage(0);
+
+  // Post a task to the current thread, with a small delay to make it less
+  // likely that we process the posted task before looking for WM_* messages.
+  RunLoop run_loop;
+  loop.task_runner()->PostDelayedTask(FROM_HERE,
+                                      BindOnce(
+                                          [](OnceClosure closure) {
+                                            ADD_FAILURE();
+                                            std::move(closure).Run();
+                                          },
+                                          run_loop.QuitClosure()),
+                                      TestTimeouts::tiny_timeout());
+
+  // Run the loop. It should not result in ADD_FAILURE() getting called.
+  run_loop.Run();
+}
+
 TEST_P(MessageLoopTest, PostDelayedTask_SharedTimer_SubPump) {
   RunTest_PostDelayedTask_SharedTimer_SubPump();
 }
@@ -1883,7 +1972,7 @@ class DestructionObserverProbe :
   bool* destruction_observer_called_;
 };
 
-class MLDestructionObserver : public MessageLoop::DestructionObserver {
+class MLDestructionObserver : public MessageLoopCurrent::DestructionObserver {
  public:
   MLDestructionObserver(bool* task_destroyed, bool* destruction_observer_called)
       : task_destroyed_(task_destroyed),
@@ -2003,7 +2092,7 @@ LRESULT CALLBACK TestWndProcThunk(HWND hwnd, UINT message,
   case 2:
     // Since we're about to enter a modal loop, tell the message loop that we
     // intend to nest tasks.
-    MessageLoop::current()->SetNestableTasksAllowed(true);
+    MessageLoopCurrent::Get()->SetNestableTasksAllowed(true);
     bool did_run = false;
     ThreadTaskRunnerHandle::Get()->PostTask(
         FROM_HERE, base::BindOnce(&EndTest, &did_run, hwnd));
@@ -2152,5 +2241,50 @@ INSTANTIATE_TEST_CASE_P(
     ::testing::Values(TaskSchedulerAvailability::NO_TASK_SCHEDULER,
                       TaskSchedulerAvailability::WITH_TASK_SCHEDULER),
     MessageLoopTest::ParamInfoToString);
+
+namespace {
+
+class PostTaskOnDestroy {
+ public:
+  PostTaskOnDestroy(int times) : times_remaining_(times) {}
+  ~PostTaskOnDestroy() { PostTaskWithPostingDestructor(times_remaining_); }
+
+  // Post a task that will repost itself on destruction |times| times.
+  static void PostTaskWithPostingDestructor(int times) {
+    if (times > 0) {
+      ThreadTaskRunnerHandle::Get()->PostTask(
+          FROM_HERE, BindOnce([](std::unique_ptr<PostTaskOnDestroy>) {},
+                              std::make_unique<PostTaskOnDestroy>(times - 1)));
+    }
+  }
+
+ private:
+  const int times_remaining_;
+
+  DISALLOW_COPY_AND_ASSIGN(PostTaskOnDestroy);
+};
+
+}  // namespace
+
+// Test that MessageLoop destruction handles a task's destructor posting another
+// task by:
+//  1) Not getting stuck clearing its task queue.
+//  2) DCHECKing when clearing pending tasks many times still doesn't yield an
+//     empty queue.
+TEST(MessageLoopDestructionTest, ExpectDeathWithStubbornPostTaskOnDestroy) {
+  std::unique_ptr<MessageLoop> loop = std::make_unique<MessageLoop>();
+
+  EXPECT_DCHECK_DEATH({
+    PostTaskOnDestroy::PostTaskWithPostingDestructor(1000);
+    loop.reset();
+  });
+}
+
+TEST(MessageLoopDestructionTest, DestroysFineWithReasonablePostTaskOnDestroy) {
+  std::unique_ptr<MessageLoop> loop = std::make_unique<MessageLoop>();
+
+  PostTaskOnDestroy::PostTaskWithPostingDestructor(10);
+  loop.reset();
+}
 
 }  // namespace base

@@ -34,12 +34,12 @@
 #include "gin/handle.h"
 #include "gin/object_template_builder.h"
 #include "gin/wrappable.h"
-#include "third_party/WebKit/public/platform/WebURLRequest.h"
-#include "third_party/WebKit/public/web/WebDocument.h"
-#include "third_party/WebKit/public/web/WebKit.h"
-#include "third_party/WebKit/public/web/WebLocalFrame.h"
-#include "third_party/WebKit/public/web/WebScriptSource.h"
-#include "third_party/WebKit/public/web/WebView.h"
+#include "third_party/blink/public/platform/web_url_request.h"
+#include "third_party/blink/public/web/blink.h"
+#include "third_party/blink/public/web/web_document.h"
+#include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_script_source.h"
+#include "third_party/blink/public/web/web_view.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/window_open_disposition.h"
 #include "ui/events/keycodes/keyboard_codes.h"
@@ -73,6 +73,7 @@ const char kCSSBackgroundColorFormat[] = "rgba(%d,%d,%d,%s)";
 const char kCSSBackgroundPositionCenter[] = "center";
 const char kCSSBackgroundPositionLeft[] = "left";
 const char kCSSBackgroundPositionTop[] = "top";
+const char kCSSBackgroundPositionCenterCover[] = "center/cover";
 const char kCSSBackgroundPositionRight[] = "right";
 const char kCSSBackgroundPositionBottom[] = "bottom";
 
@@ -330,6 +331,28 @@ v8::Local<v8::Object> GenerateThemeBackgroundInfo(
     }
   }
 
+  if (theme_info.using_default_theme &&
+      !theme_info.custom_background_url.is_empty()) {
+    builder.Set("alternateLogo", true);
+    RGBAColor whiteTextRgba = RGBAColor{255, 255, 255, 255};
+    builder.Set("textColorRgba",
+                internal::RGBAColorToArray(isolate, whiteTextRgba));
+    builder.Set("customBackgroundConfigured", true);
+    builder.Set("imageUrl",
+                "url('" + theme_info.custom_background_url.spec() + "')");
+    builder.Set("imageTiling", std::string(kCSSBackgroundRepeatNo));
+    builder.Set("imageHorizontalAlignment",
+                std::string(kCSSBackgroundPositionCenter));
+    builder.Set("imageVerticalAlignment",
+                std::string(kCSSBackgroundPositionCenterCover));
+    builder.Set("attributionActionUrl",
+                theme_info.custom_background_attribution_action_url.spec());
+    builder.Set("attribution1",
+                theme_info.custom_background_attribution_line_1);
+    builder.Set("attribution2",
+                theme_info.custom_background_attribution_line_2);
+  }
+
   return builder.Build();
 }
 
@@ -576,6 +599,13 @@ class NewTabPageBindings : public gin::Wrappable<NewTabPageBindings> {
       int tile_source,
       int tile_type,
       v8::Local<v8::Value> data_generation_time);
+  static void SetCustomBackgroundURL(const std::string& background_url);
+  static void SetCustomBackgroundURLWithAttributions(
+      const std::string& background_url,
+      const std::string& attribution_line_1,
+      const std::string& attribution_line_2,
+      const std::string& attributionActionUrl);
+  static void SelectLocalBackgroundImage();
 
   DISALLOW_COPY_AND_ASSIGN(NewTabPageBindings);
 };
@@ -611,7 +641,13 @@ gin::ObjectTemplateBuilder NewTabPageBindings::GetObjectTemplateBuilder(
       .SetMethod("logMostVisitedImpression",
                  &NewTabPageBindings::LogMostVisitedImpression)
       .SetMethod("logMostVisitedNavigation",
-                 &NewTabPageBindings::LogMostVisitedNavigation);
+                 &NewTabPageBindings::LogMostVisitedNavigation)
+      .SetMethod("setBackgroundURL",
+                 &NewTabPageBindings::SetCustomBackgroundURL)
+      .SetMethod("setBackgroundURLWithAttributions",
+                 &NewTabPageBindings::SetCustomBackgroundURLWithAttributions)
+      .SetMethod("selectLocalBackgroundImage",
+                 &NewTabPageBindings::SelectLocalBackgroundImage);
 }
 
 // static
@@ -806,6 +842,32 @@ void NewTabPageBindings::LogMostVisitedNavigation(
         /*url_for_rappor=*/GURL());
     search_box->LogMostVisitedNavigation(impression);
   }
+}
+
+// static
+void NewTabPageBindings::SetCustomBackgroundURL(
+    const std::string& background_url) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  GURL url(background_url);
+  search_box->SetCustomBackgroundURL(url);
+}
+
+// static
+void NewTabPageBindings::SetCustomBackgroundURLWithAttributions(
+    const std::string& background_url,
+    const std::string& attribution_line_1,
+    const std::string& attribution_line_2,
+    const std::string& attribution_action_url) {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  search_box->SetCustomBackgroundURLWithAttributions(
+      GURL(background_url), attribution_line_1, attribution_line_2,
+      GURL(attribution_action_url));
+}
+
+// static
+void NewTabPageBindings::SelectLocalBackgroundImage() {
+  SearchBox* search_box = GetSearchBoxForCurrentContext();
+  search_box->SelectLocalBackgroundImage();
 }
 
 }  // namespace

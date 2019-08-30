@@ -12,11 +12,11 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/optional.h"
 #include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "ui/base/models/menu_separator_types.h"
 #include "ui/gfx/image/image_skia.h"
-#include "ui/views/controls/menu/menu_config.h"
 #include "ui/views/controls/menu/menu_controller.h"
 #include "ui/views/controls/menu/menu_types.h"
 #include "ui/views/view.h"
@@ -40,10 +40,12 @@ class MenuRunnerImpl;
 
 namespace test {
 class TestMenuItemViewShown;
+class TestMenuItemViewNotShown;
 }
 
 class MenuController;
 class MenuDelegate;
+class Separator;
 class TestMenuItemView;
 class SubmenuView;
 
@@ -82,15 +84,16 @@ class VIEWS_EXPORT MenuItemView : public View {
   // ID used to identify empty menu items.
   static const int kEmptyMenuItemViewID;
 
-  // Different types of menu items.  EMPTY is a special type for empty
-  // menus that is only used internally.
+  // Different types of menu items.
   enum Type {
-    NORMAL,
-    SUBMENU,
-    CHECKBOX,
-    RADIO,
-    SEPARATOR,
-    EMPTY
+    NORMAL,              // Performs an action when selected.
+    SUBMENU,             // Presents a submenu within another menu.
+    ACTIONABLE_SUBMENU,  // A SUBMENU that is also a COMMAND.
+    CHECKBOX,            // Can be selected/checked to toggle a boolean state.
+    RADIO,               // Can be selected/checked among a group of choices.
+    SEPARATOR,           // Shows a horizontal line separator.
+    EMPTY,  // EMPTY is a special type for empty menus that is only used
+            // internally.
   };
 
   // Where the menu should be drawn, above or below the bounds (when
@@ -199,6 +202,9 @@ class VIEWS_EXPORT MenuItemView : public View {
   // Adds a separator to this menu
   void AppendSeparator();
 
+  // Adds a separator to this menu at the specified position.
+  void AddSeparatorAt(int index);
+
   // Appends a menu item with an icon. This is for the menu item which
   // needs an icon. Calling this function forces the Menu class to draw
   // the menu, instead of relying on Windows.
@@ -256,6 +262,15 @@ class VIEWS_EXPORT MenuItemView : public View {
   // Returns true if the item is selected.
   bool IsSelected() const { return selected_; }
 
+  // Sets whether the submenu area of an ACTIONABLE_SUBMENU is selected.
+  void SetSelectionOfActionableSubmenu(
+      bool submenu_area_of_actionable_submenu_selected);
+
+  // Whether the submenu area of an ACTIONABLE_SUBMENU is selected.
+  bool IsSubmenuAreaOfActionableSubmenuSelected() const {
+    return submenu_area_of_actionable_submenu_selected_;
+  }
+
   // Sets the |tooltip| for a menu item view with |item_id| identifier.
   void SetTooltip(const base::string16& tooltip, int item_id);
 
@@ -286,6 +301,9 @@ class VIEWS_EXPORT MenuItemView : public View {
   // from GetPreferredSize().width() if the item has a child view with flexible
   // dimensions.
   int GetHeightForWidth(int width) const override;
+
+  // Returns the bounds of the submenu part of the ACTIONABLE_SUBMENU.
+  gfx::Rect GetSubmenuAreaOfActionableSubmenu() const;
 
   // Return the preferred dimensions of the item in pixel.
   const MenuItemDimensions& GetDimensions() const;
@@ -337,6 +355,11 @@ class VIEWS_EXPORT MenuItemView : public View {
     use_right_margin_ = use_right_margin;
   }
 
+  // Controls whether this menu has a forced visual selection state. This is
+  // used when animating item acceptance on Mac. Note that once this is set
+  // there's no way to unset it for this MenuItemView!
+  void SetForcedVisualSelection(bool selected);
+
  protected:
   // Creates a MenuItemView. This is used by the various AddXXX methods.
   MenuItemView(MenuItemView* parent, int command, Type type);
@@ -358,6 +381,7 @@ class VIEWS_EXPORT MenuItemView : public View {
  private:
   friend class internal::MenuRunnerImpl;  // For access to ~MenuItemView.
   friend class test::TestMenuItemViewShown;  // for access to |submenu_|;
+  friend class test::TestMenuItemViewNotShown;  // for access to |submenu_|;
   friend class TestMenuItemView;             // For access to AddEmptyMenus();
 
   enum PaintButtonMode { PB_NORMAL, PB_FOR_DRAG };
@@ -424,6 +448,14 @@ class VIEWS_EXPORT MenuItemView : public View {
   // Calculates and returns the MenuItemDimensions.
   MenuItemDimensions CalculateDimensions() const;
 
+  // Imposes MenuConfig's minimum sizes, if any, on the supplied
+  // dimensions and returns the new dimensions. It is guaranteed that:
+  //    ApplyMinimumDimensions(x).standard_width >= x.standard_width
+  //    ApplyMinimumDimensions(x).children_width == x.children_width
+  //    ApplyMinimumDimensions(x).minor_text_width == x.minor_text_width
+  //    ApplyMinimumDimensions(x).height >= x.height
+  void ApplyMinimumDimensions(MenuItemDimensions* dims) const;
+
   // Get the horizontal position at which to draw the menu item's label.
   int GetLabelStartForThisItem() const;
 
@@ -477,6 +509,9 @@ class VIEWS_EXPORT MenuItemView : public View {
 
   // Whether we're selected.
   bool selected_;
+
+  // Whether the submenu area of an ACTIONABLE_SUBMENU is selected.
+  bool submenu_area_of_actionable_submenu_selected_;
 
   // Command id.
   int command_;
@@ -555,6 +590,13 @@ class VIEWS_EXPORT MenuItemView : public View {
 
   // The submenu indicator arrow icon in case the menu item has a Submenu.
   ImageView* submenu_arrow_image_view_;
+
+  // The forced visual selection state of this item, if any.
+  base::Optional<bool> forced_visual_selection_;
+
+  // The vertical separator that separates the actionable and submenu regions of
+  // an ACTIONABLE_SUBMENU.
+  Separator* vertical_separator_;
 
   DISALLOW_COPY_AND_ASSIGN(MenuItemView);
 };

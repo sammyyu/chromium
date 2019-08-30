@@ -43,7 +43,7 @@ using content::SiteInstance;
 using content::WebContents;
 using extensions::Extension;
 
-class AppApiTest : public ExtensionApiTest {
+class AppApiTest : public extensions::ExtensionApiTest {
  protected:
   // Gets the base URL for files for a specific test, making sure that it uses
   // "localhost" as the hostname, since that is what the extent is declared
@@ -58,7 +58,7 @@ class AppApiTest : public ExtensionApiTest {
 
   // Pass flags to make testing apps easier.
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ExtensionApiTest::SetUpCommandLine(command_line);
+    extensions::ExtensionApiTest::SetUpCommandLine(command_line);
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
         switches::kDisablePopupBlocking);
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
@@ -66,7 +66,7 @@ class AppApiTest : public ExtensionApiTest {
   }
 
   void SetUpOnMainThread() override {
-    ExtensionApiTest::SetUpOnMainThread();
+    extensions::ExtensionApiTest::SetUpOnMainThread();
     host_resolver()->AddRule("*", "127.0.0.1");
     ASSERT_TRUE(StartEmbeddedTestServer());
   }
@@ -145,7 +145,7 @@ class AppApiTest : public ExtensionApiTest {
 class BlockedAppApiTest : public AppApiTest {
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ExtensionApiTest::SetUpCommandLine(command_line);
+    extensions::ExtensionApiTest::SetUpCommandLine(command_line);
     base::CommandLine::ForCurrentProcess()->AppendSwitch(
         extensions::switches::kAllowHTTPBackgroundPage);
   }
@@ -313,8 +313,9 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, AppProcessBackgroundInstances) {
 #define MAYBE_BookmarkAppGetsNormalProcess BookmarkAppGetsNormalProcess
 #endif
 IN_PROC_BROWSER_TEST_F(AppApiTest, MAYBE_BookmarkAppGetsNormalProcess) {
-  ExtensionService* service = extensions::ExtensionSystem::Get(
-      browser()->profile())->extension_service();
+  extensions::ExtensionService* service =
+      extensions::ExtensionSystem::Get(browser()->profile())
+          ->extension_service();
   extensions::ProcessMap* process_map =
       extensions::ProcessMap::Get(browser()->profile());
 
@@ -519,8 +520,12 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ReloadIntoAppProcess) {
   ui_test_utils::NavigateToURL(browser(), base_url.Resolve("path1/empty.html"));
   LOG(INFO) << "Navigate to path1/empty.html - done.";
   WebContents* contents = browser()->tab_strip_model()->GetWebContentsAt(0);
+  const content::NavigationController& controller = contents->GetController();
   EXPECT_FALSE(
       process_map->Contains(contents->GetMainFrame()->GetProcess()->GetID()));
+  // The test starts with about:blank, then navigates to path1/empty.html,
+  // so there should be two entries.
+  EXPECT_EQ(2, controller.GetEntryCount());
 
   // Enable app and reload the page.
   LOG(INFO) << "Enabling extension.";
@@ -537,6 +542,9 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ReloadIntoAppProcess) {
   LOG(INFO) << "Reloading - done.";
   EXPECT_TRUE(
       process_map->Contains(contents->GetMainFrame()->GetProcess()->GetID()));
+  // Reloading, even with changing SiteInstance/process should not add any
+  // more entries.
+  EXPECT_EQ(2, controller.GetEntryCount());
 
   // Disable app and reload the page.
   LOG(INFO) << "Disabling extension.";
@@ -553,6 +561,7 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, ReloadIntoAppProcess) {
   LOG(INFO) << "Reloading - done.";
   EXPECT_FALSE(
       process_map->Contains(contents->GetMainFrame()->GetProcess()->GetID()));
+  EXPECT_EQ(2, controller.GetEntryCount());
 }
 
 // Ensure that reloading a URL with JavaScript after installing or uninstalling
@@ -740,20 +749,17 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, OpenWebPopupFromWebIframe) {
                                             ->GetProcess();
   EXPECT_TRUE(process_map->Contains(process->GetID()));
 
-  // Popup window should be in the app's process if site isolation is off;
-  // otherwise they should be in different processes.
+  // Popup window should be in the app's process.
   const BrowserList* active_browser_list = BrowserList::GetInstance();
   EXPECT_EQ(2U, active_browser_list->size());
   content::WebContents* popup_contents =
       active_browser_list->get(1)->tab_strip_model()->GetActiveWebContents();
   content::WaitForLoadStop(popup_contents);
 
-  bool should_be_in_same_process = !content::AreAllSitesIsolatedForTesting();
   content::RenderProcessHost* popup_process =
       popup_contents->GetMainFrame()->GetProcess();
-  EXPECT_EQ(should_be_in_same_process, process == popup_process);
-  EXPECT_EQ(should_be_in_same_process,
-            process_map->Contains(popup_process->GetID()));
+  EXPECT_EQ(process, popup_process);
+  EXPECT_TRUE(process_map->Contains(popup_process->GetID()));
 }
 
 // http://crbug.com/118502
@@ -837,17 +843,15 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, NavigatePopupFromAppToOutsideApp) {
       base::StringPrintf("location = '%s';", non_app_url.spec().c_str())));
   observer.Wait();
 
-  // The popup will stay in the same SiteInstance, unless we are in
-  // --site-per-process mode, in which case it will go into a new related
-  // SiteInstance.  Either case will allow postMessage to still work.
+  // The popup will stay in the same SiteInstance, even in
+  // --site-per-process mode, because the popup is still same-site with its
+  // opener.  Staying in same SiteInstance implies that postMessage will still
+  // work.
   EXPECT_TRUE(
       app_instance->IsRelatedSiteInstance(popup_contents->GetSiteInstance()));
-  if (content::AreAllSitesIsolatedForTesting())
-    EXPECT_NE(app_instance, popup_contents->GetSiteInstance());
-  else
-    EXPECT_EQ(app_instance, popup_contents->GetSiteInstance());
+  EXPECT_EQ(app_instance, popup_contents->GetSiteInstance());
 
-  // Go back to app process in the popup.
+  // Go back in the popup.
   {
     content::TestNavigationObserver observer(popup_contents);
     popup_contents->GetController().GoBack();
@@ -855,11 +859,38 @@ IN_PROC_BROWSER_TEST_F(AppApiTest, NavigatePopupFromAppToOutsideApp) {
     EXPECT_EQ(app_instance, popup_contents->GetSiteInstance());
   }
 
-  // Do a browser-initiated navigation in the popup to a URL outside the app.
-  // This should swap BrowsingInstances.
+  // Do a browser-initiated navigation in the popup to a same-site URL outside
+  // the app.
+  // TODO(alexmos): This could swap BrowsingInstances, since a
+  // browser-initiated navigation breaks the scripting relationship between the
+  // popup and the app, but it currently does not, since we keep the scripting
+  // relationship regardless of whether the navigation is browser or
+  // renderer-initiated (see https://crbug.com/828720).  Consider changing
+  // this in the future as part of https://crbug.com/718516.
   {
     content::TestNavigationObserver observer(popup_contents);
     ui_test_utils::NavigateToURL(active_browser_list->get(1), non_app_url);
+    observer.Wait();
+    EXPECT_EQ(app_instance, popup_contents->GetSiteInstance());
+    EXPECT_TRUE(
+        app_instance->IsRelatedSiteInstance(popup_contents->GetSiteInstance()));
+  }
+
+  // Go back in the popup.
+  {
+    content::TestNavigationObserver observer(popup_contents);
+    popup_contents->GetController().GoBack();
+    observer.Wait();
+    EXPECT_EQ(app_instance, popup_contents->GetSiteInstance());
+  }
+
+  // Do a browser-initiated navigation in the popup to a cross-site URL outside
+  // the app.  This should swap BrowsingInstances.
+  {
+    content::TestNavigationObserver observer(popup_contents);
+    GURL cross_site_url(
+        embedded_test_server()->GetURL("foo.com", "/title1.html"));
+    ui_test_utils::NavigateToURL(active_browser_list->get(1), cross_site_url);
     observer.Wait();
     EXPECT_NE(app_instance, popup_contents->GetSiteInstance());
     EXPECT_FALSE(

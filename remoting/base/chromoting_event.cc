@@ -13,6 +13,13 @@ namespace remoting {
 
 namespace {
 
+const NameMapElement<ChromotingEvent::AuthMethod> kAuthMethodNames[]{
+    {ChromotingEvent::AuthMethod::PIN, "pin"},
+    {ChromotingEvent::AuthMethod::ACCESS_CODE, "access-code"},
+    {ChromotingEvent::AuthMethod::PINLESS, "pinless"},
+    {ChromotingEvent::AuthMethod::THIRD_PARTY, "third-party"},
+};
+
 const NameMapElement<ChromotingEvent::ConnectionError> kConnectionErrorNames[]{
     {ChromotingEvent::ConnectionError::NONE, "none"},
     {ChromotingEvent::ConnectionError::HOST_OFFLINE, "host-offline"},
@@ -57,6 +64,7 @@ const NameMapElement<ChromotingEvent::Os> kOsNames[] = {
     {ChromotingEvent::Os::CHROMOTING_CHROMEOS, "chromeos"},
     {ChromotingEvent::Os::CHROMOTING_MAC, "mac"},
     {ChromotingEvent::Os::CHROMOTING_WINDOWS, "windows"},
+    {ChromotingEvent::Os::OTHER, "other"},
     {ChromotingEvent::Os::CHROMOTING_ANDROID, "android"},
     {ChromotingEvent::Os::CHROMOTING_IOS, "ios"},
 };
@@ -84,6 +92,7 @@ const NameMapElement<ChromotingEvent::SessionState> kSessionStateNames[]{
 
 }  // namespace
 
+const char ChromotingEvent::kAuthMethodKey[] = "auth_method";
 const char ChromotingEvent::kCaptureLatencyKey[] = "capture_latency";
 const char ChromotingEvent::kConnectionErrorKey[] = "connection_error";
 const char ChromotingEvent::kConnectionTypeKey[] = "connection_type";
@@ -107,6 +116,7 @@ const char ChromotingEvent::kRenderLatencyKey[] = "render_latency";
 const char ChromotingEvent::kRoleKey[] = "role";
 const char ChromotingEvent::kRoundtripLatencyKey[] = "roundtrip_latency";
 const char ChromotingEvent::kSessionDurationKey[] = "session_duration";
+const char ChromotingEvent::kSessionEntryPointKey[] = "session_entry_point";
 const char ChromotingEvent::kSessionIdKey[] = "session_id";
 const char ChromotingEvent::kSessionStateKey[] = "session_state";
 const char ChromotingEvent::kTypeKey[] = "type";
@@ -162,6 +172,17 @@ void ChromotingEvent::SetDouble(const std::string& key, double value) {
   values_map_->SetDouble(key, value);
 }
 
+bool ChromotingEvent::IsDataValid() {
+  const base::Value* auth_method = values_map_->FindKey(kAuthMethodKey);
+  if (auth_method &&
+      auth_method->GetInt() == static_cast<int>(AuthMethod::NOT_SET)) {
+    return false;
+  }
+  // TODO(yuweih): We may add other checks.
+
+  return true;
+}
+
 void ChromotingEvent::AddSystemInfo() {
   SetString(kCpuKey, base::SysInfo::OperatingSystemArchitecture());
   SetString(kOsVersionKey, base::SysInfo::OperatingSystemVersion());
@@ -215,6 +236,12 @@ ChromotingEvent::Os ChromotingEvent::ParseOsFromString(const std::string& os) {
   }
 
   return result;
+}
+
+// static
+template <>
+const char* ChromotingEvent::EnumToString(AuthMethod value) {
+  return ValueToName(kAuthMethodNames, value);
 }
 
 // static

@@ -5,9 +5,9 @@
 
 #include "base/logging.h"
 #include "base/strings/utf_string_conversions.h"
-#include "third_party/WebKit/public/platform/WebMediaStream.h"
-#include "third_party/WebKit/public/platform/WebRTCRtpReceiver.h"
-#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/blink/public/platform/web_media_stream.h"
+#include "third_party/blink/public/platform/web_rtc_rtp_receiver.h"
+#include "third_party/blink/public/platform/web_string.h"
 
 using testing::_;
 
@@ -20,14 +20,13 @@ MockWebRTCPeerConnectionHandlerClient()
       .WillByDefault(
           testing::Invoke(this, &MockWebRTCPeerConnectionHandlerClient::
                                     didGenerateICECandidateWorker));
-  ON_CALL(*this, DidAddRemoteTrackForMock(_))
+  ON_CALL(*this, DidAddReceiverPlanBForMock(_))
+      .WillByDefault(testing::Invoke(
+          this, &MockWebRTCPeerConnectionHandlerClient::didAddReceiverWorker));
+  ON_CALL(*this, DidRemoveReceiverPlanBForMock(_))
       .WillByDefault(testing::Invoke(
           this,
-          &MockWebRTCPeerConnectionHandlerClient::didAddRemoteTrackWorker));
-  ON_CALL(*this, DidRemoveRemoteTrackForMock(_))
-      .WillByDefault(testing::Invoke(
-          this,
-          &MockWebRTCPeerConnectionHandlerClient::didRemoveRemoteTrackWorker));
+          &MockWebRTCPeerConnectionHandlerClient::didRemoveReceiverWorker));
 }
 
 MockWebRTCPeerConnectionHandlerClient::
@@ -40,17 +39,17 @@ void MockWebRTCPeerConnectionHandlerClient::didGenerateICECandidateWorker(
   candidate_mid_ = candidate->SdpMid().Utf8();
 }
 
-void MockWebRTCPeerConnectionHandlerClient::didAddRemoteTrackWorker(
+void MockWebRTCPeerConnectionHandlerClient::didAddReceiverWorker(
     std::unique_ptr<blink::WebRTCRtpReceiver>* web_rtp_receiver) {
-  blink::WebVector<blink::WebMediaStream> web_streams =
-      (*web_rtp_receiver)->Streams();
-  DCHECK_EQ(1u, web_streams.size());
-  remote_stream_ = web_streams[0];
+  blink::WebVector<blink::WebString> stream_ids =
+      (*web_rtp_receiver)->StreamIds();
+  DCHECK_EQ(1u, stream_ids.size());
+  remote_stream_id_ = stream_ids[0];
 }
 
-void MockWebRTCPeerConnectionHandlerClient::didRemoveRemoteTrackWorker(
+void MockWebRTCPeerConnectionHandlerClient::didRemoveReceiverWorker(
     std::unique_ptr<blink::WebRTCRtpReceiver>* web_rtp_receiver) {
-  remote_stream_.Reset();
+  remote_stream_id_ = blink::WebString();
 }
 
 }  // namespace content

@@ -13,7 +13,6 @@
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
-#include "chrome/browser/web_applications/web_app.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_handle.h"
@@ -110,6 +109,16 @@ BookmarkAppNavigationThrottle::OpenForegroundTabIfOutOfScope(bool is_redirect) {
     RecordBookmarkAppNavigationThrottleResult(
         BookmarkAppNavigationThrottleResult::kProceedInAppSameScope);
 
+    return content::NavigationThrottle::PROCEED;
+  }
+
+  if (source->GetController().IsInitialNavigation()) {
+    DVLOG(1) << "In-app initial navigation to out-of-scope URL. "
+             << "Opening in popup.";
+    RecordBookmarkAppNavigationThrottleResult(
+        BookmarkAppNavigationThrottleResult::
+            kReparentIntoPopupProceedOutOfScopeInitialNavigation);
+    ReparentIntoPopup(source, navigation_handle()->HasUserGesture());
     return content::NavigationThrottle::PROCEED;
   }
 

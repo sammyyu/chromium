@@ -8,7 +8,8 @@
 
 #include <utility>
 
-#import "base/mac/bind_objc_block.h"
+#include "base/bind.h"
+#include "base/command_line.h"
 #include "base/mac/foundation_util.h"
 #include "base/mac/scoped_nsobject.h"
 #include "base/strings/sys_string_conversions.h"
@@ -16,6 +17,9 @@
 #include "components/crash/core/common/crash_key.h"
 #import "ui/base/cocoa/constrained_window/constrained_window_animation.h"
 #import "ui/base/cocoa/window_size_constants.h"
+#include "ui/base/ui_base_switches.h"
+#include "ui/display/display.h"
+#include "ui/display/screen.h"
 #include "ui/gfx/font_list.h"
 #import "ui/gfx/mac/coordinate_conversion.h"
 #import "ui/gfx/mac/nswindow_frame_controls.h"
@@ -45,6 +49,11 @@
 
 namespace views {
 namespace {
+
+bool AreModalAnimationsEnabled() {
+  return !base::CommandLine::ForCurrentProcess()->HasSwitch(
+      switches::kDisableModalAnimations);
+}
 
 NSInteger StyleMaskForParams(const Widget::InitParams& params) {
   // If the Widget is modal, it will be displayed as a sheet. This works best if
@@ -102,7 +111,12 @@ bool NativeWidgetMac::IsWindowModalSheet() const {
              ui::MODAL_TYPE_WINDOW;
 }
 
-void NativeWidgetMac::OnWindowDestroyed() {
+void NativeWidgetMac::WindowDestroying() {
+  OnWindowDestroying(GetNativeWindow());
+  delegate_->OnNativeWidgetDestroying();
+}
+
+void NativeWidgetMac::WindowDestroyed() {
   DCHECK(bridge_);
   bridge_.reset();
   delegate_->OnNativeWidgetDestroyed();
@@ -166,7 +180,10 @@ bool NativeWidgetMac::ShouldWindowContentsBeTransparent() const {
 }
 
 void NativeWidgetMac::FrameTypeChanged() {
-  NOTIMPLEMENTED();
+  // This is called when the Theme has changed; forward the event to the root
+  // widget.
+  GetWidget()->ThemeChanged();
+  GetWidget()->GetRootView()->SchedulePaint();
 }
 
 Widget* NativeWidgetMac::GetWidget() {
@@ -188,7 +205,7 @@ gfx::NativeWindow NativeWidgetMac::GetNativeWindow() const {
 
 Widget* NativeWidgetMac::GetTopLevelWidget() {
   NativeWidgetPrivate* native_widget = GetTopLevelNativeWidget(GetNativeView());
-  return native_widget ? native_widget->GetWidget() : NULL;
+  return native_widget ? native_widget->GetWidget() : nullptr;
 }
 
 const ui::Compositor* NativeWidgetMac::GetCompositor() const {
@@ -245,7 +262,7 @@ bool NativeWidgetMac::HasCapture() const {
 }
 
 ui::InputMethod* NativeWidgetMac::GetInputMethod() {
-  return bridge_ ? bridge_->GetInputMethod() : NULL;
+  return bridge_ ? bridge_->GetInputMethod() : nullptr;
 }
 
 void NativeWidgetMac::CenterWindow(const gfx::Size& size) {
@@ -325,6 +342,24 @@ void NativeWidgetMac::SetBounds(const gfx::Rect& bounds) {
     bridge_->SetBounds(bounds);
 }
 
+void NativeWidgetMac::SetBoundsConstrained(const gfx::Rect& bounds) {
+  if (!bridge_)
+    return;
+
+  gfx::Rect new_bounds(bounds);
+  NativeWidgetPrivate* ancestor =
+      bridge_ && bridge_->parent()
+          ? GetNativeWidgetForNativeWindow(bridge_->parent()->GetNSWindow())
+          : nullptr;
+  if (!ancestor) {
+    new_bounds = ConstrainBoundsToDisplayWorkArea(new_bounds);
+  } else {
+    new_bounds.AdjustToFit(
+        gfx::Rect(ancestor->GetWindowBoundsInScreen().size()));
+  }
+  SetBounds(new_bounds);
+}
+
 void NativeWidgetMac::SetSize(const gfx::Size& size) {
   // Ensure the top-left corner stays in-place (rather than the bottom-left,
   // which -[NSWindow setContentSize:] would do).
@@ -332,11 +367,8 @@ void NativeWidgetMac::SetSize(const gfx::Size& size) {
 }
 
 void NativeWidgetMac::StackAbove(gfx::NativeView native_view) {
-  // NativeWidgetMac currently only has machinery for stacking windows, and only
-  // stacks child windows above parents. That's currently all this is used for.
-  // DCHECK if a new use case comes along.
-  DCHECK(bridge_ && bridge_->parent());
-  DCHECK_EQ([native_view window], bridge_->parent()->GetNSWindow());
+  NSInteger view_parent = native_view.window.windowNumber;
+  [GetNativeWindow() orderWindow:NSWindowAbove relativeTo:view_parent];
 }
 
 void NativeWidgetMac::StackAtTop() {
@@ -360,18 +392,24 @@ void NativeWidgetMac::Close() {
     // sheet has finished animating, it will call sheetDidEnd: on the parent
     // window's delegate. Note it still needs to be asynchronous, since code
     // calling Widget::Close() doesn't expect things to be deleted upon return.
-    [NSApp performSelector:@selector(endSheet:) withObject:window afterDelay:0];
+    // Ensure |window| is retained by a block. Note in some cases during
+    // teardown, [window sheetParent] may be nil.
+    base::ThreadTaskRunnerHandle::Get()->PostTask(
+        FROM_HERE, base::BindOnce(base::RetainBlock(^{
+          [NSApp endSheet:window];
+        })));
     return;
   }
 
   // For other modal types, animate the close.
-  if (bridge_->animate() && delegate_->IsModal()) {
+  if (bridge_->GetAnimate() && AreModalAnimationsEnabled() &&
+      delegate_->IsModal()) {
     [ViewsNSWindowCloseAnimator closeWindowWithAnimation:window];
     return;
   }
 
   // Clear the view early to suppress repaints.
-  bridge_->SetRootView(NULL);
+  bridge_->SetRootView(nullptr);
 
   // Widget::Close() ensures [Non]ClientView::CanClose() returns true, so there
   // is no need to call the NSWindow or its delegate's -windowShouldClose:
@@ -383,9 +421,10 @@ void NativeWidgetMac::Close() {
   // Many tests assume that base::RunLoop().RunUntilIdle() is always sufficient
   // to execute a close. However, in rare cases, -performSelector:..afterDelay:0
   // does not do this. So post a regular task.
-  base::ThreadTaskRunnerHandle::Get()->PostTask(FROM_HERE, base::BindBlock(^{
-    [window close];
-  }));
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::BindOnce(base::RetainBlock(^{
+        [window close];
+      })));
 }
 
 void NativeWidgetMac::CloseNow() {
@@ -524,6 +563,11 @@ void NativeWidgetMac::SetOpacity(float opacity) {
   [GetNativeWindow() setAlphaValue:opacity];
 }
 
+void NativeWidgetMac::SetAspectRatio(const gfx::SizeF& aspect_ratio) {
+  [GetNativeWindow() setContentAspectRatio:NSMakeSize(aspect_ratio.width(),
+                                                      aspect_ratio.height())];
+}
+
 void NativeWidgetMac::FlashFrame(bool flash_frame) {
   NOTIMPLEMENTED();
 }
@@ -590,7 +634,7 @@ void NativeWidgetMac::EndMoveLoop() {
 
 void NativeWidgetMac::SetVisibilityChangedAnimationsEnabled(bool value) {
   if (bridge_)
-    bridge_->set_animate(value);
+    bridge_->SetAnimate(value);
 }
 
 void NativeWidgetMac::SetVisibilityAnimationDuration(
@@ -661,12 +705,6 @@ void Widget::CloseAllSecondaryWidgets() {
   }
 }
 
-bool Widget::ConvertRect(const Widget* source,
-                         const Widget* target,
-                         gfx::Rect* rect) {
-  return false;
-}
-
 const ui::NativeTheme* Widget::GetNativeTheme() const {
   return ui::NativeTheme::GetInstanceForNativeUi();
 }
@@ -697,7 +735,7 @@ NativeWidgetPrivate* NativeWidgetPrivate::GetNativeWidgetForNativeWindow(
         base::mac::ObjCCastStrict<ViewsNSWindowDelegate>(window_delegate);
     return [delegate nativeWidgetMac];
   }
-  return NULL;  // Not created by NativeWidgetMac.
+  return nullptr;  // Not created by NativeWidgetMac.
 }
 
 // static

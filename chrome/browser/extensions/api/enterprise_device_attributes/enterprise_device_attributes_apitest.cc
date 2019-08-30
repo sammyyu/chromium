@@ -18,12 +18,13 @@
 #include "chromeos/dbus/fake_session_manager_client.h"
 #include "chromeos/system/fake_statistics_provider.h"
 #include "chromeos/system/statistics_provider.h"
+#include "components/account_id/account_id.h"
 #include "components/policy/core/common/cloud/device_management_service.h"
 #include "components/policy/core/common/mock_configuration_policy_provider.h"
 #include "components/policy/policy_constants.h"
 #include "components/prefs/pref_service.h"
-#include "components/signin/core/account_id/account_id.h"
 #include "components/user_manager/user_manager.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/api_test_utils.h"
@@ -83,7 +84,7 @@ class EnterpriseDeviceAttributesTest :
  public:
   EnterpriseDeviceAttributesTest() {
     fake_statistics_provider_.SetMachineStatistic(
-        chromeos::system::kSerialNumberKey, kSerialNumber);
+        chromeos::system::kSerialNumberKeyForTest, kSerialNumber);
     set_exit_when_last_browser_closes(false);
     set_chromeos_user_ = false;
   }
@@ -118,8 +119,8 @@ class EnterpriseDeviceAttributesTest :
     }
     policy::UserPolicyBuilder user_policy;
     policy::affiliation_test_helper::SetUserAffiliationIDs(
-        &user_policy, fake_session_manager_client,
-        affiliated_account_id_.GetUserEmail(), user_affiliation_ids);
+        &user_policy, fake_session_manager_client, affiliated_account_id_,
+        user_affiliation_ids);
 
     // Set up fake install attributes.
     std::unique_ptr<chromeos::StubInstallAttributes> attributes =

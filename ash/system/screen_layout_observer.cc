@@ -8,15 +8,14 @@
 #include <utility>
 #include <vector>
 
-#include "ash/display/screen_orientation_controller_chromeos.h"
+#include "ash/display/screen_orientation_controller.h"
 #include "ash/metrics/user_metrics_action.h"
 #include "ash/metrics/user_metrics_recorder.h"
-#include "ash/resources/grit/ash_resources.h"
 #include "ash/resources/vector_icons/vector_icons.h"
 #include "ash/session/session_controller.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
-#include "ash/system/tray/system_tray_controller.h"
+#include "ash/system/model/system_tray_model.h"
 #include "ash/system/tray/tray_constants.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/bind.h"
@@ -75,8 +74,9 @@ void OnNotificationClicked(base::Optional<int> button_index) {
   Shell::Get()->metrics()->RecordUserMetricsAction(
       UMA_STATUS_AREA_DISPLAY_NOTIFICATION_SELECTED);
   // Settings may be blocked, e.g. at the lock screen.
-  if (Shell::Get()->session_controller()->ShouldEnableSettings()) {
-    Shell::Get()->system_tray_controller()->ShowDisplaySettings();
+  if (Shell::Get()->session_controller()->ShouldEnableSettings() &&
+      Shell::Get()->system_tray_model()->client_ptr()) {
+    Shell::Get()->system_tray_model()->client_ptr()->ShowDisplaySettings();
     Shell::Get()->metrics()->RecordUserMetricsAction(
         UMA_STATUS_AREA_DISPLAY_NOTIFICATION_SHOW_SETTINGS);
   }
@@ -376,7 +376,6 @@ void ScreenLayoutObserver::CreateOrUpdateNotification(
               base::Bind(&OnNotificationClicked)),
           kNotificationScreenIcon,
           message_center::SystemNotificationWarningLevel::NORMAL);
-  notification->set_clickable(true);
   notification->set_priority(message_center::SYSTEM_PRIORITY);
 
   Shell::Get()->metrics()->RecordUserMetricsAction(

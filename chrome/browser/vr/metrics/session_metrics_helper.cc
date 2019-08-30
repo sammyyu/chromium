@@ -282,6 +282,55 @@ void SessionMetricsHelper::UpdateMode() {
     SetVrMode(mode);
 }
 
+void SessionMetricsHelper::RecordVrStartAction(VrStartAction action) {
+  if (!page_session_tracker_ || mode_ == Mode::kNoVr) {
+    pending_page_session_start_action_ = action;
+  } else {
+    LogVrStartAction(action);
+  }
+}
+
+void SessionMetricsHelper::RecordPresentationStartAction(
+    PresentationStartAction action) {
+  if (!presentation_session_tracker_ || mode_ != Mode::kWebXrVrPresentation) {
+    pending_presentation_start_action_ = action;
+  } else {
+    LogPresentationStartAction(action);
+  }
+}
+
+void SessionMetricsHelper::ReportRequestPresent() {
+  // If we're not in VR, log this as an entry into VR from 2D.
+  if (mode_ == Mode::kNoVr) {
+    RecordVrStartAction(VrStartAction::kPresentationRequest);
+    RecordPresentationStartAction(
+        PresentationStartAction::kRequestFrom2dBrowsing);
+  } else {
+    RecordPresentationStartAction(
+        PresentationStartAction::kRequestFromVrBrowsing);
+  }
+}
+
+void SessionMetricsHelper::LogVrStartAction(VrStartAction action) {
+  DCHECK(page_session_tracker_);
+
+  UMA_HISTOGRAM_ENUMERATION("XR.VRSession.StartAction", action);
+  if (action == VrStartAction::kHeadsetActivation ||
+      action == VrStartAction::kPresentationRequest) {
+    page_session_tracker_->ukm_entry()->SetEnteredVROnPageReason(
+        static_cast<int>(action));
+  }
+}
+
+void SessionMetricsHelper::LogPresentationStartAction(
+    PresentationStartAction action) {
+  DCHECK(presentation_session_tracker_);
+
+  UMA_HISTOGRAM_ENUMERATION("XR.WebXR.PresentationSession", action);
+
+  presentation_session_tracker_->ukm_entry()->SetStartAction(action);
+}
+
 void SessionMetricsHelper::SetWebVREnabled(bool is_webvr_presenting) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
@@ -300,8 +349,10 @@ void SessionMetricsHelper::RecordVoiceSearchStarted() {
   num_voice_search_started_++;
 }
 
-void SessionMetricsHelper::RecordUrlRequestedByVoice(GURL url) {
-  url_requested_by_voice_ = url;
+void SessionMetricsHelper::RecordUrlRequested(GURL url,
+                                              NavigationMethod method) {
+  last_requested_url_ = url;
+  last_url_request_method_ = method;
 }
 
 void SessionMetricsHelper::SetVrMode(Mode new_mode) {
@@ -379,6 +430,10 @@ void SessionMetricsHelper::OnEnterAnyVr() {
       std::make_unique<SessionTracker<ukm::builders::XR_PageSession>>(
           std::make_unique<ukm::builders::XR_PageSession>(
               ukm::GetSourceIdForWebContentsDocument(web_contents())));
+  if (pending_page_session_start_action_) {
+    LogVrStartAction(*pending_page_session_start_action_);
+    pending_page_session_start_action_ = base::nullopt;
+  }
 }
 
 void SessionMetricsHelper::OnExitAllVr() {
@@ -437,6 +492,13 @@ void SessionMetricsHelper::OnEnterPresentation() {
       SessionTracker<ukm::builders::XR_WebXR_PresentationSession>>(
       std::make_unique<ukm::builders::XR_WebXR_PresentationSession>(
           ukm::GetSourceIdForWebContentsDocument(web_contents())));
+
+  if (!pending_presentation_start_action_) {
+    pending_presentation_start_action_ = PresentationStartAction::kOther;
+  }
+
+  LogPresentationStartAction(*pending_presentation_start_action_);
+  pending_presentation_start_action_ = base::nullopt;
 }
 
 void SessionMetricsHelper::OnExitPresentation() {
@@ -556,21 +618,38 @@ void SessionMetricsHelper::DidFinishNavigation(
         std::make_unique<SessionTracker<ukm::builders::XR_PageSession>>(
             std::make_unique<ukm::builders::XR_PageSession>(
                 ukm::GetSourceIdForWebContentsDocument(web_contents())));
+    if (pending_page_session_start_action_) {
+      LogVrStartAction(*pending_page_session_start_action_);
+      pending_page_session_start_action_ = base::nullopt;
+    }
 
     // Check that the completed navigation is indeed the one that was requested
-    // by voice, in case that one was incomplete and another was begun. Check
-    // against the first entry for the navigation, as redirects might have
-    // changed what the URL looks like.
-    if (url_requested_by_voice_ == handle->GetRedirectChain().front()) {
-      page_session_tracker_->ukm_entry()->SetWasVoiceSearchNavigation(1);
+    // by either voice or omnibox entry, in case the requested navigation was
+    // incomplete when another was begun. Check against the first entry for the
+    // navigation, as redirects might have changed what the URL looks like.
+    if (last_requested_url_ == handle->GetRedirectChain().front()) {
+      switch (last_url_request_method_) {
+        case kOmniboxUrlEntry:
+        case kOmniboxSuggestionSelected:
+          page_session_tracker_->ukm_entry()->SetWasOmniboxNavigation(1);
+          break;
+        case kVoiceSearch:
+          page_session_tracker_->ukm_entry()->SetWasVoiceSearchNavigation(1);
+          break;
+      }
     }
-    url_requested_by_voice_ = GURL();
+    last_requested_url_ = GURL();
 
     if (mode_ == Mode::kWebXrVrPresentation) {
       presentation_session_tracker_ = std::make_unique<
           SessionTracker<ukm::builders::XR_WebXR_PresentationSession>>(
           std::make_unique<ukm::builders::XR_WebXR_PresentationSession>(
               ukm::GetSourceIdForWebContentsDocument(web_contents())));
+      if (pending_presentation_start_action_) {
+        presentation_session_tracker_->ukm_entry()->SetStartAction(
+            *pending_presentation_start_action_);
+        pending_presentation_start_action_ = base::nullopt;
+      }
     }
 
     num_session_navigation_++;

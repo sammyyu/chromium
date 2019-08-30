@@ -13,7 +13,6 @@
 #include "base/strings/stringprintf.h"
 #include "base/test/test_simple_task_runner.h"
 #include "headless/public/internal/headless_devtools_client_impl.h"
-#include "headless/public/util/testing/mock_devtools_agent_host.h"
 #include "headless/public/util/virtual_time_controller.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -23,6 +22,15 @@ namespace headless {
 namespace {
 static constexpr base::TimeDelta kAnimationFrameInterval =
     base::TimeDelta::FromMilliseconds(16);
+
+class MockChannel : public HeadlessDevToolsChannel {
+ public:
+  MockChannel() {}
+  ~MockChannel() override {}
+  MOCK_METHOD1(SetClient, void(HeadlessDevToolsChannel::Client*));
+  MOCK_METHOD1(SendProtocolMessage, void(const std::string&));
+};
+
 }  // namespace
 
 using testing::_;
@@ -42,7 +50,7 @@ class TestVirtualTimeController : public VirtualTimeController {
   MOCK_METHOD1(RemoveObserver, void(Observer* observer));
   MOCK_METHOD1(SetResumeDeferrer, void(ResumeDeferrer* deferrer));
 
-  MOCK_CONST_METHOD0(GetVirtualTimeBase, base::Time());
+  MOCK_CONST_METHOD0(GetVirtualTimeBase, base::TimeTicks());
   MOCK_CONST_METHOD0(GetCurrentVirtualTimeOffset, base::TimeDelta());
 };
 
@@ -50,12 +58,11 @@ class CompositorControllerTest : public ::testing::Test {
  protected:
   CompositorControllerTest(bool update_display_for_animations = true) {
     task_runner_ = base::MakeRefCounted<base::TestSimpleTaskRunner>();
+    auto channel = std::make_unique<MockChannel>();
+    mock_channel_ = channel.get();
+    client_.AttachToChannel(std::move(channel));
     client_.SetTaskRunnerForTests(task_runner_);
-    mock_host_ = base::MakeRefCounted<MockDevToolsAgentHost>();
 
-    EXPECT_CALL(*mock_host_, IsAttached()).WillOnce(Return(false));
-    EXPECT_CALL(*mock_host_, AttachClient(&client_));
-    client_.AttachToHost(mock_host_.get());
     virtual_time_controller_ =
         std::make_unique<TestVirtualTimeController>(&client_);
     EXPECT_CALL(*virtual_time_controller_,
@@ -77,27 +84,25 @@ class CompositorControllerTest : public ::testing::Test {
 
   void ExpectHeadlessExperimentalEnable() {
     last_command_id_ += 2;
-    EXPECT_CALL(*mock_host_,
-                DispatchProtocolMessage(
-                    &client_,
-                    base::StringPrintf(
-                        "{\"id\":%d,\"method\":\"HeadlessExperimental.enable\","
-                        "\"params\":{}}",
-                        last_command_id_)))
-        .WillOnce(Return(true));
+    EXPECT_CALL(*mock_channel_,
+                SendProtocolMessage(base::StringPrintf(
+                    "{\"id\":%d,\"method\":\"HeadlessExperimental.enable\","
+                    "\"params\":{}}",
+                    last_command_id_)));
   }
 
   void ExpectVirtualTime(double base, double offset) {
-    auto base_time = base::Time::FromJsTime(base);
+    auto base_time_ticks =
+        base::TimeTicks() + base::TimeDelta::FromMillisecondsD(base);
     auto offset_delta = base::TimeDelta::FromMilliseconds(offset);
     EXPECT_CALL(*virtual_time_controller_, GetVirtualTimeBase())
-        .WillOnce(Return(base_time));
+        .WillOnce(Return(base_time_ticks));
     EXPECT_CALL(*virtual_time_controller_, GetCurrentVirtualTimeOffset())
         .WillOnce(Return(offset_delta));
 
     // Next BeginFrame's time should be the virtual time provided it has
     // progressed.
-    base::Time virtual_time = base_time + offset_delta;
+    base::TimeTicks virtual_time = base_time_ticks + offset_delta;
     if (virtual_time > next_begin_frame_time_)
       next_begin_frame_time_ = virtual_time;
   }
@@ -107,11 +112,12 @@ class CompositorControllerTest : public ::testing::Test {
                             screenshot_params = nullptr) {
     last_command_id_ += 2;
     base::DictionaryValue params;
-    auto builder =
-        std::move(headless_experimental::BeginFrameParams::Builder()
-                      .SetFrameTime(next_begin_frame_time_.ToJsTime())
-                      .SetInterval(kAnimationFrameInterval.InMillisecondsF())
-                      .SetNoDisplayUpdates(no_display_updates));
+    auto builder = std::move(
+        headless_experimental::BeginFrameParams::Builder()
+            .SetFrameTimeTicks(
+                (next_begin_frame_time_ - base::TimeTicks()).InMillisecondsF())
+            .SetInterval(kAnimationFrameInterval.InMillisecondsF())
+            .SetNoDisplayUpdates(no_display_updates));
     if (screenshot_params)
       builder.SetScreenshot(std::move(screenshot_params));
     // Subsequent BeginFrames should have a later timestamp.
@@ -121,15 +127,11 @@ class CompositorControllerTest : public ::testing::Test {
     auto params_value = builder.Build()->Serialize();
     base::JSONWriter::Write(*params_value, &params_json);
 
-    EXPECT_CALL(
-        *mock_host_,
-        DispatchProtocolMessage(
-            &client_,
-            base::StringPrintf(
-                "{\"id\":%d,\"method\":\"HeadlessExperimental.beginFrame\","
-                "\"params\":%s}",
-                last_command_id_, params_json.c_str())))
-        .WillOnce(Return(true));
+    EXPECT_CALL(*mock_channel_,
+                SendProtocolMessage(base::StringPrintf(
+                    "{\"id\":%d,\"method\":\"HeadlessExperimental.beginFrame\","
+                    "\"params\":%s}",
+                    last_command_id_, params_json.c_str())));
   }
 
   void SendBeginFrameReply(bool has_damage,
@@ -143,15 +145,13 @@ class CompositorControllerTest : public ::testing::Test {
     auto result_value = result->Serialize();
     base::JSONWriter::Write(*result_value, &result_json);
 
-    client_.DispatchProtocolMessage(
-        mock_host_.get(),
-        base::StringPrintf("{\"id\":%d,\"result\":%s}", last_command_id_,
-                           result_json.c_str()));
+    client_.ReceiveProtocolMessage(base::StringPrintf(
+        "{\"id\":%d,\"result\":%s}", last_command_id_, result_json.c_str()));
+    task_runner_->RunPendingTasks();
   }
 
   void SendNeedsBeginFramesEvent(bool needs_begin_frames) {
-    client_.DispatchProtocolMessage(
-        mock_host_.get(),
+    client_.ReceiveProtocolMessage(
         base::StringPrintf("{\"method\":\"HeadlessExperimental."
                            "needsBeginFramesChanged\",\"params\":{"
                            "\"needsBeginFrames\":%s}}",
@@ -161,16 +161,16 @@ class CompositorControllerTest : public ::testing::Test {
   }
 
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
-  scoped_refptr<MockDevToolsAgentHost> mock_host_;
   HeadlessDevToolsClientImpl client_;
+  MockChannel* mock_channel_ = nullptr;
   std::unique_ptr<TestVirtualTimeController> virtual_time_controller_;
   std::unique_ptr<CompositorController> controller_;
   int last_command_id_ = -2;
   TestVirtualTimeController::RepeatingTask* task_ = nullptr;
   TestVirtualTimeController::Observer* observer_ = nullptr;
   TestVirtualTimeController::ResumeDeferrer* deferrer_ = nullptr;
-  base::Time next_begin_frame_time_ =
-      base::Time::UnixEpoch() + base::TimeDelta::FromMicroseconds(1);
+  base::TimeTicks next_begin_frame_time_ =
+      base::TimeTicks() + base::TimeDelta::FromMicroseconds(1);
 };
 
 TEST_F(CompositorControllerTest, CaptureScreenshot) {

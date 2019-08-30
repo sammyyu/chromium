@@ -83,11 +83,12 @@ void ExtensionWebContentsObserver::InitializeRenderFrame(
     return;
 
   // |render_frame_host->GetProcess()| is an extension process. Grant permission
-  // to commit pages from chrome-extension:// origins.
+  // to request pages from the extension's origin.
   content::ChildProcessSecurityPolicy* security_policy =
       content::ChildProcessSecurityPolicy::GetInstance();
   int process_id = render_frame_host->GetProcess()->GetID();
-  security_policy->GrantScheme(process_id, extensions::kExtensionScheme);
+  security_policy->GrantRequestOrigin(
+      process_id, url::Origin::Create(frame_extension->url()));
 
   // Notify the render frame of the view type.
   render_frame_host->Send(new ExtensionMsg_NotifyRenderViewType(
@@ -133,7 +134,7 @@ void ExtensionWebContentsObserver::RenderFrameCreated(
       type == Manifest::TYPE_LEGACY_PACKAGED_APP) {
     ExtensionPrefs* prefs = ExtensionPrefs::Get(browser_context_);
     if (prefs->AllowFileAccess(extension->id())) {
-      content::ChildProcessSecurityPolicy::GetInstance()->GrantScheme(
+      content::ChildProcessSecurityPolicy::GetInstance()->GrantRequestScheme(
           render_frame_host->GetProcess()->GetID(), url::kFileScheme);
     }
   }
@@ -169,9 +170,24 @@ void ExtensionWebContentsObserver::RenderFrameHostChanged(
   }
 }
 
+void ExtensionWebContentsObserver::ReadyToCommitNavigation(
+    content::NavigationHandle* navigation_handle) {
+  if (navigation_handle->IsInMainFrame() &&
+      !navigation_handle->IsSameDocument()) {
+    ExtensionApiFrameIdMap::Get()->OnMainFrameReadyToCommitNavigation(
+        navigation_handle);
+  }
+}
+
 void ExtensionWebContentsObserver::DidFinishNavigation(
     content::NavigationHandle* navigation_handle) {
   DCHECK(initialized_);
+  if (navigation_handle->IsInMainFrame() &&
+      !navigation_handle->IsSameDocument()) {
+    ExtensionApiFrameIdMap::Get()->OnMainFrameDidFinishNavigation(
+        navigation_handle);
+  }
+
   if (!navigation_handle->HasCommitted())
     return;
 
@@ -179,6 +195,8 @@ void ExtensionWebContentsObserver::DidFinishNavigation(
 
   content::RenderFrameHost* render_frame_host =
       navigation_handle->GetRenderFrameHost();
+  DCHECK(render_frame_host);
+
   const Extension* frame_extension =
       GetExtensionFromFrame(render_frame_host, true);
   if (pm->IsRenderFrameHostRegistered(render_frame_host)) {

@@ -16,7 +16,7 @@
 #import "ios/chrome/browser/ui/history_popup/requirements/tab_history_ui_updater.h"
 #import "ios/chrome/browser/ui/history_popup/tab_history_popup_controller.h"
 #include "ios/chrome/browser/ui/rtl_geometry.h"
-#import "ios/chrome/browser/ui/toolbar/public/toolbar_controller_base_feature.h"
+#import "ios/chrome/browser/ui/toolbar/public/features.h"
 #include "ios/chrome/browser/ui/ui_util.h"
 #import "ios/chrome/browser/ui/util/named_guide.h"
 #include "ios/web/public/navigation_item.h"
@@ -70,12 +70,6 @@ using base::UserMetricsAction;
 
   CGPoint origin = CGPointZero;
   origin = [self popupOriginForNamedGuide:kBackButtonGuide];
-
-  if (IsUIRefreshPhase1Enabled() && origin.y > 200) {
-    // TODO(crbug.com/804772): Remove this workaround once the new navigation
-    // menu popup can be presented from the bottom back/forward arrows.
-    origin.y -= 100;
-  }
 
   [self.tabHistoryUIUpdater
       updateUIForTabHistoryPresentationFrom:ToolbarButtonTypeBack];

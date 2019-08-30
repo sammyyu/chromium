@@ -19,7 +19,7 @@ std::string DumpEvents(AXEventGenerator* generator) {
   std::vector<std::string> event_strs;
   for (auto targeted_event : *generator) {
     const char* event_name;
-    switch (targeted_event.event) {
+    switch (targeted_event.event_params.event) {
       case AXEventGenerator::Event::ACTIVE_DESCENDANT_CHANGED:
         event_name = "ACTIVE_DESCENDANT_CHANGED";
         break;
@@ -228,20 +228,23 @@ TEST(AXEventGeneratorTest, SelectedAndSelectedChildren) {
   initial_state.nodes[2].role = ax::mojom::Role::kMenuItem;
   initial_state.nodes[3].id = 4;
   initial_state.nodes[3].role = ax::mojom::Role::kListBoxOption;
-  initial_state.nodes[3].AddState(ax::mojom::State::kSelected);
+  initial_state.nodes[3].AddBoolAttribute(ax::mojom::BoolAttribute::kSelected,
+                                          true);
   AXTree tree(initial_state);
 
   AXEventGenerator event_generator(&tree);
   AXTreeUpdate update = initial_state;
-  update.nodes[2].AddState(ax::mojom::State::kSelected);
-  update.nodes[3].state = 0;
+  update.nodes[2].AddBoolAttribute(ax::mojom::BoolAttribute::kSelected, true);
+  update.nodes.pop_back();
+  update.nodes.emplace_back();
+  update.nodes[3].id = 4;
+  update.nodes[3].role = ax::mojom::Role::kListBoxOption;
+  update.nodes[3].AddBoolAttribute(ax::mojom::BoolAttribute::kSelected, false);
   EXPECT_TRUE(tree.Unserialize(update));
   EXPECT_EQ(
       "SELECTED_CHANGED on 3, "
       "SELECTED_CHANGED on 4, "
-      "SELECTED_CHILDREN_CHANGED on 2, "
-      "STATE_CHANGED on 3, "
-      "STATE_CHANGED on 4",
+      "SELECTED_CHILDREN_CHANGED on 2",
       DumpEvents(&event_generator));
 }
 
@@ -639,16 +642,18 @@ TEST(AXEventGeneratorTest, OtherAttributeChanged) {
 TEST(AXEventGeneratorTest, NameChanged) {
   AXTreeUpdate initial_state;
   initial_state.root_id = 1;
-  initial_state.nodes.resize(1);
+  initial_state.nodes.resize(2);
   initial_state.nodes[0].id = 1;
+  initial_state.nodes[0].child_ids.push_back(2);
+  initial_state.nodes[1].id = 2;
   AXTree tree(initial_state);
 
   AXEventGenerator event_generator(&tree);
   AXTreeUpdate update = initial_state;
-  update.nodes[0].AddStringAttribute(ax::mojom::StringAttribute::kName,
+  update.nodes[1].AddStringAttribute(ax::mojom::StringAttribute::kName,
                                      "Hello");
   EXPECT_TRUE(tree.Unserialize(update));
-  EXPECT_EQ("NAME_CHANGED on 1", DumpEvents(&event_generator));
+  EXPECT_EQ("NAME_CHANGED on 2", DumpEvents(&event_generator));
 }
 
 TEST(AXEventGeneratorTest, DescriptionChanged) {

@@ -9,7 +9,7 @@
 #include "base/memory/ref_counted.h"
 #include "components/viz/common/gpu/context_provider.h"
 #include "content/common/content_export.h"
-#include "third_party/WebKit/public/platform/WebGraphicsContext3DProvider.h"
+#include "third_party/blink/public/platform/web_graphics_context_3d_provider.h"
 
 namespace cc {
 class ImageDecodeCache;
@@ -36,23 +36,19 @@ class CONTENT_EXPORT WebGraphicsContext3DProviderImpl
       public viz::ContextLostObserver {
  public:
   WebGraphicsContext3DProviderImpl(
-      scoped_refptr<ui::ContextProviderCommandBuffer> provider,
-      bool software_rendering);
+      scoped_refptr<ui::ContextProviderCommandBuffer> provider);
   ~WebGraphicsContext3DProviderImpl() override;
 
   // WebGraphicsContext3DProvider implementation.
   bool BindToCurrentThread() override;
   gpu::gles2::GLES2Interface* ContextGL() override;
   GrContext* GetGrContext() override;
-  void InvalidateGrContext(uint32_t state) override;
   const gpu::Capabilities& GetCapabilities() const override;
   const gpu::GpuFeatureInfo& GetGpuFeatureInfo() const override;
   viz::GLHelper* GetGLHelper() override;
-  bool IsSoftwareRendering() const override;
   void SetLostContextCallback(base::RepeatingClosure) override;
   void SetErrorMessageCallback(
       base::RepeatingCallback<void(const char*, int32_t)>) override;
-  void SignalQuery(uint32_t, base::OnceClosure) override;
   cc::ImageDecodeCache* ImageDecodeCache() override;
 
   ui::ContextProviderCommandBuffer* context_provider() const {
@@ -65,7 +61,6 @@ class CONTENT_EXPORT WebGraphicsContext3DProviderImpl
 
   scoped_refptr<ui::ContextProviderCommandBuffer> provider_;
   std::unique_ptr<viz::GLHelper> gl_helper_;
-  const bool software_rendering_;
   base::RepeatingClosure context_lost_callback_;
   std::unique_ptr<cc::ImageDecodeCache> image_decode_cache_;
 

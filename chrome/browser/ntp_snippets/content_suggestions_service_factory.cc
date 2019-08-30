@@ -9,7 +9,6 @@
 #include "base/bind.h"
 #include "base/feature_list.h"
 #include "base/files/file_path.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/singleton.h"
 #include "base/time/default_clock.h"
 #include "base/timer/timer.h"
@@ -18,7 +17,6 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/favicon/large_icon_service_factory.h"
 #include "chrome/browser/gcm/gcm_profile_service_factory.h"
-#include "chrome/browser/gcm/instance_id/instance_id_profile_service.h"
 #include "chrome/browser/gcm/instance_id/instance_id_profile_service_factory.h"
 #include "chrome/browser/history/history_service_factory.h"
 #include "chrome/browser/language/url_language_histogram_factory.h"
@@ -33,6 +31,7 @@
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/browser_sync/profile_sync_service.h"
 #include "components/gcm_driver/gcm_profile_service.h"
+#include "components/gcm_driver/instance_id/instance_id_profile_service.h"
 #include "components/image_fetcher/core/image_decoder.h"
 #include "components/image_fetcher/core/image_fetcher.h"
 #include "components/image_fetcher/core/image_fetcher_impl.h"
@@ -65,6 +64,7 @@
 #include "google_apis/google_api_keys.h"
 #include "net/url_request/url_request_context_getter.h"
 #include "services/data_decoder/public/cpp/safe_json_parser.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 #if defined(OS_ANDROID)
 #include "chrome/browser/android/chrome_feature_list.h"
@@ -76,22 +76,18 @@
 #include "components/ntp_snippets/breaking_news/breaking_news_gcm_app_handler.h"
 #include "components/ntp_snippets/breaking_news/subscription_manager.h"
 #include "components/ntp_snippets/breaking_news/subscription_manager_impl.h"
-#include "components/ntp_snippets/physical_web_pages/physical_web_page_suggestions_provider.h"
-#include "components/physical_web/data_source/physical_web_data_source.h"
 #endif
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
 #include "chrome/browser/offline_pages/offline_page_model_factory.h"
 #include "chrome/browser/offline_pages/prefetch/prefetch_service_factory.h"
 #include "chrome/browser/offline_pages/request_coordinator_factory.h"
-#include "components/ntp_snippets/offline_pages/recent_tab_suggestions_provider.h"
 #include "components/ntp_snippets/remote/prefetched_pages_tracker_impl.h"
 #include "components/offline_pages/core/background/request_coordinator.h"
 #include "components/offline_pages/core/offline_page_feature.h"
 #include "components/offline_pages/core/offline_page_model.h"
 #include "components/offline_pages/core/prefetch/prefetch_service.h"
 #include "components/offline_pages/core/prefetch/suggested_articles_observer.h"
-#include "components/offline_pages/core/recent_tabs/recent_tabs_ui_adapter_delegate.h"
 #endif
 
 using bookmarks::BookmarkModel;
@@ -110,8 +106,6 @@ using ntp_snippets::GetFetchEndpoint;
 using ntp_snippets::IsBookmarkProviderEnabled;
 using ntp_snippets::IsDownloadsProviderEnabled;
 using ntp_snippets::IsForeignSessionsProviderEnabled;
-using ntp_snippets::IsPhysicalWebPageProviderEnabled;
-using ntp_snippets::IsRecentTabProviderEnabled;
 using ntp_snippets::PersistentScheduler;
 using ntp_snippets::PrefetchedPagesTracker;
 using ntp_snippets::RemoteSuggestionsDatabase;
@@ -126,18 +120,15 @@ using syncer::SyncService;
 
 #if defined(OS_ANDROID)
 using content::DownloadManager;
-using ntp_snippets::AreNtpShortcutsEnabled;
 using ntp_snippets::BreakingNewsGCMAppHandler;
 using ntp_snippets::GetPushUpdatesSubscriptionEndpoint;
 using ntp_snippets::GetPushUpdatesUnsubscriptionEndpoint;
-using ntp_snippets::PhysicalWebPageSuggestionsProvider;
+using ntp_snippets::IsSimplifiedNtpEnabled;
 using ntp_snippets::SubscriptionManagerImpl;
-using physical_web::PhysicalWebDataSource;
 #endif  // OS_ANDROID
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
 using ntp_snippets::PrefetchedPagesTrackerImpl;
-using ntp_snippets::RecentTabSuggestionsProvider;
 using offline_pages::OfflinePageModel;
 using offline_pages::OfflinePageModelFactory;
 using offline_pages::RequestCoordinator;
@@ -160,31 +151,12 @@ namespace {
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
 
-void RegisterRecentTabProviderIfEnabled(ContentSuggestionsService* service,
-                                        Profile* profile,
-                                        OfflinePageModel* offline_page_model) {
-  if (!IsRecentTabProviderEnabled()) {
-    return;
-  }
-
-  RequestCoordinator* request_coordinator =
-      RequestCoordinatorFactory::GetForBrowserContext(profile);
-  offline_pages::DownloadUIAdapter* ui_adapter = offline_pages::
-      RecentTabsUIAdapterDelegate::GetOrCreateRecentTabsUIAdapter(
-          offline_page_model, request_coordinator);
-  auto provider = std::make_unique<RecentTabSuggestionsProvider>(
-      service, ui_adapter, profile->GetPrefs());
-  service->RegisterProvider(std::move(provider));
-}
-
-void RegisterPrefetchingObserver(ContentSuggestionsService* service,
-                                 Profile* profile) {
-  // The observer is always there, but the Prefetch Dispatcher will do nothing
-  // if the feature (or preference) is off.
-  offline_pages::SuggestedArticlesObserver* observer =
-      offline_pages::PrefetchServiceFactory::GetForBrowserContext(profile)
-          ->GetSuggestedArticlesObserver();
-  observer->SetContentSuggestionsServiceAndObserve(service);
+void RegisterWithPrefetching(ContentSuggestionsService* service,
+                             Profile* profile) {
+  // There's a circular dependency between ContentSuggestionsService and
+  // PrefetchService. This closes the circle.
+  offline_pages::PrefetchServiceFactory::GetForBrowserContext(profile)
+      ->SetContentSuggestionsService(service);
 }
 
 #endif  // BUILDFLAG(ENABLE_OFFLINE_PAGES)
@@ -233,24 +205,6 @@ void RegisterBookmarkProviderIfEnabled(ContentSuggestionsService* service,
 
 #if defined(OS_ANDROID)
 
-void RegisterPhysicalWebPageProviderIfEnabled(
-    ContentSuggestionsService* service,
-    Profile* profile) {
-  if (!IsPhysicalWebPageProviderEnabled()) {
-    return;
-  }
-
-  PhysicalWebDataSource* physical_web_data_source =
-      g_browser_process->GetPhysicalWebDataSource();
-  auto provider = std::make_unique<PhysicalWebPageSuggestionsProvider>(
-      service, physical_web_data_source, profile->GetPrefs());
-  service->RegisterProvider(std::move(provider));
-}
-
-#endif  // OS_ANDROID
-
-#if defined(OS_ANDROID)
-
 bool AreGCMPushUpdatesEnabled() {
   return base::FeatureList::IsEnabled(ntp_snippets::kBreakingNewsPushFeature);
 }
@@ -274,9 +228,9 @@ MakeBreakingNewsGCMAppHandlerIfEnabled(
   identity::IdentityManager* identity_manager =
       IdentityManagerFactory::GetForProfile(profile);
 
-  scoped_refptr<net::URLRequestContextGetter> request_context =
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
       content::BrowserContext::GetDefaultStoragePartition(profile)
-          ->GetURLRequestContext();
+          ->GetURLLoaderFactoryForBrowserProcess();
 
   std::string api_key;
   // The API is private. If we don't have the official API key, don't even try.
@@ -288,7 +242,7 @@ MakeBreakingNewsGCMAppHandlerIfEnabled(
   }
 
   auto subscription_manager = std::make_unique<SubscriptionManagerImpl>(
-      request_context, pref_service, variations_service, identity_manager,
+      url_loader_factory, pref_service, variations_service, identity_manager,
       api_key, locale, GetPushUpdatesSubscriptionEndpoint(chrome::GetChannel()),
       GetPushUpdatesUnsubscriptionEndpoint(chrome::GetChannel()));
 
@@ -337,6 +291,9 @@ void RegisterArticleProviderIfEnabled(ContentSuggestionsService* service,
   scoped_refptr<net::URLRequestContextGetter> request_context =
       content::BrowserContext::GetDefaultStoragePartition(profile)
           ->GetURLRequestContext();
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory =
+      content::BrowserContext::GetDefaultStoragePartition(profile)
+          ->GetURLLoaderFactoryForBrowserProcess();
 
   base::FilePath database_dir(
       profile->GetPath().Append(ntp_snippets::kDatabaseFolder));
@@ -370,7 +327,7 @@ void RegisterArticleProviderIfEnabled(ContentSuggestionsService* service,
   }
 #endif  // BUILDFLAG(ENABLE_OFFLINE_PAGES)
   auto suggestions_fetcher = std::make_unique<RemoteSuggestionsFetcherImpl>(
-      identity_manager, request_context, pref_service, language_histogram,
+      identity_manager, url_loader_factory, pref_service, language_histogram,
       base::Bind(
           &data_decoder::SafeJsonParser::Parse,
           content::ServiceManagerConnection::GetForProcess()->GetConnector()),
@@ -388,7 +345,7 @@ void RegisterArticleProviderIfEnabled(ContentSuggestionsService* service,
       service->category_ranker(), service->remote_suggestions_scheduler(),
       std::move(suggestions_fetcher),
       std::make_unique<ImageFetcherImpl>(std::make_unique<ImageDecoderImpl>(),
-                                         request_context.get()),
+                                         url_loader_factory),
       std::make_unique<RemoteSuggestionsDatabase>(database_dir),
       std::make_unique<RemoteSuggestionsStatusServiceImpl>(
           identity_manager->HasPrimaryAccount(), pref_service,
@@ -506,7 +463,7 @@ KeyedService* ContentSuggestionsServiceFactory::BuildServiceInstanceFor(
   std::unique_ptr<CategoryRanker> category_ranker =
       ntp_snippets::BuildSelectedCategoryRanker(
           pref_service, base::DefaultClock::GetInstance(),
-          AreNtpShortcutsEnabled());
+          IsSimplifiedNtpEnabled());
 
   auto* service = new ContentSuggestionsService(
       State::ENABLED, identity_manager, history_service, large_icon_service,
@@ -520,12 +477,10 @@ KeyedService* ContentSuggestionsServiceFactory::BuildServiceInstanceFor(
 
 #if defined(OS_ANDROID)
   RegisterDownloadsProviderIfEnabled(service, profile, offline_page_model);
-  RegisterPhysicalWebPageProviderIfEnabled(service, profile);
 #endif  // OS_ANDROID
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
-  RegisterRecentTabProviderIfEnabled(service, profile, offline_page_model);
-  RegisterPrefetchingObserver(service, profile);
+  RegisterWithPrefetching(service, profile);
 #endif
 
   return service;

@@ -12,10 +12,8 @@
 namespace content {
 
 WebGraphicsContext3DProviderImpl::WebGraphicsContext3DProviderImpl(
-    scoped_refptr<ui::ContextProviderCommandBuffer> provider,
-    bool software_rendering)
-    : provider_(std::move(provider)), software_rendering_(software_rendering) {
-}
+    scoped_refptr<ui::ContextProviderCommandBuffer> provider)
+    : provider_(std::move(provider)) {}
 
 WebGraphicsContext3DProviderImpl::~WebGraphicsContext3DProviderImpl() {
   provider_->RemoveObserver(this);
@@ -38,10 +36,6 @@ GrContext* WebGraphicsContext3DProviderImpl::GetGrContext() {
   return provider_->GrContext();
 }
 
-void WebGraphicsContext3DProviderImpl::InvalidateGrContext(uint32_t state) {
-  return provider_->InvalidateGrContext(state);
-}
-
 const gpu::Capabilities& WebGraphicsContext3DProviderImpl::GetCapabilities()
     const {
   return provider_->ContextCapabilities();
@@ -60,10 +54,6 @@ viz::GLHelper* WebGraphicsContext3DProviderImpl::GetGLHelper() {
   return gl_helper_.get();
 }
 
-bool WebGraphicsContext3DProviderImpl::IsSoftwareRendering() const {
-  return software_rendering_;
-}
-
 void WebGraphicsContext3DProviderImpl::SetLostContextCallback(
     base::RepeatingClosure c) {
   context_lost_callback_ = std::move(c);
@@ -72,11 +62,6 @@ void WebGraphicsContext3DProviderImpl::SetLostContextCallback(
 void WebGraphicsContext3DProviderImpl::SetErrorMessageCallback(
     base::RepeatingCallback<void(const char*, int32_t)> c) {
   provider_->ContextSupport()->SetErrorMessageCallback(std::move(c));
-}
-
-void WebGraphicsContext3DProviderImpl::SignalQuery(uint32_t query,
-                                                   base::OnceClosure callback) {
-  provider_->ContextSupport()->SignalQuery(query, std::move(callback));
 }
 
 void WebGraphicsContext3DProviderImpl::OnContextLost() {
@@ -98,7 +83,7 @@ cc::ImageDecodeCache* WebGraphicsContext3DProviderImpl::ImageDecodeCache() {
 
   image_decode_cache_ = std::make_unique<cc::GpuImageDecodeCache>(
       provider_.get(), use_transfer_cache, kN32_SkColorType,
-      kMaxWorkingSetBytes);
+      kMaxWorkingSetBytes, provider_->ContextCapabilities().max_texture_size);
   return image_decode_cache_.get();
 }
 

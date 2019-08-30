@@ -61,13 +61,21 @@ class GpuMemoryBufferImpl : public gfx::GpuMemoryBuffer {
         size_.width(), format_, static_cast<int>(plane)));
   }
   gfx::GpuMemoryBufferId GetId() const override { return id_; }
-  gfx::GpuMemoryBufferHandle GetHandle() const override {
+  gfx::GpuMemoryBufferType GetType() const override {
+    return gfx::NATIVE_PIXMAP;
+  }
+  gfx::GpuMemoryBufferHandle CloneHandle() const override {
     NOTREACHED();
     return gfx::GpuMemoryBufferHandle();
   }
   ClientBuffer AsClientBuffer() override {
     return reinterpret_cast<ClientBuffer>(this);
   }
+  void OnMemoryDump(
+      base::trace_event::ProcessMemoryDump* pmd,
+      const base::trace_event::MemoryAllocatorDumpGuid& buffer_dump_guid,
+      uint64_t tracing_process_id,
+      int importance) const override {}
 
  private:
   static const size_t kMaxPlanes = 3;
@@ -99,7 +107,10 @@ MockGpuVideoAcceleratorFactories::CreateGpuMemoryBuffer(
     gfx::BufferUsage /* usage */) {
   if (fail_to_allocate_gpu_memory_buffer_)
     return nullptr;
-  return std::make_unique<GpuMemoryBufferImpl>(size, format);
+  std::unique_ptr<gfx::GpuMemoryBuffer> ret(
+      new GpuMemoryBufferImpl(size, format));
+  created_memory_buffers_.push_back(ret.get());
+  return ret;
 }
 
 std::unique_ptr<base::SharedMemory>
@@ -120,35 +131,14 @@ MockGpuVideoAcceleratorFactories::CreateVideoEncodeAccelerator() {
   return base::WrapUnique(DoCreateVideoEncodeAccelerator());
 }
 
-bool MockGpuVideoAcceleratorFactories::ShouldUseGpuMemoryBuffersForVideoFrames()
-    const {
+bool MockGpuVideoAcceleratorFactories::ShouldUseGpuMemoryBuffersForVideoFrames(
+    bool for_media_stream) const {
   return false;
 }
 
 unsigned MockGpuVideoAcceleratorFactories::ImageTextureTarget(
     gfx::BufferFormat format) {
   return GL_TEXTURE_2D;
-}
-
-namespace {
-class ScopedGLContextLockImpl
-    : public GpuVideoAcceleratorFactories::ScopedGLContextLock {
- public:
-  ScopedGLContextLockImpl(MockGpuVideoAcceleratorFactories* gpu_factories)
-      : gpu_factories_(gpu_factories) {}
-  gpu::gles2::GLES2Interface* ContextGL() override {
-    return gpu_factories_->GetGLES2Interface();
-  }
-
- private:
-  MockGpuVideoAcceleratorFactories* gpu_factories_;
-};
-}  // namespace
-
-std::unique_ptr<GpuVideoAcceleratorFactories::ScopedGLContextLock>
-MockGpuVideoAcceleratorFactories::GetGLContextLock() {
-  DCHECK(gles2_);
-  return std::make_unique<ScopedGLContextLockImpl>(this);
 }
 
 }  // namespace media

@@ -2,7 +2,7 @@
 <grit-part>
   <!-- Title -->
   <message name="IDS_KSV_TITLE" desc="The tooltip text of the keyboard shortcut viewer shelf icon.">
-    Keyboard Shortcut Viewer
+    Shortcuts
   </message>
 
   <!-- Accessibility -->
@@ -14,6 +14,12 @@
   </message>
   <message name="IDS_KSV_CLEAR_SEARCHBOX_ACCESSIBILITY_NAME" desc="Accessibility name for the button that clears all text from the search box.">
     Clear searchbox text
+  </message>
+  <message name="IDS_KSV_SEARCH_BOX_ACCESSIBILITY_VALUE_WITH_RESULTS" desc="Accessibility value for the search box with searched results.">
+    Displaying <ph name="n">$1<ex>1</ex></ph> search results for <ph name="query">$2<ex>a</ex></ph>
+  </message>
+  <message name="IDS_KSV_SEARCH_BOX_ACCESSIBILITY_VALUE_WITHOUT_RESULTS" desc="Accessibility value for the search box without searched results.">
+    No search result for <ph name="query">$1<ex>a</ex></ph>
   </message>
 
   <!-- Search illustration -->
@@ -58,7 +64,10 @@
     Launcher
   </message>
 
-  <!-- Keys with special meaning -->
+  <!-- Keys with special label -->
+  <message name="IDS_KSV_KEY_ESCAPE" desc="Name of [Esc] key. Shouldn't be translated in many languages.">
+    Esc
+  </message>
   <message name="IDS_KSV_KEY_SPACE" desc="Name of [Space] key.">
     Space
   </message>
@@ -67,6 +76,9 @@
   </message>
   <message name="IDS_KSV_KEY_FULLSCREEN" desc="Name of the key on a Chromebook keyboard that triggers the fullscreen.">
     Fullscreen key
+  </message>
+  <message name="IDS_KSV_KEY_NO_MAPPING" desc="Alternative string to display if no meaning found for the key.">
+    Not supported with current keyboard layout
   </message>
 
   <!-- Generic shortcut strings -->
@@ -79,16 +91,25 @@
   <message name="IDS_KSV_SHORTCUT_TWO_MODIFIERS_ONE_KEY" desc="Human readable version of the keyboard shortcut. This is for all two modifiers shortcuts.">
     <ph name="modifier1">$1<ex>Ctrl</ex></ph><ph name="separator1">$2<ex>+</ex></ph><ph name="modifier2">$3<ex>Alt</ex></ph><ph name="separator2">$4<ex>+</ex></ph><ph name="key">$5<ex>v</ex></ph>
   </message>
+  <message name="IDS_KSV_SHORTCUT_THREE_MODIFIERS_ONE_KEY" desc="Human readable version of the keyboard shortcut. This is for all two modifiers shortcuts.">
+    <ph name="modifier1">$1<ex>Ctrl</ex></ph><ph name="separator1">$2<ex>+</ex></ph><ph name="modifier2">$3<ex>Alt</ex></ph><ph name="separator2">$4<ex>+</ex></ph><ph name="modifier3">$5<ex>Shift</ex></ph><ph name="separator3">$6<ex>+</ex></ph><ph name="key">$7<ex>v</ex></ph>
+  </message>
 
   <!-- Shortcuts descriptions -->
+  <message name="IDS_KSV_DESCRIPTION_TOGGLE_DOCKED_MAGNIFIER" desc="Description of the command in keyboard shortcut viewer.">
+    Turn the docked magnifier on or off
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_TOGGLE_FULLSCREEN_MAGNIFIER" desc="Description of the command in keyboard shortcut viewer.">
+    Turn the fullscreen magnifier on or off
+  </message>
   <message name="IDS_KSV_DESCRIPTION_LOCK_SCREEN" desc="Description of the command in keyboard shortcut viewer.">
     Lock screen
   </message>
-  <message name="IDS_KSV_DESCRIPTION_CHANGE_SCREEN_RESOLUTION" desc="Description of the command in keyboard shortcut viewer.">
-    Change screen resolution
+  <message name="IDS_KSV_DESCRIPTION_DISPLAY_ZOOM_OUT" desc="Description of the command in keyboard shortcut viewer.">
+    Display Zoom out
   </message>
-  <message name="IDS_KSV_SHORTCUT_CHANGE_SCREEN_RESOLUTION" desc="Human readable version of the keyboard shortcut.">
-    <ph name="ctrl">$1<ex>Ctrl</ex></ph><ph name="separator1">$2<ex>+</ex></ph><ph name="shift">$3<ex>Shift</ex></ph><ph name="separator2">$4<ex>+</ex></ph><ph name="plus">$5<ex>v</ex></ph> or <ph name="minus">$6<ex>v</ex></ph>
+  <message name="IDS_KSV_DESCRIPTION_DISPLAY_ZOOM_IN" desc="Description of the command in keyboard shortcut viewer.">
+    Display Zoom in
   </message>
   <message name="IDS_KSV_DESCRIPTION_DRAG_LINK_IN_SAME_TAB" desc="Description of the command in keyboard shortcut viewer.">
     Open the link in the tab
@@ -103,7 +124,7 @@
     <ph name="shift">$1<ex>Shift</ex></ph><ph name="separator1">$2<ex>+</ex></ph><ph name="alt">$3<ex>Alt</ex></ph><ph name="separator2">$4<ex>+</ex></ph><ph name="l">$5<ex>v</ex></ph>, then <ph name="tab">$6<ex>v</ex></ph> or <ph name="right">$7<ex>v</ex></ph>
   </message>
   <message name="IDS_KSV_DESCRIPTION_PREVIOUS_IME" desc="Description of the command in keyboard shortcut viewer.">
-    Switch to the previous keyboard language you were using.
+    Switch to the input method of the previous language
   </message>
   <message name="IDS_KSV_DESCRIPTION_CYCLE_FORWARD_MRU" desc="Description of the command in keyboard shortcut viewer.">
     Switch quickly between windows
@@ -112,7 +133,7 @@
     Press and hold <ph name="alt">$1<ex>Alt</ex></ph>, tap <ph name="tab">$2<ex>v</ex></ph> until you get to the window you want to open, then release.
   </message>
   <message name="IDS_KSV_DESCRIPTION_CYCLE_BACKWARD_MRU" desc="Description of the command in keyboard shortcut viewer.">
-    Open the window you used least recently
+    Open the window that has been unused for the longest time
   </message>
   <message name="IDS_KSV_SHORTCUT_CYCLE_BACKWARD_MRU" desc="Human readable version of the keyboard shortcut.">
     Press and hold <ph name="alt">$1<ex>Alt</ex></ph><ph name="separator">$2<ex>+</ex></ph><ph name="shift">$3<ex>Shift</ex></ph>, tap <ph name="tab">$4<ex>v</ex></ph> until you get to the window you want to open, then release.
@@ -151,7 +172,7 @@
     Turn Caps Lock on and off
   </message>
   <message name="IDS_KSV_DESCRIPTION_NEXT_IME" desc="Description of the command in keyboard shortcut viewer.">
-    Switch between the keyboard languages you've set. Learn how to choose your keyboard language.
+    Switch to the input method of the next language
   </message>
   <message name="IDS_KSV_DESCRIPTION_NEW_WINDOW" desc="Description of the command in keyboard shortcut viewer.">
     Open new window
@@ -160,7 +181,7 @@
     Open new tab
   </message>
   <message name="IDS_KSV_DESCRIPTION_SCALE_UI_RESET" desc="Description of the command in keyboard shortcut viewer.">
-    Reset screen resolution to default
+    Reset display zoom level
   </message>
   <message name="IDS_KSV_DESCRIPTION_ROTATE_SCREEN" desc="Description of the command in keyboard shortcut viewer.">
     Rotate screen 90 degrees
@@ -225,6 +246,9 @@
   <message name="IDS_KSV_DESCRIPTION_IDC_RELOAD" desc="Description of the command in keyboard shortcut viewer.">
     Reload your current page
   </message>
+  <message name="IDS_KSV_SHORTCUT_IDC_RELOAD" desc="Description of the command in keyboard shortcut viewer.">
+    <ph name="refresh">$1<ex>Refresh</ex></ph> or <ph name="ctrl">$2<ex>Ctrl</ex></ph><ph name="separator">$3<ex>+</ex></ph><ph name="r">$4<ex>r</ex></ph>
+  </message>
   <message name="IDS_KSV_DESCRIPTION_IDC_RELOAD_BYPASSING_CACHE" desc="Description of the command in keyboard shortcut viewer.">
     Reload your current page without using cached content
   </message>
@@ -250,7 +274,7 @@
     Zoom out on the page
   </message>
   <message name="IDS_KSV_DESCRIPTION_IDC_ZOOM_NORMAL" desc="Description of the command in keyboard shortcut viewer.">
-    Reset zoom level
+    Reset zoom level on the page
   </message>
   <message name="IDS_KSV_DESCRIPTION_IDC_ZOOM_PLUS" desc="Description of the command in keyboard shortcut viewer.">
     Zoom in on the page
@@ -261,14 +285,20 @@
   <message name="IDS_KSV_DESCRIPTION_IDC_RESTORE_TAB" desc="Description of the command in keyboard shortcut viewer.">
     Reopen the last tab or window you closed
   </message>
+  <message name="IDS_KSV_DESCRIPTION_IDC_BACK" desc="Description of the command in keyboard shortcut viewer.">
+    Go back to previous page
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_IDC_FORWARD" desc="Description of the command in keyboard shortcut viewer.">
+    Go forward to next page
+  </message>
   <message name="IDS_KSV_DESCRIPTION_IDC_DEV_TOOLS" desc="Description of the command in keyboard shortcut viewer.">
     Show or hide the Developer Tools panel
   </message>
   <message name="IDS_KSV_DESCRIPTION_IDC_DEV_TOOLS_CONSOLE" desc="Description of the command in keyboard shortcut viewer.">
-    Show or hide the DOM Inspector
+    Show or hide the Developer Tools console
   </message>
   <message name="IDS_KSV_DESCRIPTION_IDC_FOCUS_BOOKMARKS" desc="Description of the command in keyboard shortcut viewer.">
-    Highlight the bookmarks bar (if shown)
+    Focus on or Highlight the bookmarks bar (if shown)
   </message>
   <message name="IDS_KSV_DESCRIPTION_IDC_FOCUS_SEARCH" desc="Description of the command in keyboard shortcut viewer.">
     Place focus in search address bar
@@ -487,13 +517,13 @@
     Turn brightness up
   </message>
   <message name="IDS_KSV_DESCRIPTION_MAGNIFY_SCREEN_ZOOM_OUT" desc="Description of the command in keyboard shortcut viewer.">
-    Zoom out
+    Zoom out (when docked OR fullscreen magnifiers enabled)
   </message>
   <message name="IDS_KSV_DESCRIPTION_MAGNIFY_SCREEN_ZOOM_IN" desc="Description of the command in keyboard shortcut viewer.">
-    Zoom in
+    Zoom in (when docked OR fullscreen magnifiers enabled)
   </message>
   <message name="IDS_KSV_DESCRIPTION_VOLUME_MUTE" desc="Description of the command in keyboard shortcut viewer.">
-    Mute volume
+    Mute sound
   </message>
   <message name="IDS_KSV_DESCRIPTION_VOLUME_DOWN" desc="Description of the command in keyboard shortcut viewer.">
     Volume down
@@ -519,5 +549,70 @@
   <message name="IDS_KSV_DESCRIPTION_MOVE_ACTIVE_WINDOW_BETWEEN_DISPLAYS" desc="Description of the command in keyboard shortcut viewer.">
     Move active window between displays
   </message>
-
+  <message name="IDS_KSV_DESCRIPTION_TOGGLE_APP_LIST" desc="Description of the command in keyboard shortcut viewer.">
+    Open/close the launcher
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_TAKE_WINDOW_SCREENSHOT" desc="Description of the command in keyboard shortcut viewer.">
+    Take window screenshot
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_SUSPEND" desc="Description of the command in keyboard shortcut viewer.">
+    Put device in sleep mode (suspend)
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_OPEN_GET_HELP" desc="Description of the command in keyboard shortcut viewer.">
+    Open Help Center
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_OPEN_FEEDBACK_PAGE" desc="Description of the command in keyboard shortcut viewer.">
+    Submit feedback
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_ROTATE_WINDOW" desc="Description of the command in keyboard shortcut viewer.">
+    Rotate window
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_SHOW_STYLUS_TOOLS" desc="Description of the command in keyboard shortcut viewer.">
+    Show stylus tools
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_TOGGLE_MAXIMIZED" desc="Description of the command in keyboard shortcut viewer.">
+    Maximize window
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_WINDOW_POSITION_CENTER" desc="Description of the command in keyboard shortcut viewer.">
+    Move window to center
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_OPEN_CROSH" desc="Description of the command in keyboard shortcut viewer.">
+    Open Crosh window
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_TOGGLE_DICTATION" desc="Description of the command in keyboard shortcut viewer.">
+    Starts or stops typing what you speak
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_EXIT" desc="Description of the command in keyboard shortcut viewer.">
+    Sign out
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_UNPIN" desc="Description of the command in keyboard shortcut viewer.">
+    Unpin an app
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_SHOW_IME_MENU_BUBBLE" desc="Description of the command in keyboard shortcut viewer.">
+    Show the menu displaying a list of available IMEs
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_SHOW_IDC_FOCUS_MENU_BAR" desc="Description of the command in keyboard shortcut viewer.">
+    Place focus on menu bar
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_SHOW_IDC_HOME" desc="Description of the command in keyboard shortcut viewer.">
+    Open home page
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_SHOW_IDC_CLEAR_BROWSING_DATA" desc="Description of the command in keyboard shortcut viewer.">
+    Clear browsing data
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_SHOW_IDC_SHOW_BOOKMARK_MANAGER" desc="Description of the command in keyboard shortcut viewer.">
+    Show bookmark manager
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_IDC_DEV_TOOLS_INSPECT" desc="Description of the command in keyboard shortcut viewer.">
+    Show or hide the Developer Tools inspector
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_IDC_FOCUS_INACTIVE_POPUP_FOR_ACCESSIBILITY" desc="Description of the command in keyboard shortcut viewer.">
+    Move focus to popups and dialogs
+  </message>
+  <message name="IDS_KSV_DESCRIPTION_IDC_SHOW_APP_MENU" desc="Description of the command in keyboard shortcut viewer.">
+    Show Chrome menu
+  </message>
+  <message name="IDS_KSV_SHORTCUT_IDC_SHOW_APP_MENU" desc="Description of the command in keyboard shortcut viewer.">
+    <ph name="alt">$1<ex>Alt</ex></ph><ph name="separator">$2<ex>+</ex></ph><ph name="e">$3<ex>e</ex></ph> or <ph name="f">$4<ex>f</ex></ph>
+  </message>
 </grit-part>

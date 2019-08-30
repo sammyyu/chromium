@@ -17,15 +17,23 @@ import os
 import subprocess
 import sys
 import traceback
+import time
+import tempfile
 import urllib
 import urllib2
+import uuid
+import zlib
+
+from telemetry.internal.util import external_modules
+
+psutil = external_modules.ImportOptionalModule('psutil')
 
 from core import path_util
 
-# The paths in the results dashboard URLs for sending and viewing results.
+
+# The paths in the results dashboard URLs for sending results.
 SEND_RESULTS_PATH = '/add_point'
 SEND_HISTOGRAMS_PATH = '/add_histograms'
-RESULTS_LINK_PATH = '/report?masters=%s&bots=%s&tests=%s&rev=%s'
 
 # CACHE_DIR/CACHE_FILENAME will be created in a tmp_dir to cache
 # results which need to be retried.
@@ -48,7 +56,7 @@ class SendResultsFatalException(SendResultException):
   pass
 
 
-def SendResults(data, url, tmp_dir, json_url_file=None,
+def SendResults(data, url, tmp_dir,
                 send_as_histograms=False, oauth_token=None):
   """Sends results to the Chrome Performance Dashboard.
 
@@ -64,6 +72,7 @@ def SendResults(data, url, tmp_dir, json_url_file=None,
     send_as_histograms: True if result is to be sent to /add_histograms.
     oauth_token: string; used for flushing oauth uploads from cache.
   """
+  start = time.time()
   results_json = json.dumps({
       'is_histogramset': send_as_histograms,
       'data': data
@@ -77,12 +86,7 @@ def SendResults(data, url, tmp_dir, json_url_file=None,
   # Send all the results from this run and the previous cache to the dashboard.
   fatal_error, errors = _SendResultsFromCache(cache_file_name, url, oauth_token)
 
-  if json_url_file:
-    # Dump dashboard url to file.
-    dashboard_url = _DashboardUrl(url, data)
-    with open(json_url_file, 'w') as f:
-      json.dump(dashboard_url if dashboard_url else '', f)
-
+  print 'Time spent sending results to %s: %s' % (url, time.time() - start)
 
   # Print any errors; if there was a fatal error, it should be an exception.
   for error in errors:
@@ -94,9 +98,10 @@ def SendResults(data, url, tmp_dir, json_url_file=None,
 
 def _GetCacheFileName(tmp_dir):
   """Gets the cache filename, creating the file if it does not exist."""
-  cache_dir = os.path.join(os.path.abspath(tmp_dir), CACHE_DIR)
+  cache_dir = os.path.join(os.path.abspath(tmp_dir), CACHE_DIR, str(uuid.uuid4()))
   if not os.path.exists(cache_dir):
     os.makedirs(cache_dir)
+  # Since this is multi-processed, add a unique identifier to the cache dir
   cache_filename = os.path.join(cache_dir, CACHE_FILENAME)
   if not os.path.exists(cache_filename):
     # Create the file.
@@ -137,7 +142,6 @@ def _SendResultsFromCache(cache_file_name, url, oauth_token):
     line = line.strip()
     if not line:
       continue
-    print 'Sending result %d of %d to dashboard.' % (index + 1, total_results)
     # We need to check whether we're trying to upload histograms. If the JSON
     # is invalid, we should not try to send this data or re-try it later.
     # Instead, we'll print an error.
@@ -148,6 +152,8 @@ def _SendResultsFromCache(cache_file_name, url, oauth_token):
       continue
 
     data_type = ('histogram' if is_histogramset else 'chartjson')
+    print 'Sending %s result %d of %d to dashboard.' % (
+        data_type, index + 1, total_results)
 
     try:
       if is_histogramset:
@@ -211,7 +217,8 @@ def MakeHistogramSetWithDiagnostics(histograms_file,
 
   url = _MakeStdioUrl(test_name, buildername, buildnumber)
   if url:
-    add_diagnostics_args.extend(['--log_urls', url])
+    add_diagnostics_args.extend(['--log_urls_k', 'Buildbot stdio'])
+    add_diagnostics_args.extend(['--log_urls_v', url])
 
   for k, v in revisions_dict.iteritems():
     add_diagnostics_args.extend((k, v))
@@ -224,15 +231,22 @@ def MakeHistogramSetWithDiagnostics(histograms_file,
   add_reserved_diagnostics_path = os.path.join(
       path_util.GetChromiumSrcDir(), 'third_party', 'catapult', 'tracing',
       'bin', 'add_reserved_diagnostics')
-  cmd = [sys.executable, add_reserved_diagnostics_path] + add_diagnostics_args
 
-  subprocess.call(cmd)
+  tf = tempfile.NamedTemporaryFile(delete=False)
+  tf.close()
+  temp_histogram_output_file = tf.name
 
-  # TODO: Handle reference builds
-  with open(histograms_file) as f:
-    hs = json.load(f)
+  cmd = ([sys.executable, add_reserved_diagnostics_path] +
+         add_diagnostics_args + ['--output_path', temp_histogram_output_file])
 
-  return hs
+  try:
+    subprocess.check_call(cmd)
+    # TODO: Handle reference builds
+    with open(temp_histogram_output_file) as f:
+      hs = json.load(f)
+    return hs
+  finally:
+    os.remove(temp_histogram_output_file)
 
 
 def MakeListOfPoints(charts, bot, test_name, buildername,
@@ -427,7 +441,7 @@ def _RevisionNumberColumns(data, prefix):
     revision = int(data['point_id'])
 
   # For other revision data, add it if it's present and not undefined:
-  for key in ['webrtc_rev', 'v8_rev']:
+  for key in ['webrtc_git', 'v8_rev']:
     if key in data and data[key] != 'undefined':
       revision_supplemental_columns[prefix + key] = data[key]
 
@@ -496,10 +510,10 @@ def _SendResultsJson(url, results_json):
       # If the remote app rejects the JSON, it's probably malformed,
       # so we don't want to retry it.
       raise SendResultsFatalException('Discarding JSON, error:\n%s' % error)
-    raise SendResultsRetryException()
+    raise SendResultsRetryException(error)
 
 def _Httplib2Request(url, data, oauth_token):
-  data = urllib.urlencode({'data': data})
+  data = zlib.compress(data)
   headers = {
       'Authorization': 'Bearer %s' % oauth_token,
       'User-Agent': 'perf-uploader/1.0'
@@ -535,27 +549,3 @@ def _SendHistogramJson(url, histogramset_json, oauth_token):
           response.status, response.reason))
   except httplib2.HttpLib2Error:
     raise SendResultsRetryException(traceback.format_exc())
-
-def _DashboardUrl(url, data):
-  """Returns link to the dashboard if possible.
-
-  Args:
-    url: The Performance Dashboard URL, e.g. "https://chromeperf.appspot.com"
-    data: The data that's being sent to the dashboard.
-
-  Returns:
-    An annotation to print, or None.
-  """
-  if not data:
-    return None
-  if isinstance(data, list):
-    master, bot, test, revision = (
-        data[0]['master'], data[0]['bot'], data[0]['test'], data[0]['revision'])
-  else:
-    master, bot, test, revision = (
-        data['master'], data['bot'], data['chart_data']['benchmark_name'],
-        data['point_id'])
-  results_link = url + RESULTS_LINK_PATH % (
-      urllib.quote(master), urllib.quote(bot), urllib.quote(test.split('/')[0]),
-      revision)
-  return results_link

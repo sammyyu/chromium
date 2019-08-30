@@ -12,8 +12,8 @@
 #include <algorithm>
 #include <limits>
 
-#include "chrome/install_static/user_data_dir.h"
-#include "chrome_elf/sha1/sha1.h"
+#include "chrome/install_static/install_util.h"
+#include "chrome_elf/nt_registry/nt_registry.h"
 #include "chrome_elf/third_party_dlls/packed_list_format.h"
 
 namespace third_party_dlls {
@@ -27,7 +27,7 @@ bool g_initialized = false;
 PackedListModule* g_bl_module_array = nullptr;
 size_t g_bl_module_array_size = 0;
 
-// NOTE: this "global" is only initialized once during InitComponent().
+// NOTE: this "global" is only initialized once on first access.
 // NOTE: it is wrapped in a function to prevent exit-time dtors.
 std::wstring& GetBlFilePath() {
   static std::wstring* const file_path = new std::wstring();
@@ -46,34 +46,35 @@ bool HashBinaryPredicate(const PackedListModule& lhs,
 }
 
 // Given a file opened for read, pull in the packed list.
-//
-// - Returns kSuccess or kArraySizeZero on success.
-FileStatus ReadInArray(HANDLE file,
-                       size_t* array_size,
-                       PackedListModule** array_ptr) {
+ThirdPartyStatus ReadInArray(HANDLE file,
+                             size_t* array_size,
+                             PackedListModule** array_ptr) {
   PackedListMetadata metadata;
   DWORD bytes_read = 0;
 
   if (!::ReadFile(file, &metadata, sizeof(PackedListMetadata), &bytes_read,
                   FALSE) ||
       bytes_read != sizeof(PackedListMetadata)) {
-    return FileStatus::kMetadataReadFail;
+    // If |bytes_read| is actually 0, then the file was empty.
+    if (!bytes_read)
+      return ThirdPartyStatus::kFileEmpty;
+    return ThirdPartyStatus::kFileMetadataReadFailure;
   }
 
   // Careful of versioning.  For now, only support the latest version.
   if (metadata.version != PackedListVersion::kCurrent)
-    return FileStatus::kInvalidFormatVersion;
+    return ThirdPartyStatus::kFileInvalidFormatVersion;
 
   *array_size = metadata.module_count;
   // Check for size 0.
   if (!*array_size)
-    return FileStatus::kArraySizeZero;
+    return ThirdPartyStatus::kFileArraySizeZero;
 
   // Sanity check the array fits in a DWORD.
   if (*array_size >
       (std::numeric_limits<DWORD>::max() / sizeof(PackedListModule))) {
     assert(false);
-    return FileStatus::kArrayTooBig;
+    return ThirdPartyStatus::kFileArrayTooBig;
   }
 
   DWORD buffer_size =
@@ -87,7 +88,7 @@ FileStatus ReadInArray(HANDLE file,
     delete[] * array_ptr;
     *array_ptr = nullptr;
     *array_size = 0;
-    return FileStatus::kArrayReadFail;
+    return ThirdPartyStatus::kFileArrayReadFailure;
   }
 
   // Ensure array is sorted (as expected).
@@ -96,26 +97,41 @@ FileStatus ReadInArray(HANDLE file,
     delete[] * array_ptr;
     *array_ptr = nullptr;
     *array_size = 0;
-    return FileStatus::kArrayNotSorted;
+    return ThirdPartyStatus::kFileArrayNotSorted;
   }
 
-  return FileStatus::kSuccess;
+  return ThirdPartyStatus::kSuccess;
+}
+
+// Reads the path to the blacklist file from the registry into |file_path|.
+//
+// - Returns false if the value is not found, is not a REG_SZ, or is empty.
+bool GetFilePathFromRegistry(std::wstring* file_path) {
+  file_path->clear();
+  HANDLE key_handle = nullptr;
+
+  if (!nt::CreateRegKey(nt::HKCU,
+                        install_static::GetRegistryPath()
+                            .append(kThirdPartyRegKeyName)
+                            .c_str(),
+                        KEY_QUERY_VALUE, &key_handle)) {
+    return false;
+  }
+
+  bool found = nt::QueryRegValueSZ(key_handle, kBlFilePathRegValue, file_path);
+  nt::CloseRegKey(key_handle);
+
+  return found && !file_path->empty();
 }
 
 // Open a packed data file.
-//
-// - Returns kSuccess or kFileNotFound on success.
-FileStatus OpenDataFile(HANDLE* file_handle) {
+ThirdPartyStatus OpenDataFile(HANDLE* file_handle) {
   *file_handle = INVALID_HANDLE_VALUE;
   std::wstring& file_path = GetBlFilePath();
 
   // The path may have been overridden for testing.
-  if (file_path.empty()) {
-    if (!install_static::GetUserDataDirectory(&file_path, nullptr))
-      return FileStatus::kUserDataDirFail;
-    file_path.append(kFileSubdir);
-    file_path.append(kBlFileName);
-  }
+  if (file_path.empty() && !GetFilePathFromRegistry(&file_path))
+    return ThirdPartyStatus::kFilePathNotFoundInRegistry;
 
   // See if file exists.  INVALID_HANDLE_VALUE alert!
   *file_handle =
@@ -126,35 +142,27 @@ FileStatus OpenDataFile(HANDLE* file_handle) {
     switch (::GetLastError()) {
       case ERROR_FILE_NOT_FOUND:
       case ERROR_PATH_NOT_FOUND:
-        return FileStatus::kFileNotFound;
+        return ThirdPartyStatus::kFileNotFound;
       case ERROR_ACCESS_DENIED:
-        return FileStatus::kFileAccessDenied;
+        return ThirdPartyStatus::kFileAccessDenied;
       default:
-        return FileStatus::kFileUnexpectedFailure;
+        return ThirdPartyStatus::kFileUnexpectedFailure;
     }
   }
 
-  return FileStatus::kSuccess;
+  return ThirdPartyStatus::kSuccess;
 }
 
-// Example file location, relative to user data dir.
-// %localappdata% / Google / Chrome SxS / User Data / ThirdPartyModuleList64 /
-//
-// - NOTE: kFileNotFound and kArraySizeZero are treated as kSuccess.
-FileStatus InitInternal() {
-  // blacklist
-  // ---------
+// Find the packed blacklist file and read in the array.
+ThirdPartyStatus InitInternal() {
   HANDLE handle = INVALID_HANDLE_VALUE;
-  FileStatus status = OpenDataFile(&handle);
-  if (status == FileStatus::kFileNotFound)
-    return FileStatus::kSuccess;
-  if (status == FileStatus::kSuccess) {
-    status = ReadInArray(handle, &g_bl_module_array_size, &g_bl_module_array);
-    ::CloseHandle(handle);
-  }
+  ThirdPartyStatus status = OpenDataFile(&handle);
+  if (status != ThirdPartyStatus::kSuccess)
+    return status;
 
-  if (status == FileStatus::kArraySizeZero)
-    return FileStatus::kSuccess;
+  status = ReadInArray(handle, &g_bl_module_array_size, &g_bl_module_array);
+  ::CloseHandle(handle);
+
   return status;
 }
 
@@ -164,22 +172,19 @@ FileStatus InitInternal() {
 // Public defines & functions
 //------------------------------------------------------------------------------
 
-bool IsModuleListed(const std::string& basename,
-                    DWORD image_size,
-                    DWORD time_date_stamp) {
+bool IsModuleListed(const std::string& basename_hash,
+                    const std::string& fingerprint_hash) {
   assert(g_initialized);
+  assert(!basename_hash.empty() && !fingerprint_hash.empty());
+  assert(basename_hash.length() == elf_sha1::kSHA1Length &&
+         fingerprint_hash.length() == elf_sha1::kSHA1Length);
+
   if (!g_bl_module_array_size)
     return false;
 
-  // Max hex 32-bit value is 8 characters long.  2*8+1.
-  char buffer[17] = {};
-  ::snprintf(buffer, sizeof(buffer), "%08lX%lx", time_date_stamp, image_size);
-  std::string code_id(buffer);
-  code_id = elf_sha1::SHA1HashString(code_id);
-  std::string basename_hash = elf_sha1::SHA1HashString(basename);
   PackedListModule target = {};
   ::memcpy(target.basename_hash, basename_hash.data(), elf_sha1::kSHA1Length);
-  ::memcpy(target.code_id_hash, code_id.data(), elf_sha1::kSHA1Length);
+  ::memcpy(target.code_id_hash, fingerprint_hash.data(), elf_sha1::kSHA1Length);
 
   // Binary search for primary hash (basename).  There can be more than one
   // match.
@@ -198,28 +203,35 @@ bool IsModuleListed(const std::string& basename,
 }
 
 std::wstring GetBlFilePathUsed() {
+  assert(g_initialized);
   return GetBlFilePath();
 }
 
-// Grab the latest module list(s) from file.
-FileStatus InitFromFile() {
+ThirdPartyStatus InitFromFile() {
   // Debug check: InitFromFile should not be called more than once.
   assert(!g_initialized);
 
-  // TODO(pennymac): Possible UMA log for unexpected failures.
-  FileStatus status = InitInternal();
+  ThirdPartyStatus status = InitInternal();
 
-  if (status == FileStatus::kSuccess)
+  if (IsStatusCodeSuccessful(status))
     g_initialized = true;
 
   return status;
 }
 
-void OverrideFilePathForTesting(const std::wstring& new_bl_path) {
-  GetBlFilePath().assign(new_bl_path);
+bool IsStatusCodeSuccessful(ThirdPartyStatus code) {
+  if (code == ThirdPartyStatus::kSuccess ||
+      code == ThirdPartyStatus::kFilePathNotFoundInRegistry ||
+      code == ThirdPartyStatus::kFileNotFound ||
+      code == ThirdPartyStatus::kFileEmpty ||
+      code == ThirdPartyStatus::kFileArraySizeZero) {
+    return true;
+  }
+
+  return false;
 }
 
-void DeinitFromFileForTesting() {
+void DeinitFromFile() {
   if (!g_initialized)
     return;
 
@@ -229,6 +241,10 @@ void DeinitFromFileForTesting() {
   GetBlFilePath().clear();
 
   g_initialized = false;
+}
+
+void OverrideFilePathForTesting(const std::wstring& new_bl_path) {
+  GetBlFilePath().assign(new_bl_path);
 }
 
 }  // namespace third_party_dlls

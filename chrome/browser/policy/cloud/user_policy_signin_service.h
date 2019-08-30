@@ -14,11 +14,15 @@
 #include "chrome/browser/policy/cloud/user_policy_signin_service_base.h"
 #include "google_apis/gaia/oauth2_token_service.h"
 
+class AccountId;
 class Profile;
 class ProfileOAuth2TokenService;
 
 namespace net {
 class URLRequestContextGetter;
+}
+namespace network {
+class SharedURLLoaderFactory;
 }
 
 namespace policy {
@@ -39,6 +43,7 @@ class UserPolicySigninService : public UserPolicySigninServiceBase,
       UserCloudPolicyManager* policy_manager,
       SigninManager* signin_manager,
       scoped_refptr<net::URLRequestContextGetter> system_request_context,
+      scoped_refptr<network::SharedURLLoaderFactory> system_url_loader_factory,
       ProfileOAuth2TokenService* oauth2_token_service);
   ~UserPolicySigninService() override;
 
@@ -78,7 +83,7 @@ class UserPolicySigninService : public UserPolicySigninServiceBase,
  protected:
   // UserPolicySigninServiceBase implementation:
   void InitializeUserCloudPolicyManager(
-      const std::string& username,
+      const AccountId& account_id,
       std::unique_ptr<CloudPolicyClient> client) override;
 
   void PrepareForUserCloudPolicyManagerShutdown() override;

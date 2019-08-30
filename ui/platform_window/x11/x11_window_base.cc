@@ -224,6 +224,10 @@ void X11WindowBase::SetCapture() {}
 
 void X11WindowBase::ReleaseCapture() {}
 
+bool X11WindowBase::HasCapture() const {
+  return false;
+}
+
 void X11WindowBase::ToggleFullscreen() {
   ui::SetWMSpecState(xwindow_, !IsFullscreen(),
                      gfx::GetAtom("_NET_WM_STATE_FULLSCREEN"), x11::None);
@@ -251,6 +255,10 @@ void X11WindowBase::Restore() {
                        gfx::GetAtom("_NET_WM_STATE_MAXIMIZED_VERT"),
                        gfx::GetAtom("_NET_WM_STATE_MAXIMIZED_HORZ"));
   }
+}
+
+PlatformWindowState X11WindowBase::GetPlatformWindowState() const {
+  return state_;
 }
 
 void X11WindowBase::MoveCursorTo(const gfx::Point& location) {
@@ -399,10 +407,6 @@ void X11WindowBase::OnWMStateUpdated() {
 
   if (old_state != state_)
     delegate_->OnWindowStateChanged(state_);
-}
-
-bool X11WindowBase::IsMinimized() const {
-  return state_ == ui::PlatformWindowState::PLATFORM_WINDOW_STATE_MINIMIZED;
 }
 
 bool X11WindowBase::IsMaximized() const {

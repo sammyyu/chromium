@@ -39,7 +39,15 @@ class FakeDB : public ProtoDatabase<T> {
           entries_to_save,
       std::unique_ptr<std::vector<std::string>> keys_to_remove,
       typename ProtoDatabase<T>::UpdateCallback callback) override;
+  void UpdateEntriesWithRemoveFilter(
+      std::unique_ptr<typename ProtoDatabase<T>::KeyEntryVector>
+          entries_to_save,
+      const LevelDB::KeyFilter& filter,
+      typename ProtoDatabase<T>::UpdateCallback callback) override;
   void LoadEntries(typename ProtoDatabase<T>::LoadCallback callback) override;
+  void LoadEntriesWithFilter(
+      const LevelDB::KeyFilter& key_filter,
+      typename ProtoDatabase<T>::LoadCallback callback) override;
   void LoadKeys(typename ProtoDatabase<T>::LoadKeysCallback callback) override;
   void GetEntry(const std::string& key,
                 typename ProtoDatabase<T>::GetCallback callback) override;
@@ -117,10 +125,38 @@ void FakeDB<T>::UpdateEntries(
 }
 
 template <typename T>
+void FakeDB<T>::UpdateEntriesWithRemoveFilter(
+    std::unique_ptr<typename ProtoDatabase<T>::KeyEntryVector> entries_to_save,
+    const LevelDB::KeyFilter& delete_key_filter,
+    typename ProtoDatabase<T>::UpdateCallback callback) {
+  for (const auto& pair : *entries_to_save)
+    (*db_)[pair.first] = pair.second;
+
+  auto it = db_->begin();
+  while (it != db_->end()) {
+    if (!delete_key_filter.is_null() && delete_key_filter.Run(it->first))
+      db_->erase(it++);
+    else
+      ++it;
+  }
+
+  update_callback_ = std::move(callback);
+}
+
+template <typename T>
 void FakeDB<T>::LoadEntries(typename ProtoDatabase<T>::LoadCallback callback) {
+  LoadEntriesWithFilter(LevelDB::KeyFilter(), std::move(callback));
+}
+
+template <typename T>
+void FakeDB<T>::LoadEntriesWithFilter(
+    const LevelDB::KeyFilter& key_filter,
+    typename ProtoDatabase<T>::LoadCallback callback) {
   std::unique_ptr<std::vector<T>> entries(new std::vector<T>());
-  for (const auto& pair : *db_)
-    entries->push_back(pair.second);
+  for (const auto& pair : *db_) {
+    if (key_filter.is_null() || key_filter.Run(pair.first))
+      entries->push_back(pair.second);
+  }
 
   load_callback_ =
       base::BindOnce(RunLoadCallback, std::move(callback), std::move(entries));

@@ -56,7 +56,7 @@ base::string16 GetUninstallSurveyUrl() {
 bool NavigateToUrlWithEdge(const base::string16& url) {
   base::string16 protocol_url = L"microsoft-edge:" + url;
   SHELLEXECUTEINFO info = { sizeof(info) };
-  info.fMask = SEE_MASK_NOASYNC | SEE_MASK_FLAG_NO_UI;
+  info.fMask = SEE_MASK_NOASYNC;
   info.lpVerb = L"open";
   info.lpFile = protocol_url.c_str();
   info.nShow = SW_SHOWNORMAL;
@@ -68,7 +68,7 @@ bool NavigateToUrlWithEdge(const base::string16& url) {
 
 void NavigateToUrlWithIExplore(const base::string16& url) {
   base::FilePath iexplore;
-  if (!PathService::Get(base::DIR_PROGRAM_FILES, &iexplore))
+  if (!base::PathService::Get(base::DIR_PROGRAM_FILES, &iexplore))
     return;
 
   iexplore = iexplore.AppendASCII("Internet Explorer");

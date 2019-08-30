@@ -130,14 +130,10 @@ void UiController::OnNotificationUpdated(const std::string& notification_id) {
   OnMessageCenterChanged();
 }
 
-void UiController::OnNotificationClicked(const std::string& notification_id) {
-  if (popups_visible_)
-    OnMessageCenterChanged();
-}
-
-void UiController::OnNotificationButtonClicked(
+void UiController::OnNotificationClicked(
     const std::string& notification_id,
-    int button_index) {
+    const base::Optional<int>& button_index,
+    const base::Optional<base::string16>& reply) {
   if (popups_visible_)
     OnMessageCenterChanged();
 }
@@ -161,7 +157,8 @@ void UiController::OnBlockingStateChanged(NotificationBlocker* blocker) {
 }
 
 void UiController::OnMessageCenterChanged() {
-  if (message_center_visible_ && message_center_->NotificationCount() == 0) {
+  if (hide_on_last_notification_ && message_center_visible_ &&
+      message_center_->NotificationCount() == 0) {
     HideMessageCenterBubble();
     return;
   }

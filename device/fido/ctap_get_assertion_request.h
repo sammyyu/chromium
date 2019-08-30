@@ -11,8 +11,11 @@
 #include <vector>
 
 #include "base/component_export.h"
+#include "base/containers/span.h"
 #include "base/macros.h"
 #include "base/optional.h"
+#include "device/fido/fido_cable_discovery.h"
+#include "device/fido/fido_constants.h"
 #include "device/fido/public_key_credential_descriptor.h"
 
 namespace device {
@@ -22,29 +25,40 @@ namespace device {
 // https://fidoalliance.org/specs/fido-v2.0-rd-20161004/fido-client-to-authenticator-protocol-v2.0-rd-20161004.html#authenticatorgetassertion
 class COMPONENT_EXPORT(DEVICE_FIDO) CtapGetAssertionRequest {
  public:
-  CtapGetAssertionRequest(std::string rp_id,
-                          std::vector<uint8_t> client_data_hash);
+  CtapGetAssertionRequest(
+      std::string rp_id,
+      base::span<const uint8_t, kClientDataHashLength> client_data_hash);
+  CtapGetAssertionRequest(const CtapGetAssertionRequest& that);
   CtapGetAssertionRequest(CtapGetAssertionRequest&& that);
+  CtapGetAssertionRequest& operator=(const CtapGetAssertionRequest& other);
   CtapGetAssertionRequest& operator=(CtapGetAssertionRequest&& other);
   ~CtapGetAssertionRequest();
 
+  // Serializes GetAssertion request parameter into CBOR encoded map with
+  // integer keys and CBOR encoded values as defined by the CTAP spec.
+  // https://drafts.fidoalliance.org/fido-2/latest/fido-client-to-authenticator-protocol-v2.0-wd-20180305.html#authenticatorGetAssertion
   std::vector<uint8_t> EncodeAsCBOR() const;
 
-  CtapGetAssertionRequest& SetUserVerificationRequired(
-      bool user_verfication_required);
+  CtapGetAssertionRequest& SetUserVerification(
+      UserVerificationRequirement user_verfication);
   CtapGetAssertionRequest& SetUserPresenceRequired(bool user_presence_required);
   CtapGetAssertionRequest& SetAllowList(
       std::vector<PublicKeyCredentialDescriptor> allow_list);
   CtapGetAssertionRequest& SetPinAuth(std::vector<uint8_t> pin_auth);
   CtapGetAssertionRequest& SetPinProtocol(uint8_t pin_protocol);
+  CtapGetAssertionRequest& SetCableExtension(
+      std::vector<FidoCableDiscovery::CableDiscoveryData> cable_extension);
+  CtapGetAssertionRequest& SetAlternativeApplicationParameter(
+      base::span<const uint8_t, kRpIdHashLength>
+          alternative_application_parameter);
 
   const std::string& rp_id() const { return rp_id_; }
-  const std::vector<uint8_t>& client_data_hash() const {
+  const std::array<uint8_t, kClientDataHashLength>& client_data_hash() const {
     return client_data_hash_;
   }
 
-  bool user_verification_required() const {
-    return user_verification_required_;
+  UserVerificationRequirement user_verification() const {
+    return user_verification_;
   }
 
   bool user_presence_required() const { return user_presence_required_; }
@@ -58,19 +72,34 @@ class COMPONENT_EXPORT(DEVICE_FIDO) CtapGetAssertionRequest {
   }
 
   const base::Optional<uint8_t>& pin_protocol() const { return pin_protocol_; }
+  const base::Optional<std::vector<FidoCableDiscovery::CableDiscoveryData>>&
+  cable_extension() const {
+    return cable_extension_;
+  }
+  const base::Optional<std::array<uint8_t, kRpIdHashLength>>&
+  alternative_application_parameter() const {
+    return alternative_application_parameter_;
+  }
 
  private:
   std::string rp_id_;
-  std::vector<uint8_t> client_data_hash_;
-  bool user_verification_required_ = false;
+  std::array<uint8_t, kClientDataHashLength> client_data_hash_;
+  UserVerificationRequirement user_verification_ =
+      UserVerificationRequirement::kPreferred;
   bool user_presence_required_ = true;
 
   base::Optional<std::vector<PublicKeyCredentialDescriptor>> allow_list_;
   base::Optional<std::vector<uint8_t>> pin_auth_;
   base::Optional<uint8_t> pin_protocol_;
-
-  DISALLOW_COPY_AND_ASSIGN(CtapGetAssertionRequest);
+  base::Optional<std::vector<FidoCableDiscovery::CableDiscoveryData>>
+      cable_extension_;
+  base::Optional<std::array<uint8_t, kRpIdHashLength>>
+      alternative_application_parameter_;
 };
+
+COMPONENT_EXPORT(DEVICE_FIDO)
+base::Optional<CtapGetAssertionRequest> ParseCtapGetAssertionRequest(
+    base::span<const uint8_t> request_bytes);
 
 }  // namespace device
 

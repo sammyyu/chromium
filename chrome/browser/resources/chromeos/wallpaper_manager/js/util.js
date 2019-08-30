@@ -459,6 +459,37 @@ WallpaperUtil.getSurpriseMeCheckboxValue = function() {
 };
 
 /**
+ * A convenience wrapper for displaying the thumbnail image.
+ * @param {Object} imageElement The image element.
+ * @param {string} url The base url of the wallpaper.
+ * @param {string} source The source of the wallpaper corresponding to
+ *     |WallpaperSourceEnum|.
+ */
+WallpaperUtil.displayThumbnail = function(imageElement, url, source) {
+  chrome.wallpaperPrivate.getThumbnail(url, source, data => {
+    if (data) {
+      WallpaperUtil.displayImage(imageElement, data, null /*opt_callback=*/);
+    } else {
+      // The only known case for hitting this branch is when showing the
+      // wallpaper picker for the first time after OOBE, the |saveThumbnail|
+      // operation within |WallpaperThumbnailsGridItem.decorate| hasn't
+      // completed. See http://crbug.com/792829.
+      var xhr = new XMLHttpRequest();
+      xhr.open(
+          'GET', url + WallpaperUtil.getOnlineWallpaperThumbnailSuffix(), true);
+      xhr.responseType = 'arraybuffer';
+      xhr.send(null);
+      xhr.addEventListener('load', function(e) {
+        if (xhr.status === 200) {
+          WallpaperUtil.displayImage(
+              imageElement, xhr.response, null /*opt_callback=*/);
+        }
+      });
+    }
+  });
+};
+
+/**
  * Runs chrome.test.sendMessage in test environment. Does nothing if running
  * in production environment.
  *
@@ -468,4 +499,78 @@ WallpaperUtil.testSendMessage = function(message) {
   var test = chrome.test || window.top.chrome.test;
   if (test)
     test.sendMessage(message);
+};
+
+/**
+ * Gets the daily refresh info from sync storage, or local storage if the former
+ * is not available.
+ * @param {function} callback A callback that takes the value of the info, or
+ *     null if the value is invalid.
+ */
+WallpaperUtil.getDailyRefreshInfo = function(callback) {
+  WallpaperUtil.enabledSyncThemesCallback(syncEnabled => {
+    var parseInfo = dailyRefreshInfoJson => {
+      if (!dailyRefreshInfoJson) {
+        callback(null);
+        return;
+      }
+
+      var dailyRefreshInfo = JSON.parse(dailyRefreshInfoJson);
+      if (!dailyRefreshInfo || !dailyRefreshInfo.hasOwnProperty('enabled') ||
+          !dailyRefreshInfo.hasOwnProperty('collectionId') ||
+          !dailyRefreshInfo.hasOwnProperty('resumeToken')) {
+        callback(null);
+        return;
+      }
+      callback(dailyRefreshInfo);
+    };
+
+    if (syncEnabled) {
+      Constants.WallpaperSyncStorage.get(
+          Constants.AccessSyncDailyRefreshInfoKey, items => {
+            var dailyRefreshInfoJson =
+                items[Constants.AccessSyncDailyRefreshInfoKey];
+            if (dailyRefreshInfoJson) {
+              parseInfo(dailyRefreshInfoJson);
+            } else {
+              Constants.WallpaperLocalStorage.get(
+                  Constants.AccessLocalDailyRefreshInfoKey, items => {
+                    dailyRefreshInfoJson =
+                        items[Constants.AccessLocalDailyRefreshInfoKey];
+                    parseInfo(dailyRefreshInfoJson);
+                    if (dailyRefreshInfoJson) {
+                      WallpaperUtil.saveToSyncStorage(
+                          Constants.AccessSyncDailyRefreshInfoKey,
+                          dailyRefreshInfoJson);
+                    }
+                  });
+            }
+          });
+    } else {
+      Constants.WallpaperLocalStorage.get(
+          Constants.AccessLocalDailyRefreshInfoKey, items => {
+            parseInfo(items[Constants.AccessLocalDailyRefreshInfoKey]);
+          });
+    }
+  });
+};
+
+/**
+ * Saves the daily refresh info to local and sync storage.
+ * @param {Object} dailyRefreshInfo The daily refresh info.
+ */
+WallpaperUtil.saveDailyRefreshInfo = function(dailyRefreshInfo) {
+  // Discard |resumeToken| to prevent the server from potentially fingerprinting
+  // the end user. Therefore, |resumeToken| will always be null when sending
+  // |getSurpriseMeImage| requests.
+  // TODO(crbug.com/810169): Implement the mechanism to avoid duplicate
+  // wallpapers on the client side.
+  dailyRefreshInfo.resumeToken = null;
+  var dailyRefreshInfoJson = JSON.stringify(dailyRefreshInfo);
+  WallpaperUtil.saveToLocalStorage(
+      Constants.AccessLocalDailyRefreshInfoKey, dailyRefreshInfoJson,
+      null /*opt_callback=*/);
+  WallpaperUtil.saveToSyncStorage(
+      Constants.AccessSyncDailyRefreshInfoKey, dailyRefreshInfoJson,
+      null /*opt_callback=*/);
 };

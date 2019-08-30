@@ -13,19 +13,18 @@
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/lock.h"
 #include "base/threading/thread_checker.h"
+#include "build/build_config.h"
 #include "content/common/content_export.h"
 #include "media/blink/webmediaplayer_delegate.h"
 #include "media/blink/webmediaplayer_util.h"
 #include "media/renderers/paint_canvas_video_renderer.h"
 #include "media/video/gpu_video_accelerator_factories.h"
-#include "third_party/WebKit/public/platform/WebMediaPlayer.h"
-#include "third_party/WebKit/public/platform/WebMediaStream.h"
-#include "url/origin.h"
+#include "third_party/blink/public/platform/web_media_player.h"
+#include "third_party/blink/public/platform/web_media_stream.h"
 
 namespace blink {
 class WebLocalFrame;
 class WebMediaPlayerClient;
-class WebSecurityOrigin;
 class WebString;
 }
 
@@ -34,8 +33,8 @@ class GpuMemoryBufferVideoFramePool;
 class MediaLog;
 }
 
-namespace cc_blink {
-class WebLayerImpl;
+namespace cc {
+class VideoLayer;
 }
 
 namespace gpu {
@@ -83,14 +82,14 @@ class CONTENT_EXPORT WebMediaPlayerMS
       scoped_refptr<base::SingleThreadTaskRunner> media_task_runner,
       scoped_refptr<base::TaskRunner> worker_task_runner,
       media::GpuVideoAcceleratorFactories* gpu_factories,
-      const blink::WebString& sink_id,
-      const blink::WebSecurityOrigin& security_origin);
+      const blink::WebString& sink_id);
 
   ~WebMediaPlayerMS() override;
 
-  void Load(LoadType load_type,
-            const blink::WebMediaPlayerSource& source,
-            CORSMode cors_mode) override;
+  blink::WebMediaPlayer::LoadTiming Load(
+      LoadType load_type,
+      const blink::WebMediaPlayerSource& source,
+      CORSMode cors_mode) override;
 
   // Playback controls.
   void Play() override;
@@ -98,16 +97,20 @@ class CONTENT_EXPORT WebMediaPlayerMS
   void Seek(double seconds) override;
   void SetRate(double rate) override;
   void SetVolume(double volume) override;
-  void EnterPictureInPicture() override;
+  void EnterPictureInPicture(
+      blink::WebMediaPlayer::PipWindowOpenedCallback callback) override;
+  void ExitPictureInPicture(
+      blink::WebMediaPlayer::PipWindowClosedCallback callback) override;
+  void RegisterPictureInPictureWindowResizeCallback(
+      blink::WebMediaPlayer::PipWindowResizedCallback) override;
   void SetSinkId(const blink::WebString& sink_id,
-                 const blink::WebSecurityOrigin& security_origin,
                  blink::WebSetSinkIdCallbacks* web_callback) override;
   void SetPreload(blink::WebMediaPlayer::Preload preload) override;
   blink::WebTimeRanges Buffered() const override;
   blink::WebTimeRanges Seekable() const override;
 
   // Methods for painting.
-  void Paint(blink::WebCanvas* canvas,
+  void Paint(cc::PaintCanvas* canvas,
              const blink::WebRect& rect,
              cc::PaintFlags& flags,
              int already_uploaded_id,
@@ -162,6 +165,8 @@ class CONTENT_EXPORT WebMediaPlayerMS
   void OnSeekBackward(double seconds) override;
   void OnVolumeMultiplierUpdate(double multiplier) override;
   void OnBecamePersistentVideo(bool value) override;
+  void OnPictureInPictureModeEnded() override;
+  void OnPictureInPictureControlClicked(const std::string& control_id) override;
 
   bool CopyVideoTextureToPlatformTexture(
       gpu::gles2::GLES2Interface* gl,
@@ -193,9 +198,14 @@ class CONTENT_EXPORT WebMediaPlayerMS
   // blink::WebMediaStreamObserver implementation
   void TrackAdded(const blink::WebMediaStreamTrack& track) override;
   void TrackRemoved(const blink::WebMediaStreamTrack& track) override;
+  void ActiveStateChanged(bool is_active) override;
 
  private:
   friend class WebMediaPlayerMSTest;
+
+#if defined(OS_WIN)
+  static const gfx::Size kUseGpuMemoryBufferVideoFramesMinResolution;
+#endif  // defined(OS_WIN)
 
   void OnFirstFrameReceived(media::VideoRotation video_rotation,
                             bool is_opaque);
@@ -252,11 +262,11 @@ class CONTENT_EXPORT WebMediaPlayerMS
   class FrameDeliverer;
   std::unique_ptr<FrameDeliverer> frame_deliverer_;
 
-  scoped_refptr<MediaStreamVideoRenderer> video_frame_provider_; // Weak
+  scoped_refptr<MediaStreamVideoRenderer> video_frame_provider_;  // Weak
 
-  std::unique_ptr<cc_blink::WebLayerImpl> video_weblayer_;
+  scoped_refptr<cc::VideoLayer> video_layer_;
 
-  scoped_refptr<MediaStreamAudioRenderer> audio_renderer_; // Weak
+  scoped_refptr<MediaStreamAudioRenderer> audio_renderer_;  // Weak
   media::PaintCanvasVideoRenderer video_renderer_;
 
   bool paused_;
@@ -278,7 +288,6 @@ class CONTENT_EXPORT WebMediaPlayerMS
   scoped_refptr<WebMediaPlayerMSCompositor> compositor_;
 
   const std::string initial_audio_output_device_id_;
-  const url::Origin initial_security_origin_;
 
   // The last volume received by setVolume() and the last volume multiplier from
   // OnVolumeMultiplierUpdate().  The multiplier is typical 1.0, but may be less

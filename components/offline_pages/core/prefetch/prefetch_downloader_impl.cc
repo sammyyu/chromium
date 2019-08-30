@@ -5,6 +5,7 @@
 #include "components/offline_pages/core/prefetch/prefetch_downloader_impl.h"
 
 #include "base/bind.h"
+#include "base/callback_helpers.h"
 #include "base/logging.h"
 #include "base/strings/string_util.h"
 #include "base/time/default_clock.h"
@@ -17,6 +18,7 @@
 #include "components/offline_pages/core/prefetch/prefetch_dispatcher.h"
 #include "components/offline_pages/core/prefetch/prefetch_server_urls.h"
 #include "components/offline_pages/core/prefetch/prefetch_service.h"
+#include "net/http/http_util.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "url/gurl.h"
 
@@ -36,15 +38,12 @@ void NotifyDispatcher(PrefetchService* service, PrefetchDownloadResult result) {
 PrefetchDownloaderImpl::PrefetchDownloaderImpl(
     download::DownloadService* download_service,
     version_info::Channel channel)
-    : clock_(new base::DefaultClock()),
+    : clock_(base::DefaultClock::GetInstance()),
       download_service_(download_service),
       channel_(channel),
       weak_ptr_factory_(this) {
   DCHECK(download_service);
 }
-
-PrefetchDownloaderImpl::PrefetchDownloaderImpl(version_info::Channel channel)
-    : download_service_(nullptr), channel_(channel), weak_ptr_factory_(this) {}
 
 PrefetchDownloaderImpl::~PrefetchDownloaderImpl() = default;
 
@@ -72,9 +71,9 @@ void PrefetchDownloaderImpl::CleanupDownloadsWhenReady() {
   cleanup_downloads_when_service_starts_ = true;
 }
 
-void PrefetchDownloaderImpl::StartDownload(
-    const std::string& download_id,
-    const std::string& download_location) {
+void PrefetchDownloaderImpl::StartDownload(const std::string& download_id,
+                                           const std::string& download_location,
+                                           const std::string& operation_name) {
   prefetch_service_->GetLogger()->RecordActivity(
       "Downloader: Start download of '" + download_location +
       "', download_id=" + download_id);
@@ -111,8 +110,9 @@ void PrefetchDownloaderImpl::StartDownload(
       net::MutableNetworkTrafficAnnotationTag(traffic_annotation);
   params.client = download::DownloadClient::OFFLINE_PAGE_PREFETCH;
   params.guid = download_id;
-  params.callback = base::Bind(&PrefetchDownloaderImpl::OnStartDownload,
-                               weak_ptr_factory_.GetWeakPtr());
+  params.callback = base::AdaptCallbackForRepeating(
+      base::BindOnce(&PrefetchDownloaderImpl::OnStartDownload,
+                     weak_ptr_factory_.GetWeakPtr()));
   params.scheduling_params.network_requirements =
       download::SchedulingParams::NetworkRequirements::UNMETERED;
   params.scheduling_params.battery_requirements =
@@ -125,6 +125,16 @@ void PrefetchDownloaderImpl::StartDownload(
   if (!experiment_header.empty()) {
     params.request_params.request_headers.AddHeaderFromString(
         experiment_header);
+  }
+
+  if (!operation_name.empty() &&
+      net::HttpUtil::IsValidHeaderValue(operation_name)) {
+    params.request_params.request_headers.SetHeader(
+        kPrefetchOperationHeaderName, operation_name);
+  } else {
+    // Offline internals uses operation_name="".
+    LOG(WARNING) << "Not setting " << kPrefetchOperationHeaderName
+                 << ", invalid operation name '" << operation_name << "'";
   }
 
   // Lessen download restrictions if limitless prefetching is enabled.
@@ -207,9 +217,8 @@ void PrefetchDownloaderImpl::OnDownloadFailed(const std::string& download_id) {
   NotifyDispatcher(prefetch_service_, result);
 }
 
-void PrefetchDownloaderImpl::SetClockForTesting(
-    std::unique_ptr<base::Clock> clock) {
-  clock_ = std::move(clock);
+void PrefetchDownloaderImpl::SetClockForTesting(base::Clock* clock) {
+  clock_ = clock;
 }
 
 void PrefetchDownloaderImpl::OnStartDownload(

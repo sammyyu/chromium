@@ -12,6 +12,7 @@
 #include "base/callback.h"
 #include "base/containers/hash_tables.h"
 #include "base/logging.h"
+#include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_type.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
@@ -21,7 +22,7 @@ using blink::mojom::PermissionStatus;
 using content::PermissionType;
 
 using RequestPermissionsCallback =
-    base::Callback<void(const std::vector<PermissionStatus>&)>;
+    base::OnceCallback<void(const std::vector<PermissionStatus>&)>;
 
 namespace android_webview {
 
@@ -154,13 +155,13 @@ class AwPermissionManager::PendingRequest {
                  GURL embedding_origin,
                  int render_process_id,
                  int render_frame_id,
-                 const RequestPermissionsCallback callback)
+                 RequestPermissionsCallback callback)
       : permissions(permissions),
         requesting_origin(requesting_origin),
         embedding_origin(embedding_origin),
         render_process_id(render_process_id),
         render_frame_id(render_frame_id),
-        callback(callback),
+        callback(std::move(callback)),
         results(permissions.size(), PermissionStatus::DENIED),
         cancelled_(false) {
     for (size_t i = 0; i < permissions.size(); ++i)
@@ -220,10 +221,7 @@ class AwPermissionManager::PendingRequest {
 };
 
 AwPermissionManager::AwPermissionManager()
-  : content::PermissionManager(),
-    result_cache_(new LastRequestResultCache),
-    weak_ptr_factory_(this) {
-}
+    : result_cache_(new LastRequestResultCache), weak_ptr_factory_(this) {}
 
 AwPermissionManager::~AwPermissionManager() {
   CancelPermissionRequests();
@@ -250,7 +248,7 @@ int AwPermissionManager::RequestPermissions(
         callback) {
   if (permissions.empty()) {
     callback.Run(std::vector<PermissionStatus>());
-    return kNoPendingOperation;
+    return content::PermissionController::kNoPendingOperation;
   }
 
   const GURL& embedding_origin = LastCommittedOrigin(render_frame_host);
@@ -302,27 +300,26 @@ int AwPermissionManager::RequestPermissions(
       case PermissionType::GEOLOCATION:
         delegate->RequestGeolocationPermission(
             pending_request_raw->requesting_origin,
-            base::Bind(&OnRequestResponse, weak_ptr_factory_.GetWeakPtr(),
-                       request_id, permissions[i]));
+            base::BindOnce(&OnRequestResponse, weak_ptr_factory_.GetWeakPtr(),
+                           request_id, permissions[i]));
         break;
       case PermissionType::PROTECTED_MEDIA_IDENTIFIER:
         delegate->RequestProtectedMediaIdentifierPermission(
             pending_request_raw->requesting_origin,
-            base::Bind(&OnRequestResponse, weak_ptr_factory_.GetWeakPtr(),
-                       request_id, permissions[i]));
+            base::BindOnce(&OnRequestResponse, weak_ptr_factory_.GetWeakPtr(),
+                           request_id, permissions[i]));
         break;
       case PermissionType::MIDI_SYSEX:
         delegate->RequestMIDISysexPermission(
             pending_request_raw->requesting_origin,
-            base::Bind(&OnRequestResponse, weak_ptr_factory_.GetWeakPtr(),
-                       request_id, permissions[i]));
+            base::BindOnce(&OnRequestResponse, weak_ptr_factory_.GetWeakPtr(),
+                           request_id, permissions[i]));
         break;
       case PermissionType::AUDIO_CAPTURE:
       case PermissionType::VIDEO_CAPTURE:
       case PermissionType::NOTIFICATIONS:
       case PermissionType::DURABLE_STORAGE:
       case PermissionType::BACKGROUND_SYNC:
-      case PermissionType::SENSORS:
       case PermissionType::FLASH:
       case PermissionType::ACCESSIBILITY_EVENTS:
       case PermissionType::CLIPBOARD_READ:
@@ -334,6 +331,11 @@ int AwPermissionManager::RequestPermissions(
                                                  PermissionStatus::DENIED);
         break;
       case PermissionType::MIDI:
+      case PermissionType::SENSORS:
+        // PermissionType::SENSORS requests are always granted so that access
+        // to device motion and device orientation data (and underlying
+        // sensors) works in the WebView. SensorProviderImpl::GetSensor()
+        // filters requests for other types of sensors.
         pending_request_raw->SetPermissionStatus(permissions[i],
                                                  PermissionStatus::GRANTED);
         break;
@@ -348,7 +350,7 @@ int AwPermissionManager::RequestPermissions(
   // If delegate resolve the permission synchronously, all requests could be
   // already resolved here.
   if (!pending_requests_.Lookup(request_id))
-    return kNoPendingOperation;
+    return content::PermissionController::kNoPendingOperation;
 
   // If requests are resolved without calling delegate functions, e.g.
   // PermissionType::MIDI is permitted within the previous for-loop, all
@@ -358,7 +360,7 @@ int AwPermissionManager::RequestPermissions(
     std::vector<PermissionStatus> results = pending_request_raw->results;
     pending_requests_.Remove(request_id);
     callback.Run(results);
-    return kNoPendingOperation;
+    return content::PermissionController::kNoPendingOperation;
   }
 
   return request_id;
@@ -384,8 +386,8 @@ void AwPermissionManager::OnRequestResponse(
                                     pending_request->embedding_origin, status);
 
   std::vector<int> complete_request_ids;
-  std::vector<std::pair<const RequestPermissionsCallback,
-                        std::vector<PermissionStatus>>>
+  std::vector<
+      std::pair<RequestPermissionsCallback, std::vector<PermissionStatus>>>
       complete_request_pairs;
   for (PendingRequestsMap::Iterator<PendingRequest> it(
            &manager->pending_requests_);
@@ -399,15 +401,16 @@ void AwPermissionManager::OnRequestResponse(
     if (it.GetCurrentValue()->IsCompleted()) {
       complete_request_ids.push_back(it.GetCurrentKey());
       if (!it.GetCurrentValue()->IsCancelled()) {
-        complete_request_pairs.push_back(std::make_pair(
-            it.GetCurrentValue()->callback, it.GetCurrentValue()->results));
+        complete_request_pairs.emplace_back(
+            std::move(it.GetCurrentValue()->callback),
+            std::move(it.GetCurrentValue()->results));
       }
     }
   }
   for (auto id : complete_request_ids)
     manager->pending_requests_.Remove(id);
-  for (auto pair : complete_request_pairs)
-    pair.first.Run(pair.second);
+  for (auto& pair : complete_request_pairs)
+    std::move(pair.first).Run(pair.second);
 }
 
 void AwPermissionManager::ResetPermission(PermissionType permission,
@@ -448,7 +451,7 @@ int AwPermissionManager::SubscribePermissionStatusChange(
     const GURL& requesting_origin,
     const GURL& embedding_origin,
     const base::Callback<void(PermissionStatus)>& callback) {
-  return kNoPendingOperation;
+  return content::PermissionController::kNoPendingOperation;
 }
 
 void AwPermissionManager::UnsubscribePermissionStatusChange(
@@ -508,7 +511,6 @@ void AwPermissionManager::CancelPermissionRequest(int request_id) {
       case PermissionType::AUDIO_CAPTURE:
       case PermissionType::VIDEO_CAPTURE:
       case PermissionType::BACKGROUND_SYNC:
-      case PermissionType::SENSORS:
       case PermissionType::FLASH:
       case PermissionType::ACCESSIBILITY_EVENTS:
       case PermissionType::CLIPBOARD_READ:
@@ -518,6 +520,7 @@ void AwPermissionManager::CancelPermissionRequest(int request_id) {
                          << static_cast<int>(permission);
         break;
       case PermissionType::MIDI:
+      case PermissionType::SENSORS:
         // There is nothing to cancel so this is simply ignored.
         break;
       case PermissionType::NUM:

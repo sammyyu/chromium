@@ -13,6 +13,7 @@
 #include "chrome/browser/profiles/profile_avatar_icon_util.h"
 #include "chrome/browser/signin/account_tracker_service_factory.h"
 #include "chrome/browser/signin/signin_manager_factory.h"
+#include "chrome/browser/signin/unified_consent_helper.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/signin_view_controller_delegate.h"
@@ -31,11 +32,13 @@ const int kProfileImageSize = 128;
 
 SyncConfirmationHandler::SyncConfirmationHandler(
     Browser* browser,
-    const std::unordered_map<std::string, int>& string_to_grd_id_map)
+    const std::unordered_map<std::string, int>& string_to_grd_id_map,
+    consent_auditor::Feature consent_feature)
     : profile_(browser->profile()),
       browser_(browser),
       did_user_explicitly_interact(false),
-      string_to_grd_id_map_(string_to_grd_id_map) {
+      string_to_grd_id_map_(string_to_grd_id_map),
+      consent_feature_(consent_feature) {
   DCHECK(profile_);
   DCHECK(browser_);
   BrowserList::AddObserver(this);
@@ -59,17 +62,20 @@ void SyncConfirmationHandler::OnBrowserRemoved(Browser* browser) {
 }
 
 void SyncConfirmationHandler::RegisterMessages() {
-  web_ui()->RegisterMessageCallback("confirm",
-      base::Bind(&SyncConfirmationHandler::HandleConfirm,
-                 base::Unretained(this)));
-  web_ui()->RegisterMessageCallback("undo",
-      base::Bind(&SyncConfirmationHandler::HandleUndo, base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
-      "goToSettings", base::Bind(&SyncConfirmationHandler::HandleGoToSettings,
-                                 base::Unretained(this)));
-  web_ui()->RegisterMessageCallback("initializedWithSize",
-      base::Bind(&SyncConfirmationHandler::HandleInitializedWithSize,
-                 base::Unretained(this)));
+      "confirm", base::BindRepeating(&SyncConfirmationHandler::HandleConfirm,
+                                     base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "undo", base::BindRepeating(&SyncConfirmationHandler::HandleUndo,
+                                  base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "goToSettings",
+      base::BindRepeating(&SyncConfirmationHandler::HandleGoToSettings,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      "initializedWithSize",
+      base::BindRepeating(&SyncConfirmationHandler::HandleInitializedWithSize,
+                          base::Unretained(this)));
 }
 
 void SyncConfirmationHandler::HandleConfirm(const base::ListValue* args) {
@@ -113,9 +119,31 @@ void SyncConfirmationHandler::RecordConsent(const base::ListValue* args) {
                                              << consent_confirmation;
   int consent_confirmation_id = iter->second;
 
-  ConsentAuditorFactory::GetForProfile(profile_)->RecordGaiaConsent(
-      consent_auditor::Feature::CHROME_SYNC, consent_text_ids,
-      consent_confirmation_id, consent_auditor::ConsentStatus::GIVEN);
+  consent_auditor::ConsentAuditor* consent_auditor =
+      ConsentAuditorFactory::GetForProfile(profile_);
+  const std::string& account_id = SigninManagerFactory::GetForProfile(profile_)
+                                      ->GetAuthenticatedAccountId();
+  // TODO(markusheintz): Use a bool unified_consent_enabled instead of a
+  // consent_auditor::Feature type variable.
+  if (consent_feature_ == consent_auditor::Feature::CHROME_UNIFIED_CONSENT) {
+    sync_pb::UserConsentTypes::UnifiedConsent unified_consent;
+    unified_consent.set_confirmation_grd_id(consent_confirmation_id);
+    for (int id : consent_text_ids) {
+      unified_consent.add_description_grd_ids(id);
+    }
+    unified_consent.set_status(sync_pb::UserConsentTypes::ConsentStatus::
+                                   UserConsentTypes_ConsentStatus_GIVEN);
+    consent_auditor->RecordUnifiedConsent(account_id, unified_consent);
+  } else {
+    sync_pb::UserConsentTypes::SyncConsent sync_consent;
+    sync_consent.set_confirmation_grd_id(consent_confirmation_id);
+    for (int id : consent_text_ids) {
+      sync_consent.add_description_grd_ids(id);
+    }
+    sync_consent.set_status(sync_pb::UserConsentTypes::ConsentStatus::
+                                UserConsentTypes_ConsentStatus_GIVEN);
+    consent_auditor->RecordSyncConsent(account_id, sync_consent);
+  }
 }
 
 void SyncConfirmationHandler::SetUserImageURL(const std::string& picture_url) {

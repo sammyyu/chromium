@@ -12,10 +12,13 @@
 #include "base/task_scheduler/task_scheduler.h"
 #include "base/test/bind_test_util.h"
 #include "base/test/scoped_task_environment.h"
-#include "mojo/common/data_pipe_utils.h"
+#include "mojo/public/cpp/bindings/associated_binding.h"
+#include "mojo/public/cpp/system/data_pipe_utils.h"
+#include "mojo/public/cpp/system/string_data_pipe_producer.h"
 #include "storage/browser/blob/blob_data_builder.h"
 #include "storage/browser/blob/blob_data_item.h"
 #include "storage/browser/blob/blob_storage_context.h"
+#include "storage/browser/test/fake_progress_client.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace storage {
@@ -37,7 +40,7 @@ enum class LengthHintTestType {
 
 }  // namespace
 
-class BlobBuilderFromStreamTest
+class BlobBuilderFromStreamTestWithDelayedLimits
     : public testing::TestWithParam<LengthHintTestType> {
  public:
   void SetUp() override {
@@ -46,13 +49,14 @@ class BlobBuilderFromStreamTest
         data_dir_.GetPath(),
         base::CreateTaskRunnerWithTraits({base::MayBlock()}));
 
+    limits_.max_ipc_memory_size = kTestBlobStorageMaxBytesDataItemSize;
+    limits_.max_shared_memory_size = kTestBlobStorageMaxBytesDataItemSize;
     limits_.max_bytes_data_item_size = kTestBlobStorageMaxBytesDataItemSize;
     limits_.max_blob_in_memory_space = kTestBlobStorageMaxBlobMemorySize;
     limits_.min_page_file_size = kTestBlobStorageMinFileSizeBytes;
     limits_.max_file_size = kTestBlobStorageMaxFileSizeBytes;
     limits_.desired_max_disk_space = kTestBlobStorageMaxDiskSpace;
     limits_.effective_max_disk_space = kTestBlobStorageMaxDiskSpace;
-    context_->set_limits_for_testing(limits_);
   }
 
   void TearDown() override {
@@ -87,7 +91,7 @@ class BlobBuilderFromStreamTest
     BlobBuilderFromStream* finished_builder = nullptr;
     BlobBuilderFromStream builder(
         context_->AsWeakPtr(), kContentType, kContentDisposition, length_hint,
-        std::move(pipe.consumer_handle),
+        std::move(pipe.consumer_handle), nullptr,
         base::BindLambdaForTesting([&](BlobBuilderFromStream* result_builder,
                                        std::unique_ptr<BlobDataHandle> blob) {
           finished_builder = result_builder;
@@ -105,7 +109,7 @@ class BlobBuilderFromStreamTest
           << ", disk_usage: " << context_->memory_controller().disk_usage();
     }
 
-    mojo::common::BlockingCopyFromString(data, pipe.producer_handle);
+    mojo::BlockingCopyFromString(data, pipe.producer_handle);
     pipe.producer_handle.reset();
 
     loop.Run();
@@ -168,6 +172,15 @@ class BlobBuilderFromStreamTest
   std::unique_ptr<BlobStorageContext> context_;
 };
 
+class BlobBuilderFromStreamTest
+    : public BlobBuilderFromStreamTestWithDelayedLimits {
+ public:
+  void SetUp() override {
+    BlobBuilderFromStreamTestWithDelayedLimits::SetUp();
+    context_->set_limits_for_testing(limits_);
+  }
+};
+
 TEST_P(BlobBuilderFromStreamTest, CallbackCalledOnDeletion) {
   mojo::DataPipe pipe;
 
@@ -175,7 +188,7 @@ TEST_P(BlobBuilderFromStreamTest, CallbackCalledOnDeletion) {
   BlobBuilderFromStream* builder_ptr = nullptr;
   auto builder = std::make_unique<BlobBuilderFromStream>(
       context_->AsWeakPtr(), "", "", GetLengthHint(16),
-      std::move(pipe.consumer_handle),
+      std::move(pipe.consumer_handle), nullptr,
       base::BindLambdaForTesting([&](BlobBuilderFromStream* result_builder,
                                      std::unique_ptr<BlobDataHandle> blob) {
         EXPECT_EQ(builder_ptr, result_builder);
@@ -340,7 +353,7 @@ TEST_F(BlobBuilderFromStreamTest, HintTooLargeForQuota) {
   std::unique_ptr<BlobDataHandle> result;
   BlobBuilderFromStream builder(
       context_->AsWeakPtr(), "", "", kLengthHint,
-      std::move(pipe.consumer_handle),
+      std::move(pipe.consumer_handle), nullptr,
       base::BindLambdaForTesting(
           [&](BlobBuilderFromStream*, std::unique_ptr<BlobDataHandle> blob) {
             result = std::move(blob);
@@ -363,7 +376,7 @@ TEST_F(BlobBuilderFromStreamTest, HintTooLargeForQuotaAndNoDisk) {
   std::unique_ptr<BlobDataHandle> result;
   BlobBuilderFromStream builder(
       context_->AsWeakPtr(), "", "", kLengthHint,
-      std::move(pipe.consumer_handle),
+      std::move(pipe.consumer_handle), nullptr,
       base::BindLambdaForTesting(
           [&](BlobBuilderFromStream*, std::unique_ptr<BlobDataHandle> blob) {
             result = std::move(blob);
@@ -377,11 +390,81 @@ TEST_F(BlobBuilderFromStreamTest, HintTooLargeForQuotaAndNoDisk) {
   EXPECT_EQ(0u, context_->memory_controller().disk_usage());
 }
 
+TEST_P(BlobBuilderFromStreamTest, ProgressEvents) {
+  const std::string kData =
+      base::RandBytesAsString(kTestBlobStorageMaxBytesDataItemSize + 5);
+
+  FakeProgressClient progress_client;
+  blink::mojom::ProgressClientAssociatedPtr progress_client_ptr;
+  mojo::AssociatedBinding<blink::mojom::ProgressClient> progress_binding(
+      &progress_client,
+      MakeRequestAssociatedWithDedicatedPipe(&progress_client_ptr));
+
+  mojo::DataPipe pipe;
+  base::RunLoop loop;
+  std::unique_ptr<BlobDataHandle> result;
+  BlobBuilderFromStream builder(
+      context_->AsWeakPtr(), "", "", GetLengthHint(kData.size()),
+      std::move(pipe.consumer_handle), progress_client_ptr.PassInterface(),
+      base::BindLambdaForTesting(
+          [&](BlobBuilderFromStream*, std::unique_ptr<BlobDataHandle> blob) {
+            result = std::move(blob);
+            loop.Quit();
+          }));
+  mojo::BlockingCopyFromString(kData, pipe.producer_handle);
+  pipe.producer_handle.reset();
+
+  loop.Run();
+  progress_binding.FlushForTesting();
+
+  EXPECT_EQ(kData.size(), progress_client.total_size);
+  EXPECT_GE(progress_client.call_count, 2);
+}
+
 INSTANTIATE_TEST_CASE_P(BlobBuilderFromStreamTest,
                         BlobBuilderFromStreamTest,
                         ::testing::Values(LengthHintTestType::kUnknownSize,
                                           LengthHintTestType::kCorrectSize,
                                           LengthHintTestType::kTooLargeSize,
                                           LengthHintTestType::kTooSmallSize));
+
+TEST_F(BlobBuilderFromStreamTestWithDelayedLimits, LargeStream) {
+  const std::string kData =
+      base::RandBytesAsString(kDefaultMinPageFileSize + 32);
+  limits_.desired_max_disk_space = kDefaultMinPageFileSize * 2;
+  limits_.effective_max_disk_space = kDefaultMinPageFileSize * 2;
+
+  mojo::DataPipe pipe;
+  base::RunLoop loop;
+  std::unique_ptr<BlobDataHandle> result;
+  BlobBuilderFromStream builder(
+      context_->AsWeakPtr(), kContentType, kContentDisposition, kData.size(),
+      std::move(pipe.consumer_handle), nullptr,
+      base::BindLambdaForTesting([&](BlobBuilderFromStream* result_builder,
+                                     std::unique_ptr<BlobDataHandle> blob) {
+        result = std::move(blob);
+        loop.Quit();
+      }));
+
+  context_->set_limits_for_testing(limits_);
+  auto data_producer = std::make_unique<mojo::StringDataPipeProducer>(
+      std::move(pipe.producer_handle));
+  auto* producer_ptr = data_producer.get();
+  producer_ptr->Write(
+      kData,
+      mojo::StringDataPipeProducer::AsyncWritingMode::
+          STRING_STAYS_VALID_UNTIL_COMPLETION,
+      base::BindOnce(
+          base::DoNothing::Once<std::unique_ptr<mojo::StringDataPipeProducer>,
+                                MojoResult>(),
+          std::move(data_producer)));
+  pipe.producer_handle.reset();
+  loop.Run();
+
+  ASSERT_TRUE(result);
+  EXPECT_FALSE(result->uuid().empty());
+  EXPECT_EQ(BlobStatus::DONE, result->GetBlobStatus());
+  EXPECT_EQ(kData.size(), result->size());
+}
 
 }  // namespace storage

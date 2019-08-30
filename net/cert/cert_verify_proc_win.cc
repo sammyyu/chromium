@@ -11,6 +11,7 @@
 
 #include "base/memory/free_deleter.h"
 #include "base/metrics/histogram_macros.h"
+#include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_local.h"
@@ -628,7 +629,7 @@ class RevocationInjector {
     };
     BOOL ok = CryptInstallOIDFunctionAddress(
         NULL, X509_ASN_ENCODING, CRYPT_OID_VERIFY_REVOCATION_FUNC,
-        arraysize(kInterceptFunction), kInterceptFunction,
+        base::size(kInterceptFunction), kInterceptFunction,
         CRYPT_INSTALL_OID_FUNC_BEFORE_FLAG);
     DCHECK(ok);
   }
@@ -842,15 +843,6 @@ bool CertVerifyProcWin::SupportsAdditionalTrustAnchors() const {
   return false;
 }
 
-bool CertVerifyProcWin::SupportsOCSPStapling() const {
-  // CERT_OCSP_RESPONSE_PROP_ID is only implemented on Vista+, but it can be
-  // set on Windows XP without error. There is some overhead from the server
-  // sending the OCSP response if it supports the extension, for the subset of
-  // XP clients who will request it but be unable to use it, but this is an
-  // acceptable trade-off for simplicity of implementation.
-  return true;
-}
-
 int CertVerifyProcWin::VerifyInternal(
     X509Certificate* cert,
     const std::string& hostname,
@@ -884,31 +876,29 @@ int CertVerifyProcWin::VerifyInternal(
     szOID_SGC_NETSCAPE
   };
   chain_para.RequestedUsage.dwType = USAGE_MATCH_TYPE_OR;
-  chain_para.RequestedUsage.Usage.cUsageIdentifier = arraysize(usage);
+  chain_para.RequestedUsage.Usage.cUsageIdentifier = base::size(usage);
   chain_para.RequestedUsage.Usage.rgpszUsageIdentifier =
       const_cast<LPSTR*>(usage);
 
   // Get the certificatePolicies extension of the certificate.
   std::unique_ptr<CERT_POLICIES_INFO, base::FreeDeleter> policies_info;
   LPSTR ev_policy_oid = NULL;
-  if (flags & CertVerifier::VERIFY_EV_CERT) {
-    GetCertPoliciesInfo(cert_list.get(), &policies_info);
-    if (policies_info.get()) {
-      EVRootCAMetadata* metadata = EVRootCAMetadata::GetInstance();
-      for (DWORD i = 0; i < policies_info->cPolicyInfo; ++i) {
-        LPSTR policy_oid = policies_info->rgPolicyInfo[i].pszPolicyIdentifier;
-        if (metadata->IsEVPolicyOID(policy_oid)) {
-          ev_policy_oid = policy_oid;
-          chain_para.RequestedIssuancePolicy.dwType = USAGE_MATCH_TYPE_AND;
-          chain_para.RequestedIssuancePolicy.Usage.cUsageIdentifier = 1;
-          chain_para.RequestedIssuancePolicy.Usage.rgpszUsageIdentifier =
-              &ev_policy_oid;
+  GetCertPoliciesInfo(cert_list.get(), &policies_info);
+  if (policies_info) {
+    EVRootCAMetadata* metadata = EVRootCAMetadata::GetInstance();
+    for (DWORD i = 0; i < policies_info->cPolicyInfo; ++i) {
+      LPSTR policy_oid = policies_info->rgPolicyInfo[i].pszPolicyIdentifier;
+      if (metadata->IsEVPolicyOID(policy_oid)) {
+        ev_policy_oid = policy_oid;
+        chain_para.RequestedIssuancePolicy.dwType = USAGE_MATCH_TYPE_AND;
+        chain_para.RequestedIssuancePolicy.Usage.cUsageIdentifier = 1;
+        chain_para.RequestedIssuancePolicy.Usage.rgpszUsageIdentifier =
+            &ev_policy_oid;
 
-          // De-prioritize the CA/Browser forum Extended Validation policy
-          // (2.23.140.1.1). See crbug.com/705285.
-          if (!EVRootCAMetadata::IsCaBrowserForumEvOid(ev_policy_oid))
-            break;
-        }
+        // De-prioritize the CA/Browser forum Extended Validation policy
+        // (2.23.140.1.1). See https://crbug.com/705285.
+        if (!EVRootCAMetadata::IsCaBrowserForumEvOid(ev_policy_oid))
+          break;
       }
     }
   }
@@ -1031,10 +1021,8 @@ int CertVerifyProcWin::VerifyInternal(
 
   if (crl_set_result == kCRLSetRevoked) {
     verify_result->cert_status |= CERT_STATUS_REVOKED;
-  } else if (crl_set_result == kCRLSetUnknown &&
-             (flags & CertVerifier::VERIFY_REV_CHECKING_ENABLED_EV_ONLY) &&
-             !rev_checking_enabled &&
-             ev_policy_oid != NULL) {
+  } else if (crl_set_result == kCRLSetUnknown && !rev_checking_enabled &&
+             ev_policy_oid) {
     // We don't have fresh information about this chain from the CRLSet and
     // it's probably an EV certificate. Retry with online revocation checking.
     rev_checking_enabled = true;

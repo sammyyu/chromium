@@ -80,7 +80,7 @@ void ConstructAvatarPolicy(const std::string& file_name,
                            std::string* policy_data,
                            std::string* policy) {
   base::FilePath test_data_dir;
-  ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir));
+  ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_data_dir));
   ASSERT_TRUE(base::ReadFileToString(
       test_data_dir.Append("chromeos").Append(file_name),
       policy_data));
@@ -191,7 +191,8 @@ void CloudExternalDataPolicyObserverTest::SetUp() {
           base::ThreadTaskRunnerHandle::Get(),
           base::ThreadTaskRunnerHandle::Get(),
           base::ThreadTaskRunnerHandle::Get(),
-          base::ThreadTaskRunnerHandle::Get(), nullptr));
+          base::ThreadTaskRunnerHandle::Get(), /*request_context=*/nullptr,
+          /*url_loader_factory=*/nullptr));
   url_fetcher_factory_.set_remove_fetcher_on_delete(true);
 
   EXPECT_CALL(user_policy_provider_, IsInitializationComplete(_))

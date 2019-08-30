@@ -60,17 +60,8 @@ class ManagePasswordsBubbleModel {
   void OnCredentialEdited(base::string16 new_username,
                           base::string16 new_password);
 
-  // Called by the view code when the save button is clicked by the user.
+  // Called by the view code when the save/update button is clicked by the user.
   void OnSaveClicked();
-
-  // Called by the view code when the update link is clicked by the user.
-  void OnUpdateClicked(const autofill::PasswordForm& password_form);
-
-  // Called by the view code when the "Done" button is clicked by the user.
-  void OnDoneClicked();
-
-  // Called by the view code when the "OK" button is clicked by the user.
-  void OnOKClicked();
 
   // Called by the view code when the manage button is clicked by the user.
   void OnManageClicked();
@@ -93,7 +84,8 @@ class ManagePasswordsBubbleModel {
 
   // Called by the view when the "Sign in" button or the "Sync to" button in the
   // promo bubble is clicked.
-  void OnSignInToChromeClicked(const AccountInfo& account);
+  void OnSignInToChromeClicked(const AccountInfo& account,
+                               bool is_default_promo_account);
 
   // Called by the view when the "No thanks" button in the promo bubble is
   // clicked.
@@ -140,12 +132,13 @@ class ManagePasswordsBubbleModel {
   Profile* GetProfile() const;
   content::WebContents* GetWebContents() const;
 
-  // Returns true iff the multiple account selection prompt for account update
-  // should be presented.
-  bool ShouldShowMultipleAccountUpdateUI() const;
+  // The password bubble can switch its state between "save" and "update"
+  // depending on the user input. |state_| only captures the correct state on
+  // creation. This method returns true iff the current state is "update".
+  bool IsCurrentStateUpdate() const;
 
   // Returns the value for the username field when the bubble is opened.
-  base::string16 GetInitialUsername() const;
+  const base::string16& GetCurrentUsername() const;
 
   // Returns true and updates the internal state iff the Save bubble should
   // switch to show a promotion after the password was saved. Otherwise,
@@ -162,19 +155,13 @@ class ManagePasswordsBubbleModel {
   bool RevealPasswords();
 
  private:
-  enum UserBehaviorOnUpdateBubble {
-    UPDATE_CLICKED,
-    NOPE_CLICKED,
-    NO_INTERACTION
-  };
   class InteractionKeeper;
   // Updates |title_| and |title_brand_link_range_| for the
   // PENDING_PASSWORD_STATE.
   void UpdatePendingStateTitle();
   // Updates |title_| for the MANAGE_STATE.
   void UpdateManageStateTitle();
-  password_manager::metrics_util::UpdatePasswordSubmissionEvent
-  GetUpdateDismissalReason(UserBehaviorOnUpdateBubble behavior) const;
+
   // URL of the page from where this bubble was triggered.
   GURL origin_;
   password_manager::ui::State state_;
@@ -183,7 +170,6 @@ class ManagePasswordsBubbleModel {
   // should point to an article. For the default title the range is empty.
   gfx::Range title_brand_link_range_;
   autofill::PasswordForm pending_password_;
-  bool password_overridden_;
   std::vector<autofill::PasswordForm> local_credentials_;
   base::string16 manage_link_;
   base::string16 save_confirmation_text_;

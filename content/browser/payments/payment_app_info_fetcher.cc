@@ -11,8 +11,8 @@
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/manifest_icon_downloader.h"
-#include "content/public/browser/manifest_icon_selector.h"
 #include "content/public/common/console_message_level.h"
+#include "third_party/blink/public/common/manifest/manifest_icon_selector.h"
 #include "ui/gfx/image/image.h"
 #include "url/origin.h"
 
@@ -107,9 +107,9 @@ void PaymentAppInfoFetcher::SelfDeleteFetcher::Start(
         std::make_unique<WebContentsHelper>(top_level_web_content);
 
     top_level_web_content->GetManifest(
-        base::Bind(&PaymentAppInfoFetcher::SelfDeleteFetcher::
-                       FetchPaymentAppManifestCallback,
-                   base::Unretained(this)));
+        base::BindOnce(&PaymentAppInfoFetcher::SelfDeleteFetcher::
+                           FetchPaymentAppManifestCallback,
+                       base::Unretained(this)));
     return;
   }
 
@@ -127,7 +127,7 @@ void PaymentAppInfoFetcher::SelfDeleteFetcher::RunCallbackAndDestroy() {
 
 void PaymentAppInfoFetcher::SelfDeleteFetcher::FetchPaymentAppManifestCallback(
     const GURL& url,
-    const Manifest& manifest) {
+    const blink::Manifest& manifest) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   manifest_url_ = url;
@@ -209,9 +209,9 @@ void PaymentAppInfoFetcher::SelfDeleteFetcher::FetchPaymentAppManifestCallback(
     return;
   }
 
-  icon_url_ = ManifestIconSelector::FindBestMatchingIcon(
+  icon_url_ = blink::ManifestIconSelector::FindBestMatchingIcon(
       manifest.icons, kPaymentAppIdealIconSize, kPaymentAppMinimumIconSize,
-      Manifest::Icon::ANY);
+      blink::Manifest::ImageResource::Purpose::ANY);
   if (!icon_url_.is_valid()) {
     WarnIfPossible(
         "No suitable payment handler icon found in the \"icons\" field defined "
@@ -233,7 +233,7 @@ void PaymentAppInfoFetcher::SelfDeleteFetcher::FetchPaymentAppManifestCallback(
     return;
   }
 
-  bool can_download = content::ManifestIconDownloader::Download(
+  bool can_download = ManifestIconDownloader::Download(
       web_contents_helper_->web_contents(), icon_url_, kPaymentAppIdealIconSize,
       kPaymentAppMinimumIconSize,
       base::Bind(&PaymentAppInfoFetcher::SelfDeleteFetcher::OnIconFetched,

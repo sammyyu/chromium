@@ -48,6 +48,15 @@ class MEDIA_EXPORT VideoDecoder {
   // name does not change across multiple constructions.
   virtual std::string GetDisplayName() const = 0;
 
+  // Returns true if the implementation is expected to be implemented by the
+  // platform. The value should be available immediately after construction and
+  // should not change within the lifetime of a decoder instance. The value is
+  // used for logging and metrics recording.
+  //
+  // TODO(sandersd): Use this to decide when to switch to software decode for
+  // low-resolution videos. https://crbug.com/684792
+  virtual bool IsPlatformDecoder() const;
+
   // Initializes a VideoDecoder with the given |config|, executing the
   // |init_cb| upon completion. |output_cb| is called for each output frame
   // decoded by Decode().
@@ -99,7 +108,7 @@ class MEDIA_EXPORT VideoDecoder {
   // |output_cb| must be called for each frame pending in the queue and
   // |decode_cb| must be called after that. Callers will not call Decode()
   // again until after the flush completes.
-  virtual void Decode(const scoped_refptr<DecoderBuffer>& buffer,
+  virtual void Decode(scoped_refptr<DecoderBuffer> buffer,
                       const DecodeCB& decode_cb) = 0;
 
   // Resets decoder state. All pending Decode() requests will be finished or

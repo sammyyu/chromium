@@ -66,7 +66,8 @@ void ServiceWorkerProcessManager::Shutdown() {
       if (it.second->HasProcess()) {
         RenderProcessHost* process = it.second->GetProcess();
         if (!process->IsKeepAliveRefCountDisabled())
-          process->DecrementKeepAliveRefCount();
+          process->DecrementKeepAliveRefCount(
+              RenderProcessHost::KeepAliveClientType::kServiceWorker);
       }
     }
   }
@@ -78,7 +79,8 @@ bool ServiceWorkerProcessManager::IsShutdown() {
   return !browser_context_;
 }
 
-ServiceWorkerStatusCode ServiceWorkerProcessManager::AllocateWorkerProcess(
+blink::ServiceWorkerStatusCode
+ServiceWorkerProcessManager::AllocateWorkerProcess(
     int embedded_worker_id,
     const GURL& pattern,
     const GURL& script_url,
@@ -96,11 +98,11 @@ ServiceWorkerStatusCode ServiceWorkerProcessManager::AllocateWorkerProcess(
     out_info->process_id = result;
     out_info->start_situation =
         ServiceWorkerMetrics::StartSituation::EXISTING_READY_PROCESS;
-    return SERVICE_WORKER_OK;
+    return blink::ServiceWorkerStatusCode::kOk;
   }
 
   if (IsShutdown()) {
-    return SERVICE_WORKER_ERROR_ABORT;
+    return blink::ServiceWorkerStatusCode::kErrorAbort;
   }
 
   DCHECK(!base::ContainsKey(worker_process_map_, embedded_worker_id))
@@ -137,9 +139,9 @@ ServiceWorkerStatusCode ServiceWorkerProcessManager::AllocateWorkerProcess(
          rph->InSameStoragePartition(storage_partition_));
 
   ServiceWorkerMetrics::StartSituation start_situation;
-  if (!rph->HasConnection()) {
-    // HasConnection() is false means that Init() has not been called or the
-    // process has been killed.
+  if (!rph->IsInitializedAndNotDead()) {
+    // IsInitializedAndNotDead() is false means that Init() has not been called
+    // or the process has been killed.
     start_situation = ServiceWorkerMetrics::StartSituation::NEW_PROCESS;
   } else if (!rph->IsReady()) {
     start_situation =
@@ -151,15 +153,16 @@ ServiceWorkerStatusCode ServiceWorkerProcessManager::AllocateWorkerProcess(
 
   if (!rph->Init()) {
     LOG(ERROR) << "Couldn't start a new process!";
-    return SERVICE_WORKER_ERROR_PROCESS_NOT_FOUND;
+    return blink::ServiceWorkerStatusCode::kErrorProcessNotFound;
   }
 
   worker_process_map_.emplace(embedded_worker_id, std::move(site_instance));
   if (!rph->IsKeepAliveRefCountDisabled())
-    rph->IncrementKeepAliveRefCount();
+    rph->IncrementKeepAliveRefCount(
+        RenderProcessHost::KeepAliveClientType::kServiceWorker);
   out_info->process_id = rph->GetID();
   out_info->start_situation = start_situation;
-  return SERVICE_WORKER_OK;
+  return blink::ServiceWorkerStatusCode::kOk;
 }
 
 void ServiceWorkerProcessManager::ReleaseWorkerProcess(int embedded_worker_id) {
@@ -186,7 +189,8 @@ void ServiceWorkerProcessManager::ReleaseWorkerProcess(int embedded_worker_id) {
   if (it->second->HasProcess()) {
     RenderProcessHost* process = it->second->GetProcess();
     if (!process->IsKeepAliveRefCountDisabled())
-      process->DecrementKeepAliveRefCount();
+      process->DecrementKeepAliveRefCount(
+          RenderProcessHost::KeepAliveClientType::kServiceWorker);
   }
   worker_process_map_.erase(it);
 }

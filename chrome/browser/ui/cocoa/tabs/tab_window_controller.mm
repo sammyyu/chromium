@@ -47,16 +47,7 @@
   if ([super respondsToSelector:aSelector]) {
     return YES;
   }
-
-  // Only forward methods from the NSWindowDelegate protcol.
-  Protocol* nsWindowDelegateProtocol = objc_getProtocol("NSWindowDelegate");
-  struct objc_method_description methodDescription =
-      protocol_getMethodDescription(nsWindowDelegateProtocol, aSelector, NO,
-                                    YES);
-
-  return methodDescription.name
-             ? [self.tabWindowController respondsToSelector:aSelector]
-             : NO;
+  return [self.tabWindowController respondsToSelector:aSelector];
 }
 
 - (NSMethodSignature*)methodSignatureForSelector:(SEL)aSelector {
@@ -429,7 +420,7 @@
   NOTIMPLEMENTED();
 }
 
-- (void)insertPlaceholderForTab:(TabView*)tab frame:(NSRect)frame {
+- (void)insertPlaceholderForTab:(TabViewCocoa*)tab frame:(NSRect)frame {
   [self showNewTabButton:NO];
 }
 
@@ -454,7 +445,7 @@
   return YES;
 }
 
-- (BOOL)isTabFullyVisible:(TabView*)tab {
+- (BOOL)isTabFullyVisible:(TabViewCocoa*)tab {
   // Subclasses should implement this, but it's not necessary.
   return YES;
 }

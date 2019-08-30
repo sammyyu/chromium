@@ -5,12 +5,14 @@
 #ifndef SERVICES_AUDIO_DEBUG_RECORDING_H_
 #define SERVICES_AUDIO_DEBUG_RECORDING_H_
 
+#include <memory>
 #include <utility>
 
 #include "base/gtest_prod_util.h"
 #include "base/memory/weak_ptr.h"
 #include "mojo/public/cpp/bindings/binding.h"
 #include "services/audio/public/mojom/debug_recording.mojom.h"
+#include "services/audio/traced_service_ref.h"
 
 namespace media {
 class AudioManager;
@@ -23,13 +25,19 @@ namespace audio {
 class DebugRecording : public mojom::DebugRecording {
  public:
   DebugRecording(mojom::DebugRecordingRequest request,
-                 media::AudioManager* audio_manager);
+                 media::AudioManager* audio_manager,
+                 TracedServiceRef service_ref);
 
   // Disables audio debug recording if Enable() was called before.
   ~DebugRecording() override;
 
   // Enables audio debug recording.
   void Enable(mojom::DebugRecordingFileProviderPtr file_provider) override;
+
+  // Releases and returns service ref. Used when creating a new debug recording
+  // session while there is an ongoing debug recording session. Ref is
+  // transfered to the latest debug recording session.
+  TracedServiceRef ReleaseServiceRef();
 
  private:
   FRIEND_TEST_ALL_PREFIXES(DebugRecordingTest,
@@ -43,9 +51,10 @@ class DebugRecording : public mojom::DebugRecording {
       mojom::DebugRecordingFileProvider::CreateWavFileCallback reply_callback);
   bool IsEnabled();
 
+  media::AudioManager* const audio_manager_;
   mojo::Binding<mojom::DebugRecording> binding_;
   mojom::DebugRecordingFileProviderPtr file_provider_;
-  media::AudioManager* const audio_manager_;
+  TracedServiceRef service_ref_;
 
   base::WeakPtrFactory<DebugRecording> weak_factory_;
   DISALLOW_COPY_AND_ASSIGN(DebugRecording);

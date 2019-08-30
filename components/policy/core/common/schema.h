@@ -56,6 +56,10 @@ typedef std::vector<Schema> SchemaList;
 // types of inner elements, for structured types.
 // Objects of this class refer to external, immutable data and are cheap to
 // copy.
+//
+// Schema validation is based on a subset of the JSON Schema standard.
+// TODO(crbug.com/856901): Document the supported subset of the JSON Schema
+// standard.
 class POLICY_EXPORT Schema {
  public:
   // Used internally to store shared data.
@@ -155,6 +159,10 @@ class POLICY_EXPORT Schema {
   // Returns all Schemas from pattern properties that match |key|. May be empty.
   SchemaList GetPatternProperties(const std::string& key) const;
 
+  // Returns this Schema's required properties. May be empty if the Schema has
+  // no required properties.
+  std::vector<std::string> GetRequiredProperties() const;
+
   // Returns the Schema for additional properties. If additional properties are
   // not allowed for this Schema then the Schema returned is not valid.
   Schema GetAdditionalProperties() const;
@@ -175,6 +183,15 @@ class POLICY_EXPORT Schema {
   // This method should be called only if type() == Type::LIST,
   // otherwise invalid memory will be read. A CHECK is currently enforcing this.
   Schema GetItems() const;
+
+  // Gets the validation schema associated with this |schema| - or if there
+  // isn't one, returns an empty invalid schema. There are a few policies that
+  // contain embedded JSON - these policies have a schema for validating that
+  // JSON that is more complicated than the regular schema. For other policies
+  // it is not defined. To get the validation schema for a policy, call
+  // |chrome_schema.GetValidationSchema().GetKnownProperty(policy_name)|, where
+  // |chrome_schema| is the root schema that has all policies as children.
+  Schema GetValidationSchema() const;
 
  private:
   // Builds a schema pointing to the inner structure of |storage|,

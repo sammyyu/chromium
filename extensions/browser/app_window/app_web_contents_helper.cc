@@ -14,7 +14,7 @@
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/suggest_permission_util.h"
 #include "extensions/common/permissions/api_permission.h"
-#include "third_party/WebKit/public/platform/WebGestureEvent.h"
+#include "third_party/blink/public/platform/web_gesture_event.h"
 
 namespace extensions {
 
@@ -84,13 +84,13 @@ void AppWebContentsHelper::RequestToLockMouse() const {
 
 void AppWebContentsHelper::RequestMediaAccessPermission(
     const content::MediaStreamRequest& request,
-    const content::MediaResponseCallback& callback) const {
+    content::MediaResponseCallback callback) const {
   const Extension* extension = GetExtension();
   if (!extension)
     return;
 
-  app_delegate_->RequestMediaAccessPermission(
-      web_contents_, request, callback, extension);
+  app_delegate_->RequestMediaAccessPermission(web_contents_, request,
+                                              std::move(callback), extension);
 }
 
 bool AppWebContentsHelper::CheckMediaAccessPermission(

@@ -29,8 +29,10 @@
 #include "content/public/browser/notification_observer.h"
 #include "content/public/browser/notification_registrar.h"
 #include "extensions/buildflags/buildflags.h"
+#include "ui/gfx/native_widget_types.h"
 
 #if defined(OS_ANDROID)
+#include "chrome/browser/android/download/download_controller.h"
 #include "chrome/browser/android/download/download_location_dialog_bridge.h"
 #endif
 
@@ -59,6 +61,18 @@ class ChromeDownloadManagerDelegate
   static void DisableSafeBrowsing(download::DownloadItem* item);
 
   void SetDownloadManager(content::DownloadManager* dm);
+#if defined(OS_ANDROID)
+
+  void ChooseDownloadLocation(
+      gfx::NativeWindow native_window,
+      int64_t total_bytes,
+      DownloadLocationDialogType dialog_type,
+      const base::FilePath& suggested_path,
+      DownloadLocationDialogBridge::LocationCallback callback);
+
+  void SetDownloadLocationDialogBridgeForTesting(
+      DownloadLocationDialogBridge* bridge);
+#endif
 
   // Callbacks passed to GetNextId() will not be called until the returned
   // callback is called.
@@ -92,7 +106,6 @@ class ChromeDownloadManagerDelegate
       const base::FilePath::StringType& default_extension,
       bool can_save_as_complete,
       const content::SavePackagePathPickedCallback& callback) override;
-  download::InProgressCache* GetInProgressCache() override;
   void SanitizeSavePackageResourceName(base::FilePath* filename) override;
   void OpenDownload(download::DownloadItem* download) override;
   bool IsMostRecentDownloadItemAtFilePath(
@@ -143,6 +156,12 @@ class ChromeDownloadManagerDelegate
   void GetFileMimeType(const base::FilePath& path,
                        const GetFileMimeTypeCallback& callback) override;
 
+#if defined(OS_ANDROID)
+  virtual void OnDownloadCanceled(
+      download::DownloadItem* download,
+      DownloadController::DownloadCancelReason reason);
+#endif
+
   // So that test classes that inherit from this for override purposes
   // can call back into the DownloadManager.
   content::DownloadManager* download_manager_;
@@ -188,7 +207,8 @@ class ChromeDownloadManagerDelegate
 
   // Return true if the downloaded file should be blocked based on the current
   // download restriction pref and |danger_type|.
-  bool ShouldBlockFile(download::DownloadDangerType danger_type) const;
+  bool ShouldBlockFile(download::DownloadDangerType danger_type,
+                       download::DownloadItem* item) const;
 
   void MaybeSendDangerousDownloadOpenedReport(download::DownloadItem* download,
                                               bool show_download_in_folder);
@@ -198,9 +218,17 @@ class ChromeDownloadManagerDelegate
       bool storage_permission_granted,
       bool allow);
 
-  Profile* profile_;
+#if defined(OS_ANDROID)
+  // Called after a unique file name is generated in the case that there is a
+  // TARGET_CONFLICT and the new file name should be displayed to the user.
+  void GenerateUniqueFileNameDone(
+      gfx::NativeWindow native_window,
+      const DownloadTargetDeterminerDelegate::ConfirmationCallback& callback,
+      PathValidationResult result,
+      const base::FilePath& target_path);
+#endif
 
-  std::unique_ptr<download::InProgressCache> download_metadata_cache_;
+  Profile* profile_;
 
 #if defined(OS_ANDROID)
   std::unique_ptr<DownloadLocationDialogBridge> location_dialog_bridge_;
@@ -216,9 +244,9 @@ class ChromeDownloadManagerDelegate
   IdCallbackVector id_callbacks_;
   std::unique_ptr<DownloadPrefs> download_prefs_;
 
-  // SequencedTaskRunner to check for file existence and read/write metadata
-  // cache. A sequence is used so that a large download history doesn't cause a
-  // large number of concurrent disk operations.
+  // SequencedTaskRunner to check for file existence. A sequence is used so
+  // that a large download history doesn't cause a large number of concurrent
+  // disk operations.
   const scoped_refptr<base::SequencedTaskRunner> disk_access_task_runner_;
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)

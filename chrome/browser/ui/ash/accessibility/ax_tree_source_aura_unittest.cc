@@ -18,6 +18,7 @@
 #include "ui/accessibility/ax_tree_serializer.h"
 #include "ui/accessibility/ax_tree_update.h"
 #include "ui/aura/window.h"
+#include "ui/base/material_design/material_design_controller.h"
 #include "ui/views/accessibility/ax_aura_obj_cache.h"
 #include "ui/views/accessibility/ax_aura_obj_wrapper.h"
 #include "ui/views/controls/textfield/textfield.h"
@@ -56,7 +57,6 @@ class AXTreeSourceAuraTest : public ash::AshTestBase {
 
     widget_ = new Widget();
     Widget::InitParams init_params(Widget::InitParams::TYPE_WINDOW_FRAMELESS);
-    init_params.context = CurrentContext();
     widget_->Init(init_params);
 
     content_ = new View();
@@ -101,7 +101,10 @@ TEST_F(AXTreeSourceAuraTest, Accessors) {
   ASSERT_EQ(cached_textfield, textfield);
   std::vector<AXAuraObjWrapper*> textfield_children;
   ax_tree.GetChildren(textfield, &textfield_children);
-  ASSERT_EQ(1U, textfield_children.size());
+  // The textfield has an extra child in Harmony, the focus ring.
+  const size_t expected_children =
+      ui::MaterialDesignController::IsSecondaryUiMaterial() ? 2 : 1;
+  ASSERT_EQ(expected_children, textfield_children.size());
 
   ASSERT_EQ(content, textfield->GetParent());
 
@@ -186,4 +189,18 @@ TEST_F(AXTreeSourceAuraTest, Serialize) {
   ASSERT_NE(-1, text_field_update_index);
   ASSERT_EQ(ax::mojom::Role::kTextField,
             out_update2.nodes[text_field_update_index].role);
+}
+
+TEST_F(AXTreeSourceAuraTest, SerializeWindowSetsClipsChildren) {
+  AXTreeSourceAura ax_tree;
+  AuraAXTreeSerializer ax_serializer(&ax_tree);
+  AXAuraObjWrapper* widget_wrapper =
+      AXAuraObjCache::GetInstance()->GetOrCreate(widget_);
+  ui::AXNodeData node_data;
+  ax_tree.SerializeNode(widget_wrapper, &node_data);
+  EXPECT_EQ(ax::mojom::Role::kWindow, node_data.role);
+  bool clips_children = false;
+  EXPECT_TRUE(node_data.GetBoolAttribute(
+      ax::mojom::BoolAttribute::kClipsChildren, &clips_children));
+  EXPECT_TRUE(clips_children);
 }

@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/android/apk_assets.h"
 #include "base/android/build_info.h"
 #include "base/android/jni_android.h"
 #include "base/android/jni_string.h"
@@ -15,12 +16,13 @@
 #include "base/sys_info.h"
 #include "chromecast/base/cast_sys_info_util.h"
 #include "chromecast/base/version.h"
+#include "chromecast/chromecast_buildflags.h"
 #include "jni/CastSysInfoAndroid_jni.h"
 
 namespace chromecast {
 
 namespace {
-const char kBuildTypeUser[] = "user";
+const char kCastConfigAssetPath[] = "assets/cast_config";
 
 std::string GetAndroidProperty(const std::string& key,
                                const std::string& default_value) {
@@ -34,12 +36,13 @@ std::string GetAndroidProperty(const std::string& key,
   return std::string(value);
 }
 
-}  // namespace
-
-// static
-std::unique_ptr<CastSysInfo> CreateSysInfo() {
-  return std::make_unique<CastSysInfoAndroid>();
+bool DoesCastConfigFileExist() {
+  base::MemoryMappedFile::Region config_region;
+  int config_fd =
+      base::android::OpenApkAsset(kCastConfigAssetPath, &config_region);
+  return config_fd > 0;
 }
+}  // namespace
 
 CastSysInfoAndroid::CastSysInfoAndroid()
     : build_info_(base::android::BuildInfo::GetInstance()) {}
@@ -47,26 +50,17 @@ CastSysInfoAndroid::CastSysInfoAndroid()
 CastSysInfoAndroid::~CastSysInfoAndroid() {}
 
 CastSysInfo::BuildType CastSysInfoAndroid::GetBuildType() {
+  // TODO(b/110375912): Update this to parse the file contents and allow
+  // selection based on the config values.  For now this is just checking for
+  // file existence.
+  if (!DoesCastConfigFileExist())
+    return BUILD_PRODUCTION;
+
   if (CAST_IS_DEBUG_BUILD())
     return BUILD_ENG;
 
-  int build_number;
-  if (!base::StringToInt(CAST_BUILD_INCREMENTAL, &build_number))
-    build_number = 0;
-
-  // Note: no way to determine which channel was used on play store.
-  if (strcmp(build_info_->build_type(), kBuildTypeUser) == 0 &&
-      build_number > 0) {
-    return BUILD_PRODUCTION;
-  }
-
-  // Dogfooders without a user system build should all still have non-Debug
-  // builds of the cast receiver APK, but with valid build numbers.
-  if (build_number > 0)
-    return BUILD_BETA;
-
-  // Default to ENG build.
-  return BUILD_ENG;
+  // Default to BETA build.
+  return BUILD_BETA;
 }
 
 std::string CastSysInfoAndroid::GetSerialNumber() {

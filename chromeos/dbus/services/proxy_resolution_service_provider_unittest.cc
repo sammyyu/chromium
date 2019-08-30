@@ -61,7 +61,7 @@ class TestProxyResolver : public net::ProxyResolver {
   // net::ProxyResolver:
   int GetProxyForURL(const GURL& url,
                      net::ProxyInfo* results,
-                     const net::CompletionCallback& callback,
+                     net::CompletionOnceCallback callback,
                      std::unique_ptr<Request>* request,
                      const net::NetLogWithSource& net_log) override {
     CHECK(network_task_runner_->BelongsToCurrentThread());
@@ -70,7 +70,7 @@ class TestProxyResolver : public net::ProxyResolver {
       return result_;
 
     base::ThreadTaskRunnerHandle::Get()->PostTask(
-        FROM_HERE, base::Bind(callback, result_));
+        FROM_HERE, base::BindOnce(std::move(callback), result_));
     return net::ERR_IO_PENDING;
   }
 
@@ -103,7 +103,7 @@ class TestProxyResolverFactory : public net::ProxyResolverFactory {
   // net::ProxyResolverFactory:
   int CreateProxyResolver(const scoped_refptr<net::PacFileData>& pac_script,
                           std::unique_ptr<net::ProxyResolver>* resolver,
-                          const net::CompletionCallback& callback,
+                          net::CompletionOnceCallback callback,
                           std::unique_ptr<Request>* request) override {
     *resolver = std::make_unique<net::ForwardingProxyResolver>(resolver_);
     return net::OK;
@@ -125,15 +125,18 @@ class TestDelegate : public ProxyResolutionServiceProvider::Delegate {
         context_getter_(
             new net::TestURLRequestContextGetter(network_task_runner)) {
     network_task_runner->PostTask(
-        FROM_HERE, base::Bind(&TestDelegate::CreateProxyServiceOnNetworkThread,
-                              base::Unretained(this)));
+        FROM_HERE,
+        base::BindOnce(
+            &TestDelegate::CreateProxyResolutionServiceOnNetworkThread,
+            base::Unretained(this)));
     RunPendingTasks(network_task_runner);
   }
 
   ~TestDelegate() override {
     context_getter_->GetNetworkTaskRunner()->PostTask(
-        FROM_HERE, base::Bind(&TestDelegate::DeleteProxyServiceOnNetworkThread,
-                              base::Unretained(this)));
+        FROM_HERE,
+        base::BindOnce(&TestDelegate::DeleteProxyServiceOnNetworkThread,
+                       base::Unretained(this)));
     RunPendingTasks(context_getter_->GetNetworkTaskRunner());
   }
 
@@ -145,7 +148,7 @@ class TestDelegate : public ProxyResolutionServiceProvider::Delegate {
  private:
   // Helper method for the constructor that initializes
   // |proxy_resolution_service_| and injects it into |context_getter_|'s context.
-  void CreateProxyServiceOnNetworkThread() {
+  void CreateProxyResolutionServiceOnNetworkThread() {
     CHECK(context_getter_->GetNetworkTaskRunner()->BelongsToCurrentThread());
 
     // Setting a mandatory PAC URL makes |proxy_resolution_service_| query

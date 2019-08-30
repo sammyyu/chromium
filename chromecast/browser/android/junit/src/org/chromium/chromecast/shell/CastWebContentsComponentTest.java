@@ -12,7 +12,6 @@ import static org.mockito.Mockito.times;
 import static org.mockito.Mockito.verify;
 
 import android.app.Activity;
-import android.app.Application;
 import android.content.BroadcastReceiver;
 import android.content.Context;
 import android.content.Intent;
@@ -35,33 +34,23 @@ import org.robolectric.annotation.Config;
 import org.robolectric.shadows.ShadowActivity;
 
 import org.chromium.base.ContextUtils;
+import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.chromecast.shell.CastWebContentsComponent.StartParams;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.testing.local.LocalRobolectricTestRunner;
 
 /**
  * Tests for CastWebContentsComponent.
  */
-@RunWith(LocalRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, application = CastWebContentsComponentTest.FakeApplication.class)
+@RunWith(BaseRobolectricTestRunner.class)
+@Config(manifest = Config.NONE)
 public class CastWebContentsComponentTest {
-    public static class FakeApplication extends Application {
-        @Override
-        protected void attachBaseContext(Context base) {
-            super.attachBaseContext(base);
-            ContextUtils.initApplicationContextForTests(this);
-        }
-    }
-
     private static final String INSTANCE_ID = "1";
 
     private static final String APP_ID = "app";
 
     private static final int VISIBILITY_PRIORITY = 2;
 
-    @Mock
-    private WebContents mWebContents;
-
+    private @Mock WebContents mWebContents;
     private Activity mActivity;
     private ShadowActivity mShadowActivity;
     private StartParams mStartParams;
@@ -137,6 +126,58 @@ public class CastWebContentsComponentTest {
     }
 
     @Test
+    public void testEnableTouchInputSendsEnableTouchToActivity() {
+        Assume.assumeTrue(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
+
+        BroadcastReceiver receiver = Mockito.mock(BroadcastReceiver.class);
+        IntentFilter intentFilter =
+                new IntentFilter(CastWebContentsIntentUtils.ACTION_ENABLE_TOUCH_INPUT);
+        LocalBroadcastManager.getInstance(ContextUtils.getApplicationContext())
+                .registerReceiver(receiver, intentFilter);
+
+        CastWebContentsComponent component =
+                new CastWebContentsComponent(INSTANCE_ID, null, null, null, false, false);
+        component.enableTouchInput(true);
+
+        LocalBroadcastManager.getInstance(ContextUtils.getApplicationContext())
+                .unregisterReceiver(receiver);
+
+        verify(receiver).onReceive(any(Context.class), any(Intent.class));
+    }
+
+    @Test
+    public void testEnableTouchInputBeforeStartedSendsEnableTouchToActivity() {
+        Assume.assumeFalse(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
+        Assume.assumeFalse(BuildConfig.ENABLE_CAST_FRAGMENT);
+
+        CastWebContentsComponent component =
+                new CastWebContentsComponent(INSTANCE_ID, null, null, null, false, false);
+        component.enableTouchInput(true);
+
+        component.start(mStartParams);
+
+        Intent intent = mShadowActivity.getNextStartedActivity();
+
+        Assert.assertTrue(CastWebContentsIntentUtils.isTouchable(intent));
+    }
+
+    @Test
+    public void testDisableTouchInputBeforeStartedSendsEnableTouchToActivity() {
+        Assume.assumeFalse(BuildConfig.DISPLAY_WEB_CONTENTS_IN_SERVICE);
+        Assume.assumeFalse(BuildConfig.ENABLE_CAST_FRAGMENT);
+
+        CastWebContentsComponent component =
+                new CastWebContentsComponent(INSTANCE_ID, null, null, null, false, false);
+        component.enableTouchInput(false);
+
+        component.start(mStartParams);
+
+        Intent intent = mShadowActivity.getNextStartedActivity();
+
+        Assert.assertFalse(CastWebContentsIntentUtils.isTouchable(intent));
+    }
+
+    @Test
     public void testOnComponentClosedCallsCallback() {
         CastWebContentsComponent.OnComponentClosedHandler callback =
                 Mockito.mock(CastWebContentsComponent.OnComponentClosedHandler.class);
@@ -182,7 +223,7 @@ public class CastWebContentsComponentTest {
         CastWebContentsComponent component =
                 new CastWebContentsComponent(INSTANCE_ID, null, null, callback, false, false);
         component.start(mStartParams);
-        CastWebContentsComponent.onVisiblityChange(INSTANCE_ID, 2);
+        CastWebContentsComponent.onVisibilityChange(INSTANCE_ID, 2);
         component.stop(mActivity);
 
         verify(callback).onVisibilityChange(2);
@@ -214,10 +255,25 @@ public class CastWebContentsComponentTest {
         StartParams params2 = new StartParams(mActivity, mWebContents, "test", 1);
         component.start(params2);
         Assert.assertTrue(component.isStarted());
-        verify(delegate, times(1)).start(any(StartParams.class));
-        verify(delegate, times(0)).start(eq(params2));
+        verify(delegate, times(2)).start(any(StartParams.class));
+        verify(delegate, times(1)).start(eq(params2));
         component.stop(mActivity);
         Assert.assertFalse(component.isStarted());
         verify(delegate, times(1)).stop(any(Context.class));
+    }
+
+    @Test
+    public void testStartActivityDelegateTwiceNoops() {
+        // Sending focus events to a started Activity is unnecessary because the Activity is always
+        // in focus, and issues with onNewIntent() and duplicate detection can cause unintended
+        // side effects.
+        CastWebContentsComponent component =
+                new CastWebContentsComponent(INSTANCE_ID, null, null, null, false, false);
+        component.setDelegate(component.new ActivityDelegate(false));
+        component.start(mStartParams);
+        Assert.assertEquals(mShadowActivity.getNextStartedActivity().getComponent().getClassName(),
+                CastWebContentsActivity.class.getName());
+        component.start(mStartParams);
+        Assert.assertNull(mShadowActivity.getNextStartedActivity());
     }
 }

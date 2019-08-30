@@ -10,18 +10,18 @@
 #include <windows.h>
 
 #include <algorithm>
-#include <memory>
+#include <utility>
 
 #include "base/base_switches.h"
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/environment.h"
+#include "base/feature_list.h"
 #include "base/files/file_enumerator.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/i18n/rtl.h"
 #include "base/location.h"
-#include "base/macros.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/path_service.h"
 #include "base/scoped_native_library.h"
@@ -87,6 +87,10 @@
 #include "ui/gfx/platform_font_win.h"
 #include "ui/gfx/switches.h"
 #include "ui/strings/grit/app_locale_settings.h"
+
+#if defined(GOOGLE_CHROME_BUILD)
+#include "chrome/browser/conflicts/third_party_conflicts_manager_win.h"
+#endif
 
 namespace {
 
@@ -345,7 +349,7 @@ void OnModuleEvent(const ModuleWatcher::ModuleEvent& event) {
         // task.
         base::PostTaskWithTraits(
             FROM_HERE,
-            {base::MayBlock(),
+            {base::MayBlock(), base::TaskPriority::BACKGROUND,
              base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
             base::Bind(&HandleModuleLoadEventWithoutTimeDateStamp,
                        event.module_path, event.module_size, load_address));
@@ -426,7 +430,7 @@ int DoUninstallTasks(bool chrome_still_running) {
     // work done by setup.exe on uninstall.
     VLOG(1) << "Executing uninstall actions";
     base::FilePath chrome_exe;
-    if (PathService::Get(base::FILE_EXE, &chrome_exe)) {
+    if (base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
       ShellUtil::ShortcutLocation user_shortcut_locations[] = {
           ShellUtil::SHORTCUT_LOCATION_DESKTOP,
           ShellUtil::SHORTCUT_LOCATION_QUICK_LAUNCH,
@@ -452,9 +456,9 @@ int DoUninstallTasks(bool chrome_still_running) {
 // ChromeBrowserMainPartsWin ---------------------------------------------------
 
 ChromeBrowserMainPartsWin::ChromeBrowserMainPartsWin(
-    const content::MainFunctionParams& parameters)
-    : ChromeBrowserMainParts(parameters) {
-}
+    const content::MainFunctionParams& parameters,
+    std::unique_ptr<ui::DataPack> data_pack)
+    : ChromeBrowserMainParts(parameters, std::move(data_pack)) {}
 
 ChromeBrowserMainPartsWin::~ChromeBrowserMainPartsWin() {
 }
@@ -513,11 +517,30 @@ void ChromeBrowserMainPartsWin::ShowMissingLocaleMessageBox() {
 void ChromeBrowserMainPartsWin::PostProfileInit() {
   ChromeBrowserMainParts::PostProfileInit();
 
+#if defined(GOOGLE_CHROME_BUILD)
+  // Explicitly disable the third-party modules blocking.
+  //
+  // Because the blocking code lives in chrome_elf, it is not possible to check
+  // the feature (via the FeatureList API) or the policy to control whether it
+  // is enabled or not.
+  //
+  // What truly controls if the blocking is enabled is the presence of the
+  // module blacklist cache file. This means that to disable the feature, the
+  // cache must be deleted and the browser relaunched.
+  if (!ModuleDatabase::IsThirdPartyBlockingPolicyEnabled() ||
+      !base::FeatureList::IsEnabled(features::kThirdPartyModulesBlocking))
+    ThirdPartyConflictsManager::DisableThirdPartyModuleBlocking(
+        base::CreateTaskRunnerWithTraits(
+            {base::TaskPriority::BACKGROUND,
+             base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN,
+             base::MayBlock()})
+            .get());
+#endif
+
   // Create the module database and hook up the in-process module watcher. This
   // needs to be done before any child processes are initialized as the
   // ModuleDatabase is an endpoint for IPC from child processes.
-  if (base::FeatureList::IsEnabled(features::kModuleDatabase))
-    SetupModuleDatabase(&module_watcher_);
+  SetupModuleDatabase(&module_watcher_);
 }
 
 void ChromeBrowserMainPartsWin::PostBrowserStart() {
@@ -651,7 +674,7 @@ int ChromeBrowserMainPartsWin::HandleIconsCommands(
       ShellExecute(NULL, NULL, L"appwiz.cpl", NULL, NULL, SW_SHOWNORMAL);
 
     // Exit as we are not launching the browser.
-    return content::RESULT_CODE_NORMAL_EXIT;
+    return service_manager::RESULT_CODE_NORMAL_EXIT;
   }
   // We don't hide icons so we shouldn't do anything special to show them
   return chrome::RESULT_CODE_UNSUPPORTED_PARAM;
@@ -664,7 +687,7 @@ bool ChromeBrowserMainPartsWin::CheckMachineLevelInstall() {
   InstallUtil::GetChromeVersion(dist, true, &version);
   if (version.IsValid()) {
     base::FilePath exe_path;
-    PathService::Get(base::DIR_EXE, &exe_path);
+    base::PathService::Get(base::DIR_EXE, &exe_path);
     std::wstring exe = exe_path.value();
     base::FilePath user_exe_path(installer::GetChromeInstallPath(false));
     if (base::FilePath::CompareEqualIgnoreCase(exe, user_exe_path.value())) {

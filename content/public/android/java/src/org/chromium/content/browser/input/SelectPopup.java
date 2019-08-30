@@ -6,19 +6,21 @@ package org.chromium.content.browser.input;
 
 import android.content.Context;
 import android.view.View;
+import android.view.ViewGroup;
 
 import org.chromium.base.VisibleForTesting;
 import org.chromium.base.annotations.CalledByNative;
 import org.chromium.base.annotations.JNINamespace;
 import org.chromium.content.browser.PopupController;
 import org.chromium.content.browser.PopupController.HideablePopup;
+import org.chromium.content.browser.WindowEventObserver;
+import org.chromium.content.browser.WindowEventObserverManager;
 import org.chromium.content.browser.accessibility.WebContentsAccessibilityImpl;
-import org.chromium.content.browser.selection.SelectionPopupControllerImpl;
 import org.chromium.content.browser.webcontents.WebContentsImpl;
-import org.chromium.content.browser.webcontents.WebContentsUserData;
-import org.chromium.content.browser.webcontents.WebContentsUserData.UserDataFactory;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.WebContents.UserDataFactory;
 import org.chromium.ui.base.DeviceFormFactor;
+import org.chromium.ui.base.ViewAndroidDelegate;
 import org.chromium.ui.base.WindowAndroid;
 
 import java.util.ArrayList;
@@ -28,7 +30,8 @@ import java.util.List;
  * Handles the popup UI for the lt&;select&gt; HTML tag support.
  */
 @JNINamespace("content")
-public class SelectPopup implements HideablePopup {
+public class SelectPopup
+        implements HideablePopup, ViewAndroidDelegate.ContainerViewObserver, WindowEventObserver {
     /** UI for Select popup. */
     public interface Ui {
         /**
@@ -42,7 +45,7 @@ public class SelectPopup implements HideablePopup {
         public void hide(boolean sendsCancelMessage);
     }
 
-    private final WebContents mWebContents;
+    private final WebContentsImpl mWebContents;
     private Context mContext;
     private View mContainerView;
     private Ui mPopupView;
@@ -58,13 +61,12 @@ public class SelectPopup implements HideablePopup {
      * Create {@link SelectPopup} instance.
      * @param context Context instance.
      * @param webContents WebContents instance.
-     * @param view Container view.
      */
-    public static SelectPopup create(Context context, WebContents webContents, View view) {
-        SelectPopup selectPopup = WebContentsUserData.fromWebContents(
-                webContents, SelectPopup.class, UserDataFactoryLazyHolder.INSTANCE);
+    public static SelectPopup create(Context context, WebContents webContents) {
+        SelectPopup selectPopup =
+                webContents.getOrSetUserData(SelectPopup.class, UserDataFactoryLazyHolder.INSTANCE);
         assert selectPopup != null && !selectPopup.initialized();
-        selectPopup.init(context, view);
+        selectPopup.init(context);
         return selectPopup;
     }
 
@@ -76,7 +78,7 @@ public class SelectPopup implements HideablePopup {
      *         {@link #create()} is not called yet.
      */
     public static SelectPopup fromWebContents(WebContents webContents) {
-        return WebContentsUserData.fromWebContents(webContents, SelectPopup.class, null);
+        return webContents.getOrSetUserData(SelectPopup.class, null);
     }
 
     /**
@@ -87,24 +89,20 @@ public class SelectPopup implements HideablePopup {
         mWebContents = (WebContentsImpl) webContents;
     }
 
-    private void init(Context context, View containerView) {
+    private void init(Context context) {
         mContext = context;
-        mContainerView = containerView;
+        ViewAndroidDelegate viewDelegate = mWebContents.getViewAndroidDelegate();
+        assert viewDelegate != null;
+        mContainerView = viewDelegate.getContainerView();
+        viewDelegate.addObserver(this);
         mNativeSelectPopup = nativeInit(mWebContents);
         PopupController.register(mWebContents, this);
+        WindowEventObserverManager.from(mWebContents).addObserver(this);
         mInitialized = true;
     }
 
     private boolean initialized() {
         return mInitialized;
-    }
-
-    /**
-     * Update container view.
-     * @param containerView The new view to update.
-     */
-    public void setContainerView(View containerView) {
-        mContainerView = containerView;
     }
 
     /**
@@ -120,6 +118,21 @@ public class SelectPopup implements HideablePopup {
     public void hide() {
         // Cancels the selection by calling nativeSelectMenuItems() with null indices.
         if (mPopupView != null) mPopupView.hide(true);
+    }
+
+    // ViewAndroidDelegate.ContainerViewObserver
+
+    @Override
+    public void onUpdateContainerView(ViewGroup view) {
+        mContainerView = view;
+        hide();
+    }
+
+    // WindowEventObserver
+
+    @Override
+    public void onWindowAndroidChanged(WindowAndroid windowAndroid) {
+        close();
     }
 
     /**
@@ -141,7 +154,7 @@ public class SelectPopup implements HideablePopup {
             return;
         }
 
-        hidePopupsAndClearSelection();
+        PopupController.hidePopupsAndClearSelection(mWebContents);
         assert mNativeSelectPopupSourceFrame == 0 : "Zombie popup did not clear the frame source";
 
         assert items.length == enabled.length;
@@ -188,12 +201,6 @@ public class SelectPopup implements HideablePopup {
     @VisibleForTesting
     public boolean isVisibleForTesting() {
         return mPopupView != null;
-    }
-
-    private void hidePopupsAndClearSelection() {
-        SelectionPopupControllerImpl.fromWebContents(mWebContents).destroyActionModeAndUnselect();
-        mWebContents.dismissTextHandles();
-        PopupController.hideAll(mWebContents);
     }
 
     private WindowAndroid getWindowAndroid() {

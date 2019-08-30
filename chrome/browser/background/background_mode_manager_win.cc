@@ -7,6 +7,7 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/logging.h"
+#include "base/sequenced_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/task_scheduler/post_task.h"
 #include "base/win/registry.h"
@@ -48,10 +49,6 @@ void BackgroundModeManager::DisplayClientInstalledNotification(
                                  l10n_util::GetStringUTF16(IDS_PRODUCT_NAME)),
       message_center::NotifierId(message_center::NotifierId::SYSTEM_COMPONENT,
                                  kAppInstalledNotifierId));
-}
-
-base::string16 BackgroundModeManager::GetPreferencesMenuLabel() {
-  return l10n_util::GetStringUTF16(IDS_OPTIONS);
 }
 
 scoped_refptr<base::SequencedTaskRunner>

@@ -15,7 +15,6 @@
 #include "base/files/file_util.h"
 #include "base/logging.h"
 #include "base/memory/discardable_memory_allocator.h"
-#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/rand_util.h"
@@ -42,7 +41,7 @@
 #include "ipc/ipc_platform_file.h"
 #include "ipc/ipc_sync_channel.h"
 #include "ipc/ipc_sync_message_filter.h"
-#include "media/media_features.h"
+#include "media/media_buildflags.h"
 #include "ppapi/c/dev/ppp_network_state_dev.h"
 #include "ppapi/c/pp_errors.h"
 #include "ppapi/c/ppp.h"
@@ -53,7 +52,7 @@
 #include "ppapi/proxy/resource_reply_thread_registrar.h"
 #include "services/service_manager/public/cpp/connector.h"
 #include "services/ui/public/interfaces/constants.mojom.h"
-#include "third_party/WebKit/public/web/WebKit.h"
+#include "third_party/blink/public/web/blink.h"
 #include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/base/ui_features.h"
@@ -62,6 +61,10 @@
 #include "base/win/win_util.h"
 #include "content/child/font_warmup_win.h"
 #include "sandbox/win/src/sandbox.h"
+#endif
+
+#if defined(OS_MACOSX)
+#include "sandbox/mac/seatbelt_exec.h"
 #endif
 
 #if defined(OS_WIN)
@@ -116,7 +119,7 @@ PpapiThread::PpapiThread(const base::CommandLine& command_line, bool is_broker)
   // allocator.
   if (!command_line.HasSwitch(switches::kSingleProcess)) {
     discardable_memory::mojom::DiscardableSharedMemoryManagerPtr manager_ptr;
-    if (features::IsMusEnabled()) {
+    if (!features::IsAshInBrowserProcess()) {
 #if defined(USE_AURA)
       GetServiceManagerConnection()->GetConnector()->BindInterface(
           ui::mojom::kServiceName, &manager_ptr);
@@ -149,7 +152,7 @@ void PpapiThread::Shutdown() {
 
 bool PpapiThread::Send(IPC::Message* msg) {
   // Allow access from multiple threads.
-  if (message_loop()->task_runner()->BelongsToCurrentThread())
+  if (main_thread_runner()->BelongsToCurrentThread())
     return ChildThreadImpl::Send(msg);
 
   return sync_message_filter()->Send(msg);
@@ -199,6 +202,22 @@ base::SharedMemoryHandle PpapiThread::ShareSharedMemoryHandleWithRemote(
     base::ProcessId remote_pid) {
   DCHECK(remote_pid != base::kNullProcessId);
   return base::SharedMemory::DuplicateHandle(handle);
+}
+
+base::UnsafeSharedMemoryRegion
+PpapiThread::ShareUnsafeSharedMemoryRegionWithRemote(
+    const base::UnsafeSharedMemoryRegion& region,
+    base::ProcessId remote_pid) {
+  DCHECK(remote_pid != base::kNullProcessId);
+  return region.Duplicate();
+}
+
+base::ReadOnlySharedMemoryRegion
+PpapiThread::ShareReadOnlySharedMemoryRegionWithRemote(
+    const base::ReadOnlySharedMemoryRegion& region,
+    base::ProcessId remote_pid) {
+  DCHECK(remote_pid != base::kNullProcessId);
+  return region.Duplicate();
 }
 
 std::set<PP_Instance>* PpapiThread::GetGloballySeenInstanceIDSet() {
@@ -411,7 +430,7 @@ void PpapiThread::OnLoadPlugin(const base::FilePath& path,
 #if defined(OS_MACOSX)
     // TODO(kerrnel): Delete this once the V2 sandbox is default.
     const base::CommandLine* cmdline = base::CommandLine::ForCurrentProcess();
-    if (!cmdline->HasSwitch(switches::kEnableV2Sandbox)) {
+    if (!cmdline->HasSwitch(sandbox::switches::kSeatbeltClientName)) {
       // We need to do this after getting |PPP_GetInterface()| (or presumably
       // doing something nontrivial with the library), else the sandbox
       // intercedes.

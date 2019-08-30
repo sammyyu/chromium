@@ -237,7 +237,7 @@ You might have to adjust the commands to your situation and needs.
 ```
 {
   "version": "0.1.0",
-  "_runner": "terminal",
+  "runner": "terminal",
   "showOutput": "always",
   "echoCommand": true,
   "tasks": [
@@ -524,18 +524,20 @@ Here are some key bindings that are likely to be useful for you:
 #### The `out` folder
 Automatically generated code is put into a subfolder of out/, which means that
 these files are ignored by VS Code (see files.exclude above) and cannot be
-opened e.g. from quick-open (`Ctrl+P`). On Linux, you can create a symlink as a
-work-around:
+opened e.g. from quick-open (`Ctrl+P`).
+As of version 1.21, VS Code does not support negated glob commands, but you can
+define a set of exclude pattern to include only out/Debug/gen:
 ```
-  cd ~/chromium/src
-  mkdir _out
-  ln -s ../out/Debug/gen _out/gen
+"files.exclude": {
+  // Ignore build output folders. Except out/Debug/gen/
+  "out/[^D]*/": true,
+  "out/Debug/[^g]*": true,
+  "out/Debug/g[^e]*": true,
+  "out_*/**": true,
+},
 ```
-We picked _out since it is already in .gitignore, so it won't show up in git
-status.
 
-Note: As of version 1.9, VS Code does not support negated glob commands, but
-once it does, you can use
+Once it does, you can use
 ```
 "!out/Debug/gen/**": true
 ```

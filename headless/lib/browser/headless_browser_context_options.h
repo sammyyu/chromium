@@ -51,12 +51,6 @@ class HeadlessBrowserContextOptions {
   // See HeadlessBrowser::Options::block_new_web_contents.
   bool block_new_web_contents() const;
 
-  // If set the renderer will be constructed with virtual time enabled and in it
-  // base::Time::Now will be overridden to initially return this value.
-  base::Optional<base::Time> initial_virtual_time() const;
-
-  bool allow_cookies() const;
-
   // See HeadlessBrowser::Options::font_render_hinting.
   gfx::FontRenderParams::Hinting font_render_hinting() const;
 
@@ -88,8 +82,6 @@ class HeadlessBrowserContextOptions {
   base::Optional<bool> incognito_mode_;
   base::Optional<bool> site_per_process_;
   base::Optional<bool> block_new_web_contents_;
-  base::Optional<base::Time> initial_virtual_time_;
-  base::Optional<bool> allow_cookies_;
   base::Optional<base::RepeatingCallback<void(WebPreferences*)>>
       override_web_preferences_callback_;
 

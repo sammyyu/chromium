@@ -5,7 +5,6 @@
 #include "ui/views/animation/ink_drop_impl.h"
 
 #include "base/auto_reset.h"
-#include "base/memory/ptr_util.h"
 #include "base/timer/timer.h"
 #include "ui/compositor/layer.h"
 #include "ui/views/animation/ink_drop_highlight.h"
@@ -171,11 +170,15 @@ void InkDropImpl::NoAutoHighlightHiddenState::Enter() {
 }
 
 void InkDropImpl::NoAutoHighlightHiddenState::ShowOnHoverChanged() {
-  HandleHoverAndFocusChangeChanges(kHighlightFadeInOnHoverChangeDurationMs);
+  HandleHoverAndFocusChangeChanges(
+      GetInkDrop()->hover_highlight_fade_duration_ms().value_or(
+          kHighlightFadeInOnHoverChangeDurationMs));
 }
 
 void InkDropImpl::NoAutoHighlightHiddenState::OnHoverChanged() {
-  HandleHoverAndFocusChangeChanges(kHighlightFadeInOnHoverChangeDurationMs);
+  HandleHoverAndFocusChangeChanges(
+      GetInkDrop()->hover_highlight_fade_duration_ms().value_or(
+          kHighlightFadeInOnHoverChangeDurationMs));
 }
 
 void InkDropImpl::NoAutoHighlightHiddenState::ShowOnFocusChanged() {
@@ -216,11 +219,15 @@ void InkDropImpl::NoAutoHighlightVisibleState::Enter() {
 }
 
 void InkDropImpl::NoAutoHighlightVisibleState::ShowOnHoverChanged() {
-  HandleHoverAndFocusChangeChanges(kHighlightFadeOutOnHoverChangeDurationMs);
+  HandleHoverAndFocusChangeChanges(
+      GetInkDrop()->hover_highlight_fade_duration_ms().value_or(
+          kHighlightFadeOutOnHoverChangeDurationMs));
 }
 
 void InkDropImpl::NoAutoHighlightVisibleState::OnHoverChanged() {
-  HandleHoverAndFocusChangeChanges(kHighlightFadeOutOnHoverChangeDurationMs);
+  HandleHoverAndFocusChangeChanges(
+      GetInkDrop()->hover_highlight_fade_duration_ms().value_or(
+          kHighlightFadeOutOnHoverChangeDurationMs));
 }
 
 void InkDropImpl::NoAutoHighlightVisibleState::ShowOnFocusChanged() {
@@ -279,7 +286,7 @@ class InkDropImpl::HideHighlightOnRippleHiddenState
 
   // The timer used to delay the highlight fade in after an ink drop ripple
   // animation.
-  std::unique_ptr<base::Timer> highlight_after_ripple_timer_;
+  std::unique_ptr<base::OneShotTimer> highlight_after_ripple_timer_;
 
   DISALLOW_COPY_AND_ASSIGN(HideHighlightOnRippleHiddenState);
 };
@@ -614,9 +621,7 @@ void InkDropImpl::SetAutoHighlightMode(AutoHighlightMode auto_highlight_mode) {
 }
 
 void InkDropImpl::SetAutoHighlightModeForPlatform() {
-  SetAutoHighlightMode(PlatformStyle::kUseRipples
-                           ? AutoHighlightMode::HIDE_ON_RIPPLE
-                           : AutoHighlightMode::SHOW_ON_RIPPLE);
+  SetAutoHighlightMode(AutoHighlightMode::HIDE_ON_RIPPLE);
 }
 
 void InkDropImpl::HostSizeChanged(const gfx::Size& new_size) {
@@ -645,6 +650,14 @@ void InkDropImpl::AnimateToState(InkDropState ink_drop_state) {
   if (!ink_drop_ripple_)
     CreateInkDropRipple();
   ink_drop_ripple_->AnimateToState(ink_drop_state);
+}
+
+void InkDropImpl::SetHoverHighlightFadeDurationMs(int duration_ms) {
+  hover_highlight_fade_duration_ms_ = duration_ms;
+}
+
+void InkDropImpl::UseDefaultHoverHighlightFadeDuration() {
+  hover_highlight_fade_duration_ms_.reset();
 }
 
 void InkDropImpl::SnapToActivated() {

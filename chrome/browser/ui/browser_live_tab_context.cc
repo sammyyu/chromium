@@ -29,7 +29,7 @@ void BrowserLiveTabContext::ShowBrowserWindow() {
   browser_->window()->Show();
 }
 
-const SessionID& BrowserLiveTabContext::GetSessionID() const {
+SessionID BrowserLiveTabContext::GetSessionID() const {
   return browser_->session_id();
 }
 
@@ -90,8 +90,8 @@ sessions::LiveTab* BrowserLiveTabContext::AddRestoredTab(
 
   WebContents* web_contents = chrome::AddRestoredTab(
       browser_, navigations, tab_index, selected_navigation, extension_app_id,
-      select, pin, from_last_session, storage_namespace, user_agent_override,
-      false /* from_session_restore */);
+      select, pin, from_last_session, base::TimeTicks(), storage_namespace,
+      user_agent_override, false /* from_session_restore */);
 
 #if BUILDFLAG(ENABLE_SESSION_SERVICE)
   // The focused tab will be loaded by Browser, and TabLoader will load the
@@ -174,7 +174,7 @@ sessions::LiveTabContext* BrowserLiveTabContext::FindContextForWebContents(
 
 // static
 sessions::LiveTabContext* BrowserLiveTabContext::FindContextWithID(
-    SessionID::id_type desired_id) {
+    SessionID desired_id) {
   Browser* browser = chrome::FindBrowserWithID(desired_id);
   return browser ? browser->live_tab_context() : nullptr;
 }

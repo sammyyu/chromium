@@ -12,6 +12,7 @@
 
 #include "base/bind.h"
 #include "base/logging.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/trace_event/trace_event.h"
 #include "media/base/demuxer_memory_limit.h"
 #include "media/base/media_switches.h"
@@ -1249,7 +1250,7 @@ void SourceBufferStream<RangeClass>::TrimSpliceOverlap(
                 " (bad content) at time "
              << splice_timestamp.InMicroseconds();
 
-    MEDIA_LOG(ERROR, media_log_)
+    MEDIA_LOG(WARNING, media_log_)
         << "Media is badly muxed. Detected " << overlapped_buffers.size()
         << " overlapping audio buffers at time "
         << splice_timestamp.InMicroseconds();
@@ -1263,6 +1264,16 @@ void SourceBufferStream<RangeClass>::TrimSpliceOverlap(
     DVLOG(3) << __func__ << " No splice trimming at time "
              << splice_timestamp.InMicroseconds()
              << ". Overlapped buffer will be completely removed.";
+    return;
+  }
+
+  // Trimming a buffer with estimated duration is too risky. Estimates are rough
+  // and what appears to be overlap may really just be a bad estimate. Imprecise
+  // trimming may lead to loss of AV sync.
+  if (overlapped_buffer->is_duration_estimated()) {
+    DVLOG(3) << __func__ << " Skipping audio splice trimming at PTS="
+             << splice_timestamp.InMicroseconds() << ". Overlapped buffer has "
+             << "estimated duration.";
     return;
   }
 
@@ -1690,8 +1701,7 @@ SourceBufferStream<RangeClass>::HandleNextBufferWithPreroll(
   }
 
   // Preroll complete, hand out the final buffer.
-  *out_buffer = pending_buffer_;
-  pending_buffer_ = NULL;
+  *out_buffer = std::move(pending_buffer_);
   return SourceBufferStreamStatus::kSuccess;
 }
 
@@ -1702,18 +1712,15 @@ SourceBufferStreamStatus SourceBufferStream<RangeClass>::GetNextBufferInternal(
 
   if (!track_buffer_.empty()) {
     DCHECK(!selected_range_);
-    scoped_refptr<StreamParserBuffer>& next_buffer = track_buffer_.front();
 
-    // If the next buffer is an audio splice frame, the next effective config id
-    // comes from the first splice buffer.
-    if (next_buffer->GetConfigId() != current_config_index_) {
+    if (track_buffer_.front()->GetConfigId() != current_config_index_) {
       config_change_pending_ = true;
       DVLOG(1) << "Config change (track buffer config ID does not match).";
       return SourceBufferStreamStatus::kConfigChange;
     }
 
     DVLOG(3) << __func__ << " Next buffer coming from track_buffer_";
-    *out_buffer = next_buffer;
+    *out_buffer = std::move(track_buffer_.front());
     track_buffer_.pop_front();
     WarnIfTrackBufferExhaustionSkipsForward(*out_buffer);
     highest_output_buffer_timestamp_ = std::max(
@@ -1756,7 +1763,7 @@ SourceBufferStreamStatus SourceBufferStream<RangeClass>::GetNextBufferInternal(
 
 template <typename RangeClass>
 void SourceBufferStream<RangeClass>::WarnIfTrackBufferExhaustionSkipsForward(
-    const scoped_refptr<StreamParserBuffer>& next_buffer) {
+    scoped_refptr<StreamParserBuffer> next_buffer) {
   if (!just_exhausted_track_buffer_)
     return;
 
@@ -1969,13 +1976,21 @@ base::TimeDelta SourceBufferStream<RangeClass>::GetMaxInterbufferDistance()
 
 template <typename RangeClass>
 bool SourceBufferStream<RangeClass>::UpdateAudioConfig(
-    const AudioDecoderConfig& config) {
+    const AudioDecoderConfig& config,
+    bool allow_codec_change) {
   DCHECK(!audio_configs_.empty());
   DCHECK(video_configs_.empty());
   DVLOG(3) << "UpdateAudioConfig.";
 
-  if (audio_configs_[0].codec() != config.codec()) {
-    MEDIA_LOG(ERROR, media_log_) << "Audio codec changes not allowed.";
+  if (!allow_codec_change &&
+      audio_configs_[append_config_index_].codec() != config.codec()) {
+    // TODO(wolenetz): When we relax addSourceBuffer() and changeType() codec
+    // strictness, codec changes should be allowed even without changing the
+    // bytestream.
+    // TODO(wolenetz): Remove "experimental" from this error message when
+    // changeType() ships without needing experimental blink flag.
+    MEDIA_LOG(ERROR, media_log_) << "Audio codec changes not allowed unless "
+                                    "using experimental changeType().";
     return false;
   }
 
@@ -1997,13 +2012,21 @@ bool SourceBufferStream<RangeClass>::UpdateAudioConfig(
 
 template <typename RangeClass>
 bool SourceBufferStream<RangeClass>::UpdateVideoConfig(
-    const VideoDecoderConfig& config) {
+    const VideoDecoderConfig& config,
+    bool allow_codec_change) {
   DCHECK(!video_configs_.empty());
   DCHECK(audio_configs_.empty());
   DVLOG(3) << "UpdateVideoConfig.";
 
-  if (video_configs_[0].codec() != config.codec()) {
-    MEDIA_LOG(ERROR, media_log_) << "Video codec changes not allowed.";
+  if (!allow_codec_change &&
+      video_configs_[append_config_index_].codec() != config.codec()) {
+    // TODO(wolenetz): When we relax addSourceBuffer() and changeType() codec
+    // strictness, codec changes should be allowed even without changing the
+    // bytestream.
+    // TODO(wolenetz): Remove "experimental" from this error message when
+    // changeType() ships without needing experimental blink flag.
+    MEDIA_LOG(ERROR, media_log_) << "Video codec changes not allowed unless "
+                                    "using experimental changeType()";
     return false;
   }
 
@@ -2209,13 +2232,13 @@ constexpr bool SourceBufferStream<SourceBufferRangeByPts>::BufferingByPts() {
 
 template <>
 DecodeTimestamp SourceBufferStream<SourceBufferRangeByDts>::BufferGetTimestamp(
-    const scoped_refptr<StreamParserBuffer>& buffer) {
+    scoped_refptr<StreamParserBuffer> buffer) {
   return buffer->GetDecodeTimestamp();
 }
 
 template <>
 DecodeTimestamp SourceBufferStream<SourceBufferRangeByPts>::BufferGetTimestamp(
-    const scoped_refptr<StreamParserBuffer>& buffer) {
+    scoped_refptr<StreamParserBuffer> buffer) {
   return DecodeTimestamp::FromPresentationTime(buffer->timestamp());
 }
 

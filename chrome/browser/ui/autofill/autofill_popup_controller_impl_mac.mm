@@ -7,8 +7,8 @@
 #include "base/mac/availability.h"
 #import "chrome/browser/ui/cocoa/browser_window_controller.h"
 #import "chrome/browser/ui/cocoa/tab_contents/tab_contents_controller.h"
-#import "chrome/browser/ui/cocoa/web_textfield_touch_bar_controller.h"
-#include "components/autofill/core/browser/autofill_experiments.h"
+#import "chrome/browser/ui/cocoa/touchbar/web_textfield_touch_bar_controller.h"
+#include "components/autofill/core/browser/autofill_popup_delegate.h"
 #include "components/autofill/core/browser/popup_item_ids.h"
 
 using base::WeakPtr;
@@ -49,18 +49,18 @@ AutofillPopupControllerImplMac::AutofillPopupControllerImplMac(
                                   container_view,
                                   element_bounds,
                                   text_direction),
-      touchBarController_(nil) {}
+      touch_bar_controller_(nil),
+      is_credit_card_popup_(delegate->GetPopupType() ==
+                            PopupType::kCreditCards) {}
 
 AutofillPopupControllerImplMac::~AutofillPopupControllerImplMac() {}
 
 void AutofillPopupControllerImplMac::Show(
-    const std::vector<autofill::Suggestion>& suggestions) {
-  AutofillPopupControllerImpl::Show(suggestions);
+    const std::vector<autofill::Suggestion>& suggestions,
+    bool autoselect_first_suggestion) {
+  AutofillPopupControllerImpl::Show(suggestions, autoselect_first_suggestion);
 
-  if (!autofill::IsCreditCardAutofillTouchBarExperimentEnabled())
-    return;
-
-  if (!GetLineCount() || !layout_model().is_credit_card_popup())
+  if (suggestions.empty() || !is_credit_card_popup_)
     return;
 
   if (@available(macOS 10.12.2, *)) {
@@ -68,10 +68,10 @@ void AutofillPopupControllerImplMac::Show(
         browserWindowControllerForWindow:[container_view() window]];
     TabContentsController* tabContentsController =
         [[bwc tabStripController] activeTabContentsController];
-    touchBarController_ =
+    touch_bar_controller_ =
         [tabContentsController webTextfieldTouchBarController];
 
-    [touchBarController_ showCreditCardAutofillWithController:this];
+    [touch_bar_controller_ showCreditCardAutofillWithController:this];
   }
 }
 
@@ -79,15 +79,15 @@ void AutofillPopupControllerImplMac::UpdateDataListValues(
     const std::vector<base::string16>& values,
     const std::vector<base::string16>& labels) {
   AutofillPopupControllerImpl::UpdateDataListValues(values, labels);
-  if (touchBarController_) {
-    [touchBarController_ invalidateTouchBar];
+  if (touch_bar_controller_) {
+    [touch_bar_controller_ invalidateTouchBar];
   }
 }
 
 void AutofillPopupControllerImplMac::Hide() {
-  if (touchBarController_) {
-    [touchBarController_ hideCreditCardAutofillTouchBar];
-    touchBarController_ = nil;
+  if (touch_bar_controller_) {
+    [touch_bar_controller_ hideCreditCardAutofillTouchBar];
+    touch_bar_controller_ = nil;
   }
 
   AutofillPopupControllerImpl::Hide();

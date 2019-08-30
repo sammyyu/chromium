@@ -27,25 +27,22 @@ class InstallAttributes;
 namespace attestation {
 class AttestationFlow;
 }
-}
 
-namespace net {
-class URLRequestContextGetter;
-}
+}  // namespace chromeos
 
 namespace policy {
 
-class ActiveDirectoryPolicyManager;
 class AffiliatedCloudPolicyInvalidator;
 class AffiliatedInvalidationServiceProvider;
 class AffiliatedRemoteCommandsInvalidator;
 class BluetoothPolicyHandler;
+class DeviceActiveDirectoryPolicyManager;
 class DeviceCloudPolicyInitializer;
 class DeviceLocalAccountPolicyService;
+class DeviceNetworkConfigurationUpdater;
 struct EnrollmentConfig;
 class HostnameHandler;
 class MinimumVersionPolicyHandler;
-class DeviceNetworkConfigurationUpdater;
 class ProxyPolicyProvider;
 class ServerBackedStateKeysBroker;
 
@@ -59,9 +56,13 @@ class BrowserPolicyConnectorChromeOS
   ~BrowserPolicyConnectorChromeOS() override;
 
   // ChromeBrowserPolicyConnector:
-  void Init(
-      PrefService* local_state,
-      scoped_refptr<net::URLRequestContextGetter> request_context) override;
+  void Init(PrefService* local_state,
+            scoped_refptr<net::URLRequestContextGetter> request_context,
+            scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory)
+      override;
+
+  // Checks whether this devices is under any kind of enterprise management.
+  bool IsEnterpriseManaged() const override;
 
   // Shutdown() is called from BrowserProcessImpl::StartTearDown() but |this|
   // observes some objects that get destroyed earlier. PreShutdown() is called
@@ -70,9 +71,6 @@ class BrowserPolicyConnectorChromeOS
   void PreShutdown();
 
   void Shutdown() override;
-
-  // Checks whether this devices is under any kind of enterprise management.
-  bool IsEnterpriseManaged() const;
 
   // Checks whether this is a cloud (DM server) managed enterprise device.
   bool IsCloudManaged() const;
@@ -118,7 +116,8 @@ class BrowserPolicyConnectorChromeOS
   }
 
   // May be nullptr, e.g. for cloud-managed devices.
-  ActiveDirectoryPolicyManager* GetDeviceActiveDirectoryPolicyManager() const {
+  DeviceActiveDirectoryPolicyManager* GetDeviceActiveDirectoryPolicyManager()
+      const {
     return device_active_directory_policy_manager_;
   }
 
@@ -205,7 +204,7 @@ class BrowserPolicyConnectorChromeOS
   std::unique_ptr<AffiliatedInvalidationServiceProvider>
       affiliated_invalidation_service_provider_;
   DeviceCloudPolicyManagerChromeOS* device_cloud_policy_manager_ = nullptr;
-  ActiveDirectoryPolicyManager* device_active_directory_policy_manager_ =
+  DeviceActiveDirectoryPolicyManager* device_active_directory_policy_manager_ =
       nullptr;
   PrefService* local_state_ = nullptr;
   std::unique_ptr<DeviceCloudPolicyInitializer>

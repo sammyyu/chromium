@@ -7,7 +7,6 @@
 #include "base/command_line.h"
 #include "base/feature_list.h"
 #include "base/logging.h"
-#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/task_scheduler/post_task.h"
 #include "build/build_config.h"
@@ -16,6 +15,7 @@
 #include "chrome/browser/metrics/chrome_metrics_service_client.h"
 #include "chrome/browser/metrics/variations/chrome_variations_service_client.h"
 #include "chrome/browser/metrics/variations/ui_string_overrider_factory.h"
+#include "chrome/browser/net/system_network_context_manager.h"
 #include "chrome/browser/ui/browser_list.h"
 #include "chrome/browser/ui/browser_otr_state.h"
 #include "chrome/common/chrome_switches.h"
@@ -28,6 +28,7 @@
 #include "components/variations/variations_associated_data.h"
 #include "components/version_info/version_info.h"
 #include "content/public/browser/browser_thread.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 #if defined(OS_ANDROID)
 #include "chrome/browser/ui/android/tab_model/tab_model.h"
@@ -253,9 +254,10 @@ ChromeMetricsServicesManagerClient::CreateEntropyProvider() {
   return GetMetricsStateManager()->CreateDefaultEntropyProvider();
 }
 
-net::URLRequestContextGetter*
-ChromeMetricsServicesManagerClient::GetURLRequestContext() {
-  return g_browser_process->system_request_context();
+scoped_refptr<network::SharedURLLoaderFactory>
+ChromeMetricsServicesManagerClient::GetURLLoaderFactory() {
+  return g_browser_process->system_network_context_manager()
+      ->GetSharedURLLoaderFactory();
 }
 
 bool ChromeMetricsServicesManagerClient::IsMetricsReportingEnabled() {

@@ -26,6 +26,7 @@ import subprocess
 import tempfile
 import traceback
 import urllib2
+import zipfile
 
 from collections import OrderedDict
 
@@ -53,7 +54,6 @@ class MetaBuildWrapper(object):
     self.sep = os.sep
     self.args = argparse.Namespace()
     self.configs = {}
-    self.luci_tryservers = {}
     self.masters = {}
     self.mixins = {}
 
@@ -115,12 +115,12 @@ class MetaBuildWrapper(object):
                             help='analyze whether changes to a set of files '
                                  'will cause a set of binaries to be rebuilt.')
     AddCommonOptions(subp)
-    subp.add_argument('path', nargs=1,
+    subp.add_argument('path',
                       help='path build was generated into.')
-    subp.add_argument('input_path', nargs=1,
+    subp.add_argument('input_path',
                       help='path to a file containing the input arguments '
                            'as a JSON object.')
-    subp.add_argument('output_path', nargs=1,
+    subp.add_argument('output_path',
                       help='path to a file containing the output arguments '
                            'as a JSON object.')
     subp.set_defaults(func=self.CmdAnalyze)
@@ -141,7 +141,7 @@ class MetaBuildWrapper(object):
     subp.add_argument('--swarming-targets-file',
                       help='save runtime dependencies for targets listed '
                            'in file.')
-    subp.add_argument('path', nargs=1,
+    subp.add_argument('path',
                       help='path to generate build into')
     subp.set_defaults(func=self.CmdGen)
 
@@ -149,9 +149,14 @@ class MetaBuildWrapper(object):
                             help='generate the .isolate files for a given'
                                  'binary')
     AddCommonOptions(subp)
-    subp.add_argument('path', nargs=1,
+    subp.add_argument('--no-build', dest='build', default=True,
+                      action='store_false',
+                      help='Do not build, just isolate')
+    subp.add_argument('-j', '--jobs', type=int,
+                      help='Number of jobs to pass to ninja')
+    subp.add_argument('path',
                       help='path build was generated into')
-    subp.add_argument('target', nargs=1,
+    subp.add_argument('target',
                       help='ninja target to generate the isolate for')
     subp.set_defaults(func=self.CmdIsolate)
 
@@ -183,12 +188,12 @@ class MetaBuildWrapper(object):
         '\n'
     )
     AddCommonOptions(subp)
-    subp.add_argument('-j', '--jobs', dest='jobs', type=int,
+    subp.add_argument('-j', '--jobs', type=int,
                       help='Number of jobs to pass to ninja')
     subp.add_argument('--no-build', dest='build', default=True,
                       action='store_false',
                       help='Do not build, just isolate and run')
-    subp.add_argument('path', nargs=1,
+    subp.add_argument('path',
                       help=('path to generate build into (or use).'
                             ' This can be either a regular path or a '
                             'GN-style source-relative path like '
@@ -201,7 +206,7 @@ class MetaBuildWrapper(object):
     subp.add_argument('--no-default-dimensions', action='store_false',
                       dest='default_dimensions', default=True,
                       help='Do not automatically add dimensions to the task')
-    subp.add_argument('target', nargs=1,
+    subp.add_argument('target',
                       help='ninja target to build and run')
     subp.add_argument('extra_args', nargs='*',
                       help=('extra args to pass to the isolate to run. Use '
@@ -216,13 +221,22 @@ class MetaBuildWrapper(object):
                       help='path to config file (default is %(default)s)')
     subp.set_defaults(func=self.CmdValidate)
 
-    subp = subps.add_parser('gerrit-buildbucket-config',
-                            help='Print buildbucket.config for gerrit '
-                            '(see MB user guide)')
-    subp.add_argument('-f', '--config-file', metavar='PATH',
-                      default=self.default_config,
-                      help='path to config file (default is %(default)s)')
-    subp.set_defaults(func=self.CmdBuildbucket)
+    subp = subps.add_parser('zip',
+                            help='generate a .zip containing the files needed '
+                                 'for a given binary')
+    AddCommonOptions(subp)
+    subp.add_argument('--no-build', dest='build', default=True,
+                      action='store_false',
+                      help='Do not build, just isolate')
+    subp.add_argument('-j', '--jobs', type=int,
+                      help='Number of jobs to pass to ninja')
+    subp.add_argument('path',
+                      help='path build was generated into')
+    subp.add_argument('target',
+                      help='ninja target to generate the isolate for')
+    subp.add_argument('zip_path',
+                      help='path to zip file to create')
+    subp.set_defaults(func=self.CmdZip)
 
     subp = subps.add_parser('help',
                             help='Get help on a subcommand.')
@@ -244,7 +258,7 @@ class MetaBuildWrapper(object):
 
     if getattr(self.args, 'input_path', None):
       DumpContentsOfFilePassedTo(
-          'argv[0] (input_path)', self.args.input_path[0])
+          'argv[0] (input_path)', self.args.input_path)
     if getattr(self.args, 'swarming_targets_file', None):
       DumpContentsOfFilePassedTo(
           '--swarming-targets-file', self.args.swarming_targets_file)
@@ -295,6 +309,10 @@ class MetaBuildWrapper(object):
     vals = self.GetConfig()
     if not vals:
       return 1
+    if self.args.build:
+      ret = self.Build(self.args.target)
+      if ret:
+        return ret
     return self.RunGNIsolate(vals)
 
   def CmdLookup(self):
@@ -311,12 +329,8 @@ class MetaBuildWrapper(object):
     vals = self.GetConfig()
     if not vals:
       return 1
-
-    build_dir = self.args.path[0]
-    target = self.args.target[0]
-
     if self.args.build:
-      ret = self.Build(target)
+      ret = self.Build(self.args.target)
       if ret:
         return ret
     ret = self.RunGNIsolate(vals)
@@ -324,9 +338,37 @@ class MetaBuildWrapper(object):
       return ret
 
     if self.args.swarmed:
-      return self._RunUnderSwarming(build_dir, target)
+      return self._RunUnderSwarming(self.args.path, self.args.target)
     else:
-      return self._RunLocallyIsolated(build_dir, target)
+      return self._RunLocallyIsolated(self.args.path, self.args.target)
+
+  def CmdZip(self):
+      ret = self.CmdIsolate()
+      if ret:
+          return ret
+
+      zip_dir = None
+      try:
+          zip_dir = self.TempDir()
+          remap_cmd = [
+            self.executable,
+            self.PathJoin(self.chromium_src_dir, 'tools', 'swarming_client',
+                          'isolate.py'),
+            'remap',
+            '-s', self.PathJoin(self.args.path, self.args.target + '.isolated'),
+            '-o', zip_dir
+          ]
+          self.Run(remap_cmd)
+
+          zip_path = self.args.zip_path
+          with zipfile.ZipFile(zip_path, 'w', zipfile.ZIP_DEFLATED) as fp:
+              for root, _, files in os.walk(zip_dir):
+                  for filename in files:
+                      path = self.PathJoin(root, filename)
+                      fp.write(path, self.RelPath(path, zip_dir))
+      finally:
+          if zip_dir:
+              self.RemoveDirectory(zip_dir)
 
   @staticmethod
   def _AddBaseSoftware(cmd):
@@ -343,9 +385,9 @@ class MetaBuildWrapper(object):
       ('infra/tools/luci/logdog/butler/${platform}',
        'git_revision:e1abc57be62d198b5c2f487bfb2fa2d2eb0e867c'),
       ('infra/tools/luci/vpython-native/${platform}',
-       'git_revision:e1abc57be62d198b5c2f487bfb2fa2d2eb0e867c'),
+       'git_revision:b9c4670197dcefd8762d6e509302acd3efc6e303'),
       ('infra/tools/luci/vpython/${platform}',
-       'git_revision:e1abc57be62d198b5c2f487bfb2fa2d2eb0e867c'),
+       'git_revision:b9c4670197dcefd8762d6e509302acd3efc6e303'),
     ]
     for pkg, vers in cipd_packages:
       cmd.append('--cipd-package=.swarming_module:%s:%s' % (pkg, vers))
@@ -420,36 +462,17 @@ class MetaBuildWrapper(object):
 
     # This code is naive and just picks reasonable defaults per platform.
     if self.platform == 'darwin':
-      os_dim = ('os', 'Mac-10.12')
+      os_dim = ('os', 'Mac-10.13')
     elif self.platform.startswith('linux'):
       os_dim = ('os', 'Ubuntu-14.04')
     elif self.platform == 'win32':
-      os_dim = ('os', 'Windows-10-14393')
+      os_dim = ('os', 'Windows-10')
     else:
       raise MBErr('unrecognized platform string "%s"' % self.platform)
 
     return [('pool', 'Chrome'),
             ('cpu', 'x86-64'),
             os_dim]
-
-  def CmdBuildbucket(self):
-    self.ReadConfigFile()
-
-    self.Print('# This file was generated using '
-               '"tools/mb/mb.py gerrit-buildbucket-config".')
-
-    for luci_tryserver in sorted(self.luci_tryservers):
-      self.Print('[bucket "luci.%s"]' % luci_tryserver)
-      for bot in sorted(self.luci_tryservers[luci_tryserver]):
-        self.Print('\tbuilder = %s' % bot)
-
-    for master in sorted(self.masters):
-      if master.startswith('tryserver.'):
-        self.Print('[bucket "master.%s"]' % master)
-        for bot in sorted(self.masters[master]):
-          self.Print('\tbuilder = %s' % bot)
-
-    return 0
 
   def CmdValidate(self, print_ok=True):
     errs = []
@@ -536,7 +559,7 @@ class MetaBuildWrapper(object):
     return 0
 
   def GetConfig(self):
-    build_dir = self.args.path[0]
+    build_dir = self.args.path
 
     vals = self.DefaultVals()
     if self.args.builder or self.args.master or self.args.config:
@@ -614,7 +637,6 @@ class MetaBuildWrapper(object):
                  (self.args.config_file, e))
 
     self.configs = contents['configs']
-    self.luci_tryservers = contents.get('luci_tryservers', {})
     self.masters = contents['masters']
     self.mixins = contents['mixins']
 
@@ -717,13 +739,13 @@ class MetaBuildWrapper(object):
         self.FlattenMixins(mixin_vals['mixins'], vals, visited)
     return vals
 
-  def RunGNGen(self, vals, compute_grit_inputs_for_analyze=False):
-    build_dir = self.args.path[0]
+  def RunGNGen(self, vals, compute_inputs_for_analyze=False):
+    build_dir = self.args.path
 
     cmd = self.GNCmd('gen', build_dir, '--check')
     gn_args = self.GNArgs(vals)
-    if compute_grit_inputs_for_analyze:
-      gn_args += ' compute_grit_inputs_for_analyze=true'
+    if compute_inputs_for_analyze:
+      gn_args += ' compute_inputs_for_analyze=true'
 
     # Since GN hasn't run yet, the build directory may not even exist.
     self.MaybeMakeDirectory(self.ToAbsPath(build_dir))
@@ -813,14 +835,14 @@ class MetaBuildWrapper(object):
     return 0
 
   def RunGNIsolate(self, vals):
-    target = self.args.target[0]
+    target = self.args.target
     isolate_map = self.ReadIsolateMap()
     err, labels = self.MapTargetsToLabels(isolate_map, [target])
     if err:
       raise MBErr(err)
     label = labels[0]
 
-    build_dir = self.args.path[0]
+    build_dir = self.args.path
     command, extra_files = self.GetIsolateCommand(target, vals)
 
     cmd = self.GNCmd('desc', build_dir, label, 'runtime_deps')
@@ -898,6 +920,8 @@ class MetaBuildWrapper(object):
       subdir, exe = 'linux64', 'gn'
     elif self.platform == 'darwin':
       subdir, exe = 'mac', 'gn'
+    elif self.platform == 'aix6':
+      subdir, exe = 'aix', 'gn'
     else:
       subdir, exe = 'win', 'gn.exe'
 
@@ -913,6 +937,8 @@ class MetaBuildWrapper(object):
       if not re.search('target_os.*=.*"chromeos"', gn_args):
         raise MBErr('GN_ARGS is missing target_os = "chromeos": (GN_ARGS=%s)' %
                     gn_args)
+      if vals['gn_args']:
+        gn_args += ' ' + vals['gn_args']
     else:
       gn_args = vals['gn_args']
 
@@ -941,6 +967,7 @@ class MetaBuildWrapper(object):
     isolate_map = self.ReadIsolateMap()
 
     is_android = 'target_os="android"' in vals['gn_args']
+    is_simplechrome = vals.get('cros_passthrough', False)
     is_fuchsia = 'target_os="fuchsia"' in vals['gn_args']
     is_win = self.platform == 'win32' or 'target_os="win"' in vals['gn_args']
 
@@ -985,6 +1012,11 @@ class MetaBuildWrapper(object):
           '../../testing/test_env.py',
           os.path.join('bin', 'run_%s' % target),
       ]
+    elif is_simplechrome and test_type != 'script':
+      cmdline = [
+          '../../testing/test_env.py',
+          os.path.join('bin', 'run_%s' % target),
+      ]
     elif use_xvfb and test_type == 'windowed_test_launcher':
       extra_files.append('../../testing/xvfb.py')
       cmdline = [
@@ -1009,18 +1041,28 @@ class MetaBuildWrapper(object):
           '--cfi-diag=%d' % cfi_diag,
       ]
     elif test_type == 'script':
-      cmdline = [
+      cmdline = []
+      # If we're testing a CrOS simplechrome build, assume we need to launch a
+      # VM first. So prepend the command to run with the VM launcher.
+      # TODO(bpastene): Differentiate between CrOS VM and hardware tests.
+      if is_simplechrome:
+        cmdline = [os.path.join('bin', 'launch_cros_vm')]
+      cmdline += [
           '../../testing/test_env.py',
           '../../' + self.ToSrcRelPath(isolate_map[target]['script'])
       ]
-    elif test_type in ('raw'):
+    elif test_type in ('raw', 'additional_compile_target'):
       cmdline = [
           './' + str(target) + executable_suffix,
       ]
-
     else:
       self.WriteFailureAndRaise('No command line for %s found (test type %s).'
                                 % (target, test_type), output_path=None)
+
+    if is_win and asan:
+      # Sandbox is not yet supported by ASAN for Windows.
+      # Perhaps this is only needed for tests that use the sandbox?
+      cmdline.append('--no-sandbox')
 
     cmdline += isolate_map[target].get('args', [])
 
@@ -1040,14 +1082,14 @@ class MetaBuildWrapper(object):
   def RunGNAnalyze(self, vals):
     # Analyze runs before 'gn gen' now, so we need to run gn gen
     # in order to ensure that we have a build directory.
-    ret = self.RunGNGen(vals, compute_grit_inputs_for_analyze=True)
+    ret = self.RunGNGen(vals, compute_inputs_for_analyze=True)
     if ret:
       return ret
 
-    build_path = self.args.path[0]
-    input_path = self.args.input_path[0]
+    build_path = self.args.path
+    input_path = self.args.input_path
     gn_input_path = input_path + '.gn'
-    output_path = self.args.output_path[0]
+    output_path = self.args.output_path
     gn_output_path = output_path + '.gn'
 
     inp = self.ReadInputJSON(['files', 'test_targets',
@@ -1172,8 +1214,8 @@ class MetaBuildWrapper(object):
     return 0
 
   def ReadInputJSON(self, required_keys):
-    path = self.args.input_path[0]
-    output_path = self.args.output_path[0]
+    path = self.args.input_path
+    output_path = self.args.output_path
     if not self.Exists(path):
       self.WriteFailureAndRaise('"%s" does not exist' % path, output_path)
 
@@ -1248,8 +1290,12 @@ class MetaBuildWrapper(object):
     self.Print(json.dumps(obj, indent=2, sort_keys=True))
 
   def Build(self, target):
-    build_dir = self.ToSrcRelPath(self.args.path[0])
-    ninja_cmd = ['ninja', '-C', build_dir]
+    build_dir = self.ToSrcRelPath(self.args.path)
+    if self.platform == 'win32':
+      # On Windows use the batch script since there is no exe
+      ninja_cmd = ['autoninja.bat', '-C', build_dir]
+    else:
+      ninja_cmd = ['autoninja', '-C', build_dir]
     if self.args.jobs:
       ninja_cmd.extend(['-j', '%d' % self.args.jobs])
     ninja_cmd.append(target)
@@ -1341,6 +1387,10 @@ class MetaBuildWrapper(object):
       self.Run(['cmd.exe', '/c', 'rmdir', '/q', '/s', abs_path])
     else:
       shutil.rmtree(abs_path, ignore_errors=True)
+
+  def TempDir(self):
+    # This function largely exists so it can be overriden for testing.
+    return tempfile.mkdtemp(prefix='mb_')
 
   def TempFile(self, mode='w'):
     # This function largely exists so it can be overriden for testing.

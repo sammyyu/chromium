@@ -33,7 +33,6 @@
 #include "chrome/browser/profiles/profiles_state.h"
 #include "chrome/browser/signin/local_auth.h"
 #include "chrome/browser/signin/signin_util.h"
-#include "chrome/browser/ui/app_list/app_list_service.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_dialogs.h"
 #include "chrome/browser/ui/browser_finder.h"
@@ -49,8 +48,8 @@
 #include "chrome/common/url_constants.h"
 #include "chrome/grit/chromium_strings.h"
 #include "chrome/grit/generated_resources.h"
+#include "components/account_id/account_id.h"
 #include "components/prefs/pref_service.h"
-#include "components/signin/core/account_id/account_id.h"
 #include "components/signin/core/browser/profile_management_switches.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/notification_service.h"
@@ -96,7 +95,7 @@ const char kJsApiUserManagerRemoveUserWarningLoadStats[] =
     "removeUserWarningLoadStats";
 const char kJsApiUserManagerAreAllProfilesLocked[] =
     "areAllProfilesLocked";
-const size_t kAvatarIconSize = 180;
+const size_t kSigninAvatarIconSize = 180;
 const int kMaxOAuthRetries = 3;
 
 std::string GetAvatarImage(const ProfileAttributesEntry* entry) {
@@ -113,7 +112,8 @@ std::string GetAvatarImage(const ProfileAttributesEntry* entry) {
         profiles::GetPlaceholderAvatarIconResourceID());
   }
   gfx::Image resized_image = profiles::GetSizedAvatarIcon(
-      avatar_image, is_gaia_picture, kAvatarIconSize, kAvatarIconSize);
+      avatar_image, is_gaia_picture, kSigninAvatarIconSize,
+      kSigninAvatarIconSize);
   return webui::GetBitmapDataUrl(resized_image.AsBitmap());
 }
 
@@ -166,12 +166,6 @@ void UrlHashHelper::OnBrowserRemoved(Browser* browser) {
 }
 
 void UrlHashHelper::ExecuteUrlHash() {
-  if (hash_ == profiles::kUserManagerSelectProfileAppLauncher) {
-    AppListService* app_list_service = AppListService::Get();
-    app_list_service->ShowForProfile(profile_);
-    return;
-  }
-
   Browser* target_browser = browser_;
   if (!target_browser) {
     target_browser = chrome::FindLastActiveWithProfile(profile_);
@@ -589,30 +583,39 @@ void UserManagerScreenHandler::OnNetworkError(int response_code) {
 }
 
 void UserManagerScreenHandler::RegisterMessages() {
-  web_ui()->RegisterMessageCallback(kJsApiUserManagerInitialize,
-      base::Bind(&UserManagerScreenHandler::HandleInitialize,
-                 base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(kJsApiUserManagerAuthLaunchUser,
-      base::Bind(&UserManagerScreenHandler::HandleAuthenticatedLaunchUser,
-                 base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(kJsApiUserManagerLaunchGuest,
-      base::Bind(&UserManagerScreenHandler::HandleLaunchGuest,
-                 base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(kJsApiUserManagerLaunchUser,
-      base::Bind(&UserManagerScreenHandler::HandleLaunchUser,
-                 base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(kJsApiUserManagerRemoveUser,
-      base::Bind(&UserManagerScreenHandler::HandleRemoveUser,
-                 base::Unretained(this)));
-  web_ui()->RegisterMessageCallback(kJsApiUserManagerLogRemoveUserWarningShown,
-      base::Bind(&HandleLogRemoveUserWarningShown));
-  web_ui()->RegisterMessageCallback(kJsApiUserManagerRemoveUserWarningLoadStats,
-      base::Bind(&UserManagerScreenHandler::HandleRemoveUserWarningLoadStats,
-                 base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      kJsApiUserManagerInitialize,
+      base::BindRepeating(&UserManagerScreenHandler::HandleInitialize,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      kJsApiUserManagerAuthLaunchUser,
+      base::BindRepeating(
+          &UserManagerScreenHandler::HandleAuthenticatedLaunchUser,
+          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      kJsApiUserManagerLaunchGuest,
+      base::BindRepeating(&UserManagerScreenHandler::HandleLaunchGuest,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      kJsApiUserManagerLaunchUser,
+      base::BindRepeating(&UserManagerScreenHandler::HandleLaunchUser,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      kJsApiUserManagerRemoveUser,
+      base::BindRepeating(&UserManagerScreenHandler::HandleRemoveUser,
+                          base::Unretained(this)));
+  web_ui()->RegisterMessageCallback(
+      kJsApiUserManagerLogRemoveUserWarningShown,
+      base::BindRepeating(&HandleLogRemoveUserWarningShown));
+  web_ui()->RegisterMessageCallback(
+      kJsApiUserManagerRemoveUserWarningLoadStats,
+      base::BindRepeating(
+          &UserManagerScreenHandler::HandleRemoveUserWarningLoadStats,
+          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       kJsApiUserManagerAreAllProfilesLocked,
-      base::Bind(&UserManagerScreenHandler::HandleAreAllProfilesLocked,
-                 base::Unretained(this)));
+      base::BindRepeating(&UserManagerScreenHandler::HandleAreAllProfilesLocked,
+                          base::Unretained(this)));
 
   // Unused callbacks from screen_account_picker.js
   web_ui()->RegisterMessageCallback("accountPickerReady", base::DoNothing());
@@ -849,7 +852,7 @@ void UserManagerScreenHandler::ReportAuthenticationResult(
   }
 }
 
-void UserManagerScreenHandler::OnBrowserWindowReady(Browser* browser) {
+void UserManagerScreenHandler::OnBrowserOpened(Browser* browser) {
   DCHECK(browser);
   DCHECK(browser->window());
 
@@ -883,12 +886,12 @@ void UserManagerScreenHandler::Observe(
     int type,
     const content::NotificationSource& source,
     const content::NotificationDetails& details) {
-  DCHECK_EQ(chrome::NOTIFICATION_BROWSER_WINDOW_READY, type);
+  DCHECK_EQ(chrome::NOTIFICATION_BROWSER_OPENED, type);
 
-  // Only respond to one Browser Window Ready event.
-  registrar_.Remove(this, chrome::NOTIFICATION_BROWSER_WINDOW_READY,
+  // Only respond to one Browser Opened event.
+  registrar_.Remove(this, chrome::NOTIFICATION_BROWSER_OPENED,
                     content::NotificationService::AllSources());
-  OnBrowserWindowReady(content::Source<Browser>(source).ptr());
+  OnBrowserOpened(content::Source<Browser>(source).ptr());
 }
 
 // This callback is run after switching to a new profile has finished. This
@@ -900,10 +903,9 @@ void UserManagerScreenHandler::OnSwitchToProfileComplete(
     Profile* profile, Profile::CreateStatus profile_create_status) {
   Browser* browser = chrome::FindAnyBrowser(profile, false);
   if (browser && browser->window()) {
-    OnBrowserWindowReady(browser);
+    OnBrowserOpened(browser);
   } else {
-    registrar_.Add(this,
-                   chrome::NOTIFICATION_BROWSER_WINDOW_READY,
+    registrar_.Add(this, chrome::NOTIFICATION_BROWSER_OPENED,
                    content::NotificationService::AllSources());
   }
 }

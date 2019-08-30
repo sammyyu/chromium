@@ -12,7 +12,6 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/location.h"
-#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
@@ -202,7 +201,7 @@ class DownloadFileTest : public testing::Test {
                           bool calculate_hash,
                           const DownloadItem::ReceivedSlices& received_slices) {
     // There can be only one.
-    DCHECK(!download_file_.get());
+    DCHECK(!download_file_);
 
     input_stream_ = new StrictMock<MockInputStream>();
 
@@ -722,8 +721,8 @@ void TestRenameCompletionCallback(const base::Closure& closure,
 // succeed.
 //
 // Note that there is only one queue of tasks to run, and that is in the tests'
-// base::MessageLoop::current(). Each RunLoop processes that queue until it sees
-// a QuitClosure() targeted at itself, at which point it stops processing.
+// base::MessageLoopCurrent::Get(). Each RunLoop processes that queue until it
+// sees a QuitClosure() targeted at itself, at which point it stops processing.
 TEST_P(DownloadFileTestWithRename, RenameWithErrorRetry) {
   ASSERT_TRUE(CreateDownloadFile(0, true));
   base::FilePath initial_path(download_file_->FullPath());
@@ -1043,8 +1042,8 @@ TEST_F(DownloadFileTest, SecondStreamStartingOffsetAlreadyWritten) {
       .RetiresOnSaturation();
 
   download_file_->AddInputStream(
-      std::unique_ptr<MockInputStream>(additional_streams_[0]), 0,
-      DownloadSaveInfo::kLengthFullContent);
+      std::unique_ptr<MockInputStream>(additional_streams_[0]),
+      strlen(kTestData1), DownloadSaveInfo::kLengthFullContent);
 
   // The stream should get terminated and reset the callback.
   EXPECT_TRUE(sink_callback_.is_null());

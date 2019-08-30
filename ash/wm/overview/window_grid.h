@@ -19,12 +19,12 @@
 #include "ui/aura/window_observer.h"
 #include "ui/gfx/geometry/rect.h"
 
-namespace views {
-class Widget;
+namespace ui {
+class Shadow;
 }
 
-namespace wm {
-class Shadow;
+namespace views {
+class Widget;
 }
 
 namespace ash {
@@ -67,19 +67,9 @@ class ASH_EXPORT WindowGrid : public aura::WindowObserver,
   void PrepareForOverview();
 
   // Positions all the windows in rows of equal height scaling each window to
-  // fit that height.
-  // Layout is done in 2 stages maintaining fixed MRU ordering.
-  // 1. Optimal height is determined. In this stage |height| is bisected to find
-  //    maximum height which still allows all the windows to fit.
-  // 2. Row widths are balanced. In this stage the available width is reduced
-  //    until some windows are no longer fitting or until the difference between
-  //    the narrowest and the widest rows starts growing.
-  // Overall this achieves the goals of maximum size for previews (or maximum
-  // row height which is equivalent assuming fixed height), balanced rows and
-  // minimal wasted space.
-  // Optionally animates the windows to their targets when |animate| is true.
-  // If |ignored_item| is not null and is an item in |window_list_|, that item
-  // is not positioned. This is for split screen.
+  // fit that height. Optionally animates the windows to their targets when
+  // |animate| is true. If |ignored_item| is not null and is an item in
+  // |window_list_|, that item is not positioned. This is for split screen.
   void PositionWindows(bool animate,
                        WindowSelectorItem* ignored_item = nullptr);
 
@@ -125,12 +115,27 @@ class ASH_EXPORT WindowGrid : public aura::WindowObserver,
   // when it is dragged.
   void SetSelectionWidgetVisibility(bool visible);
 
+  void ShowNoRecentsWindowMessage(bool visible);
+
   void UpdateCannotSnapWarningVisibility();
 
   // Called when any WindowSelectorItem on any WindowGrid has started/ended
   // being dragged.
   void OnSelectorItemDragStarted(WindowSelectorItem* item);
   void OnSelectorItemDragEnded();
+
+  // Called when a window's tab(s) start/continue/end being dragged around in
+  // WindowGrid.
+  void OnWindowDragStarted(aura::Window* dragged_window);
+  void OnWindowDragContinued(aura::Window* dragged_window,
+                             const gfx::Point& location_in_screen,
+                             IndicatorState indicator_state);
+  void OnWindowDragEnded(aura::Window* dragged_window,
+                         const gfx::Point& location_in_screen);
+
+  // Returns true if |window| is the placeholder window from the new selector
+  // item.
+  bool IsNewSelectorItemWindow(aura::Window* window) const;
 
   // Returns true if the grid has no more windows.
   bool empty() const { return window_list_.empty(); }
@@ -174,6 +179,12 @@ class ASH_EXPORT WindowGrid : public aura::WindowObserver,
     return window_animation_observer_;
   }
 
+  const gfx::Rect bounds() const { return bounds_; }
+
+  views::Widget* new_selector_item_widget_for_testing() {
+    return new_selector_item_widget_.get();
+  }
+
   // Sets |should_animate_when_entering_| and |should_animate_when_exiting_|
   // of the selector items of the windows based on where the first MRU window
   // covering the available workspace is found. Also sets the
@@ -184,13 +195,41 @@ class ASH_EXPORT WindowGrid : public aura::WindowObserver,
       WindowSelectorItem* selected_item,
       WindowSelector::OverviewTransition transition);
 
+  // Do not animate the entire window list during exiting the overview. It's
+  // used when splitview and overview mode are both active, selecting a window
+  // will put the window in splitview mode and also end the overview mode. In
+  // this case the windows in WindowGrid should not animate when exiting the
+  // overivew mode. Instead, OverviewWindowAnimationObserver will observer the
+  // snapped window animation and reset all windows transform in WindowGrid
+  // directly when the animation is completed.
+  void SetWindowListNotAnimatedWhenExiting();
+
   // Reset |selector_item|'s |should_animate_when_entering_|,
   // |should_animate_when_exiting_| and |should_be_observed_when_exiting_|.
   void ResetWindowListAnimationStates();
 
+  // Starts a nudge, with |item| being the item that may be deleted. This method
+  // calculates which items in |window_list_| are to be updated, and their
+  // destination bounds and fills |nudge_data_| accordingly.
+  void StartNudge(WindowSelectorItem* item);
+
+  // Moves items in |nudge_data_| towards their destination bounds based on
+  // |value|, which must be between 0.0 and 1.0.
+  void UpdateNudge(WindowSelectorItem* item, double value);
+
+  // Clears |nudge_data_|.
+  void EndNudge();
+
  private:
   class ShieldView;
   friend class WindowSelectorTest;
+
+  // Struct which holds data required to perform nudges.
+  struct NudgeData {
+    size_t index;
+    gfx::Rect src;
+    gfx::Rect dst;
+  };
 
   // Initializes the screen shield widget.
   void InitShieldWidget();
@@ -207,21 +246,35 @@ class ASH_EXPORT WindowGrid : public aura::WindowObserver,
   // Moves the selection widget to the targeted window.
   void MoveSelectionWidgetToTarget(bool animate);
 
-  // Attempts to fit all |rects| inside |bounds|. The method ensures that
-  // the |rects| vector has appropriate size and populates it with the values
-  // placing Rects next to each other left-to-right in rows of equal |height|.
-  // While fitting |rects| several metrics are collected that can be used by the
-  // caller. |max_bottom| specifies the bottom that the rects are extending to.
-  // |min_right| and |max_right| report the right bound of the narrowest and the
-  // widest rows respectively. In-values of the |max_bottom|, |min_right| and
-  // |max_right| parameters are ignored and their values are always initialized
-  // inside this method. Returns true on success and false otherwise.
+  // Gets the layout of the window selector items. Layout is done in 2 stages
+  // maintaining fixed MRU ordering.
+  // 1. Optimal height is determined. In this stage |height| is bisected to find
+  //    maximum height which still allows all the windows to fit.
+  // 2. Row widths are balanced. In this stage the available width is reduced
+  //    until some windows are no longer fitting or until the difference between
+  //    the narrowest and the widest rows starts growing.
+  // Overall this achieves the goals of maximum size for previews (or maximum
+  // row height which is equivalent assuming fixed height), balanced rows and
+  // minimal wasted space.
+  std::vector<gfx::Rect> GetWindowRects(WindowSelectorItem* ignored_item);
+
+  // Attempts to fit all |out_rects| inside |bounds|. The method ensures that
+  // the |out_rects| vector has appropriate size and populates it with the
+  // values placing rects next to each other left-to-right in rows of equal
+  // |height|. While fitting |out_rects| several metrics are collected that can
+  // be used by the caller. |out_max_bottom| specifies the bottom that the rects
+  // are extending to. |out_min_right| and |out_max_right| report the right
+  // bound of the narrowest and the widest rows respectively. In-values of the
+  // |out_max_bottom|, |out_min_right| and |out_max_right| parameters are
+  // ignored and their values are always initialized inside this method. Returns
+  // true on success and false otherwise.
   bool FitWindowRectsInBounds(const gfx::Rect& bounds,
                               int height,
-                              std::vector<gfx::Rect>* rects,
-                              int* max_bottom,
-                              int* min_right,
-                              int* max_right);
+                              WindowSelectorItem* ignored_item,
+                              std::vector<gfx::Rect>* out_rects,
+                              int* out_max_bottom,
+                              int* out_min_right,
+                              int* out_max_right);
 
   // Sets |selector_item|'s |should_animate_when_entering_|,
   // |should_animate_when_exiting_| and |should_be_observed_when_exiting_|.
@@ -232,6 +285,10 @@ class ASH_EXPORT WindowGrid : public aura::WindowObserver,
       bool* has_fullscreen_coverred,
       bool selected,
       WindowSelector::OverviewTransition transition);
+
+  // Returns the window selector item iterator that contains |window|.
+  std::vector<std::unique_ptr<WindowSelectorItem>>::iterator
+  GetWindowSelectorItemIterContainingWindow(aura::Window* window);
 
   // Root window the grid is in.
   aura::Window* root_window_;
@@ -255,7 +312,14 @@ class ASH_EXPORT WindowGrid : public aura::WindowObserver,
   std::unique_ptr<views::Widget> selection_widget_;
 
   // Shadow around the selector.
-  std::unique_ptr<::wm::Shadow> selector_shadow_;
+  std::unique_ptr<ui::Shadow> selector_shadow_;
+
+  // The new selector item widget. It has a plus sign in the middle. It's
+  // created when a window (not from overview) is being dragged, and is
+  // destroyed when the drag ends or overview mode is ended. When the dragged
+  // window is dropped onto the new item widget, the dragged window is added
+  // to the overview.
+  std::unique_ptr<views::Widget> new_selector_item_widget_;
 
   // Current selected window position.
   size_t selected_index_;
@@ -268,6 +332,10 @@ class ASH_EXPORT WindowGrid : public aura::WindowObserver,
 
   // This WindowGrid's total bounds in screen coordinates.
   gfx::Rect bounds_;
+
+  // Collection of the items which should be nudged. This should only be
+  // non-empty if a nudge is in progress.
+  std::vector<NudgeData> nudge_data_;
 
   // Weak ptr to the observer monitoring the exit animation of the first MRU
   // window which covers the available workspace. The observer will be deleted

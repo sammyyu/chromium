@@ -10,6 +10,7 @@
 #include "chrome/browser/vr/elements/textured_element.h"
 #include "chrome/browser/vr/elements/ui_texture.h"
 #include "chrome/browser/vr/model/color_scheme.h"
+#include "chrome/browser/vr/vr_ui_export.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "third_party/skia/include/core/SkRect.h"
 #include "ui/gfx/font.h"
@@ -26,15 +27,15 @@ class RenderTextWrapper;
 class TextTexture;
 
 enum TextLayoutMode {
-  kSingleLineFixedWidth,
-  kSingleLineFixedHeight,
   kMultiLineFixedWidth,
+  kSingleLine,
+  kSingleLineFixedWidth,
 };
 
 // This class describes a formatting attribute, applicable to a Text element.
 // Attributes are applied in order, and may override previous attributes.
 // Formatting may be applied only to non-wrapping text.
-class TextFormattingAttribute {
+class VR_UI_EXPORT TextFormattingAttribute {
  public:
   enum Type {
     COLOR,
@@ -69,7 +70,30 @@ class TextFormattingAttribute {
 
 typedef std::vector<TextFormattingAttribute> TextFormatting;
 
-class Text : public TexturedElement {
+enum TextAlignment {
+  kTextAlignmentNone,
+  kTextAlignmentLeft,
+  kTextAlignmentCenter,
+  kTextAlignmentRight,
+};
+
+enum WrappingBehavior {
+  kWrappingBehaviorWrap,
+  kWrappingBehaviorNoWrap,
+};
+
+struct TextRenderParameters {
+  SkColor color = SK_ColorBLACK;
+  TextAlignment text_alignment = kTextAlignmentNone;
+  WrappingBehavior wrapping_behavior = kWrappingBehaviorNoWrap;
+  bool cursor_enabled = false;
+  int cursor_position = 0;
+  bool shadows_enabled = false;
+  SkColor shadow_color = SK_ColorBLACK;
+  float shadow_size = 10.0f;
+};
+
+class VR_UI_EXPORT Text : public TexturedElement {
  public:
   explicit Text(float font_height_dmms);
   ~Text() override;
@@ -77,14 +101,17 @@ class Text : public TexturedElement {
   void SetFontHeightInDmm(float font_height_dmms);
   void SetText(const base::string16& text);
 
-  // TODO(vollick): should use TexturedElement::SetForegroundColor
-  void SetColor(SkColor color);
+  // SetSize() should not be called on the Text element, because the element
+  // updates its size according to text layout.
+  void SetFieldWidth(float width);
+
+  virtual void SetColor(SkColor color);
   void SetSelectionColors(const TextSelectionColors& colors);
 
   // Formatting must be applied only to non-wrapping text elements.
   void SetFormatting(const TextFormatting& formatting);
 
-  void SetAlignment(UiTexture::TextAlignment alignment);
+  void SetAlignment(TextAlignment alignment);
   void SetLayoutMode(TextLayoutMode mode);
 
   // This text element does not typically feature a cursor, but since the cursor
@@ -109,17 +136,29 @@ class Text : public TexturedElement {
   // This causes the text to become uniformly shadowed.
   void SetShadowsEnabled(bool enabled);
 
-  void OnSetSize(const gfx::SizeF& size) override;
-  void UpdateElementSize() override;
+  const std::vector<std::unique_ptr<gfx::RenderText>>& LinesForTest();
+  void SetUnsupportedCodePointsForTest(bool unsupported);
 
-  const std::vector<std::unique_ptr<gfx::RenderText>>& LayOutTextForTest();
-  gfx::SizeF GetTextureSizeForTest() const;
+ protected:
+  void SetOnUnhandledCodePointCallback(
+      base::RepeatingCallback<void()> callback);
+  void SetOnRenderTextCreated(
+      base::RepeatingCallback<void(gfx::RenderText*)> callback);
+  void SetOnRenderTextRendered(
+      base::RepeatingCallback<void(const gfx::RenderText&, SkCanvas* canvas)>
+          callback);
+  float MetersToPixels(float meters);
 
  private:
   UiTexture* GetTexture() const override;
+  bool TextureDependsOnMeasurement() const override;
+  gfx::Size MeasureTextureSize() override;
 
   TextLayoutMode text_layout_mode_ = kMultiLineFixedWidth;
   std::unique_ptr<TextTexture> texture_;
+  gfx::Size text_texture_size_;
+  float field_width_ = 0.f;
+
   DISALLOW_COPY_AND_ASSIGN(Text);
 };
 

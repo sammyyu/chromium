@@ -7,8 +7,10 @@
 #include "content/browser/android/gesture_listener_manager.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/web_contents/web_contents_view_android.h"
+#include "content/public/browser/navigation_handle.h"
+#include "content/public/browser/web_contents_observer.h"
 #include "jni/GestureListenerManagerImpl_jni.h"
-#include "third_party/WebKit/public/platform/WebInputEvent.h"
+#include "third_party/blink/public/platform/web_input_event.h"
 #include "ui/events/android/gesture_event_type.h"
 #include "ui/gfx/geometry/size_f.h"
 
@@ -67,10 +69,40 @@ int ToGestureEventType(WebInputEvent::Type type) {
 
 }  // namespace
 
+// Reset scroll, hide popups on navigation finish/render process gone event.
+class GestureListenerManager::ResetScrollObserver : public WebContentsObserver {
+ public:
+  ResetScrollObserver(WebContents* web_contents,
+                      GestureListenerManager* manager);
+
+  void DidFinishNavigation(NavigationHandle* navigation_handle) override;
+  void RenderProcessGone(base::TerminationStatus status) override;
+
+ private:
+  GestureListenerManager* const manager_;
+  DISALLOW_COPY_AND_ASSIGN(ResetScrollObserver);
+};
+
+GestureListenerManager::ResetScrollObserver::ResetScrollObserver(
+    WebContents* web_contents,
+    GestureListenerManager* manager)
+    : WebContentsObserver(web_contents), manager_(manager) {}
+
+void GestureListenerManager::ResetScrollObserver::DidFinishNavigation(
+    NavigationHandle* navigation_handle) {
+  manager_->OnNavigationFinished(navigation_handle);
+}
+
+void GestureListenerManager::ResetScrollObserver::RenderProcessGone(
+    base::TerminationStatus status) {
+  manager_->OnRenderProcessGone();
+}
+
 GestureListenerManager::GestureListenerManager(JNIEnv* env,
                                                const JavaParamRef<jobject>& obj,
                                                WebContentsImpl* web_contents)
     : RenderWidgetHostConnector(web_contents),
+      reset_scroll_observer_(new ResetScrollObserver(web_contents, this)),
       web_contents_(web_contents),
       java_ref_(env, obj) {}
 
@@ -82,60 +114,43 @@ GestureListenerManager::~GestureListenerManager() {
   Java_GestureListenerManagerImpl_onDestroy(env, j_obj);
 }
 
-void GestureListenerManager::Reset(JNIEnv* env,
-                                   const JavaParamRef<jobject>& obj) {
-  java_ref_.reset();
+void GestureListenerManager::ResetGestureDetection(
+    JNIEnv* env,
+    const JavaParamRef<jobject>& obj) {
+  if (rwhva_)
+    rwhva_->ResetGestureDetection();
+}
+
+void GestureListenerManager::SetDoubleTapSupportEnabled(
+    JNIEnv* env,
+    const JavaParamRef<jobject>& obj,
+    jboolean enabled) {
+  if (rwhva_)
+    rwhva_->SetDoubleTapSupportEnabled(enabled);
+}
+
+void GestureListenerManager::SetMultiTouchZoomSupportEnabled(
+    JNIEnv* env,
+    const JavaParamRef<jobject>& obj,
+    jboolean enabled) {
+  if (rwhva_)
+    rwhva_->SetMultiTouchZoomSupportEnabled(enabled);
 }
 
 void GestureListenerManager::GestureEventAck(
     const blink::WebGestureEvent& event,
     InputEventAckState ack_result) {
+  // This is called to fix crash happening while WebContents is being
+  // destroyed. See https://crbug.com/803244#c20
+  if (web_contents_->IsBeingDestroyed())
+    return;
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> j_obj = java_ref_.get(env);
   if (j_obj.is_null())
     return;
-
-  // TODO(jinsukkim): Define WebInputEvent in Java.
-  switch (event.GetType()) {
-    case WebInputEvent::kGestureFlingStart:
-      if (ack_result == INPUT_EVENT_ACK_STATE_CONSUMED) {
-        // The view expects the fling velocity in pixels/s.
-        Java_GestureListenerManagerImpl_onFlingStartEventConsumed(env, j_obj);
-      } else {
-        // If a scroll ends with a fling, a SCROLL_END event is never sent.
-        // However, if that fling went unconsumed, we still need to let the
-        // listeners know that scrolling has ended.
-        Java_GestureListenerManagerImpl_onScrollEndEventAck(env, j_obj);
-      }
-      break;
-    case WebInputEvent::kGestureScrollBegin:
-      Java_GestureListenerManagerImpl_onScrollBeginEventAck(env, j_obj);
-      break;
-    case WebInputEvent::kGestureScrollUpdate:
-      if (ack_result == INPUT_EVENT_ACK_STATE_CONSUMED)
-        Java_GestureListenerManagerImpl_onScrollUpdateGestureConsumed(env,
-                                                                      j_obj);
-      break;
-    case WebInputEvent::kGestureScrollEnd:
-      Java_GestureListenerManagerImpl_onScrollEndEventAck(env, j_obj);
-      break;
-    case WebInputEvent::kGesturePinchBegin:
-      Java_GestureListenerManagerImpl_onPinchBeginEventAck(env, j_obj);
-      break;
-    case WebInputEvent::kGesturePinchEnd:
-      Java_GestureListenerManagerImpl_onPinchEndEventAck(env, j_obj);
-      break;
-    case WebInputEvent::kGestureTap:
-      Java_GestureListenerManagerImpl_onSingleTapEventAck(
-          env, j_obj, ack_result == INPUT_EVENT_ACK_STATE_CONSUMED);
-      break;
-    case WebInputEvent::kGestureLongPress:
-      if (ack_result == INPUT_EVENT_ACK_STATE_CONSUMED)
-        Java_GestureListenerManagerImpl_onLongPressAck(env, j_obj);
-      break;
-    default:
-      break;
-  }
+  Java_GestureListenerManagerImpl_onEventAck(
+      env, j_obj, event.GetType(),
+      ack_result == INPUT_EVENT_ACK_STATE_CONSUMED);
 }
 
 void GestureListenerManager::DidStopFlinging() {
@@ -167,7 +182,8 @@ bool GestureListenerManager::FilterInputEvent(const WebInputEvent& event) {
   int gesture_type = ToGestureEventType(event.GetType());
   float dip_scale = web_contents_->GetNativeView()->GetDipScale();
   return Java_GestureListenerManagerImpl_filterTapOrPressEvent(
-      env, j_obj, gesture_type, gesture.x * dip_scale, gesture.y * dip_scale);
+      env, j_obj, gesture_type, gesture.PositionInWidget().x * dip_scale,
+      gesture.PositionInWidget().y * dip_scale);
 }
 
 // All positions and sizes (except |top_shown_pix|) are in CSS pixels.
@@ -194,6 +210,15 @@ void GestureListenerManager::UpdateScrollInfo(
       viewport.width(), viewport.height(), top_shown_pix, top_changed);
 }
 
+void GestureListenerManager::UpdateOnTouchDown() {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
+  if (obj.is_null())
+    return;
+
+  Java_GestureListenerManagerImpl_updateOnTouchDown(env, obj);
+}
+
 void GestureListenerManager::UpdateRenderProcessConnection(
     RenderWidgetHostViewAndroid* old_rwhva,
     RenderWidgetHostViewAndroid* new_rwhva) {
@@ -202,6 +227,28 @@ void GestureListenerManager::UpdateRenderProcessConnection(
   if (new_rwhva) {
     new_rwhva->set_gesture_listener_manager(this);
   }
+  rwhva_ = new_rwhva;
+}
+
+void GestureListenerManager::OnNavigationFinished(
+    NavigationHandle* navigation_handle) {
+  if (navigation_handle->IsInMainFrame() && navigation_handle->HasCommitted() &&
+      !navigation_handle->IsSameDocument()) {
+    ResetPopupsAndInput(false);
+  }
+}
+
+void GestureListenerManager::OnRenderProcessGone() {
+  ResetPopupsAndInput(true);
+}
+
+void GestureListenerManager::ResetPopupsAndInput(bool render_process_gone) {
+  JNIEnv* env = AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
+  if (obj.is_null())
+    return;
+  Java_GestureListenerManagerImpl_resetPopupsAndInput(env, obj,
+                                                      render_process_gone);
 }
 
 jlong JNI_GestureListenerManagerImpl_Init(

@@ -33,8 +33,8 @@
 namespace {
 
 // The text context / style of the |PermissionSelectorRow| combobox and label.
-constexpr int kTextContext = views::style::CONTEXT_LABEL;
-constexpr int kTextStyle = views::style::STYLE_PRIMARY;
+constexpr int kPermissionRowTextContext = views::style::CONTEXT_LABEL;
+constexpr int kPermissionRowTextStyle = views::style::STYLE_PRIMARY;
 
 // Calculates the amount of padding to add beneath a |PermissionSelectorRow|
 // depending on whether it has an accompanying permission decision reason.
@@ -52,7 +52,8 @@ int CalculatePaddingBeneathPermissionRow(bool has_reason) {
   // subtracting the line height, then dividing everything by two. Note it is
   // assumed the combobox is the tallest part of the row.
   return (list_item_padding * 2 + combobox_height -
-          views::style::GetLineHeight(kTextContext, kTextStyle)) /
+          views::style::GetLineHeight(kPermissionRowTextContext,
+                                      kPermissionRowTextStyle)) /
          2;
 }
 
@@ -174,13 +175,15 @@ class ComboboxModelAdapter : public ui::ComboboxModel {
 };
 
 void ComboboxModelAdapter::OnPerformAction(int index) {
-  model_->ExecuteCommand(index, 0);
+  int command_id = model_->GetCommandIdAt(index);
+  model_->ExecuteCommand(command_id, 0);
 }
 
 int ComboboxModelAdapter::GetCheckedIndex() {
   int checked_index = -1;
   for (int i = 0; i < model_->GetItemCount(); ++i) {
-    if (model_->IsCommandIdChecked(i)) {
+    int command_id = model_->GetCommandIdAt(i);
+    if (model_->IsCommandIdChecked(command_id)) {
       // This function keeps track of |checked_index| instead of returning early
       // here so that it can DCHECK that there's exactly one selected item,
       // which is not normally guaranteed by MenuModel, but *is* true of
@@ -282,8 +285,8 @@ PermissionSelectorRow::PermissionSelectorRow(
   const int list_item_padding = ChromeLayoutProvider::Get()->GetDistanceMetric(
                                     DISTANCE_CONTROL_LIST_VERTICAL) /
                                 2;
-  layout->StartRowWithPadding(1, PageInfoBubbleView::kPermissionColumnSetId, 0,
-                              list_item_padding);
+  layout->StartRowWithPadding(1.0, PageInfoBubbleView::kPermissionColumnSetId,
+                              views::GridLayout::kFixedSize, list_item_padding);
 
   // Create the permission icon and label.
   icon_ = new NonAccessibleImageView();
@@ -318,7 +321,7 @@ PermissionSelectorRow::PermissionSelectorRow(
   base::string16 reason =
       PageInfoUI::PermissionDecisionReasonToUIString(profile, permission, url);
   if (!reason.empty()) {
-    layout->StartRow(1, PageInfoBubbleView::kPermissionColumnSetId);
+    layout->StartRow(1.0, PageInfoBubbleView::kPermissionColumnSetId);
     layout->SkipColumns(1);
     views::Label* secondary_label = new views::Label(reason);
     secondary_label->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -343,15 +346,15 @@ PermissionSelectorRow::PermissionSelectorRow(
     constexpr int kMaxSecondaryLabelWidth = 140;
     if (ui::MaterialDesignController::IsSecondaryUiMaterial() &&
         preferred_width > kMaxSecondaryLabelWidth) {
-      layout->AddView(secondary_label, column_span, 1,
+      layout->AddView(secondary_label, column_span, 1.0,
                       views::GridLayout::LEADING, views::GridLayout::CENTER,
                       kMaxSecondaryLabelWidth, 0);
     } else {
-      layout->AddView(secondary_label, column_span, 1, views::GridLayout::FILL,
-                      views::GridLayout::CENTER);
+      layout->AddView(secondary_label, column_span, 1.0,
+                      views::GridLayout::FILL, views::GridLayout::CENTER);
     }
   }
-  layout->AddPaddingRow(0,
+  layout->AddPaddingRow(views::GridLayout::kFixedSize,
                         CalculatePaddingBeneathPermissionRow(!reason.empty()));
 }
 
@@ -372,7 +375,8 @@ PermissionSelectorRow::~PermissionSelectorRow() {
 // static
 int PermissionSelectorRow::MinHeightForPermissionRow() {
   return ChromeLayoutProvider::Get()->GetControlHeightForFont(
-      kTextContext, kTextStyle, views::Combobox::GetFontList());
+      kPermissionRowTextContext, kPermissionRowTextStyle,
+      views::Combobox::GetFontList());
 }
 
 void PermissionSelectorRow::AddObserver(

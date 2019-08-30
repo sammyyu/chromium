@@ -22,7 +22,7 @@ class ChromeAutocompleteProviderClient : public AutocompleteProviderClient {
   ~ChromeAutocompleteProviderClient() override;
 
   // AutocompleteProviderClient:
-  net::URLRequestContextGetter* GetRequestContext() override;
+  scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   PrefService* GetPrefs() override;
   const AutocompleteSchemeClassifier& GetSchemeClassifier() const override;
   AutocompleteClassifier* GetAutocompleteClassifier() override;
@@ -35,12 +35,13 @@ class ChromeAutocompleteProviderClient : public AutocompleteProviderClient {
   const TemplateURLService* GetTemplateURLService() const override;
   ContextualSuggestionsService* GetContextualSuggestionsService(
       bool create_if_necessary) const override;
+  DocumentSuggestionsService* GetDocumentSuggestionsService(
+      bool create_if_necessary) const override;
   const SearchTermsData& GetSearchTermsData() const override;
   scoped_refptr<ShortcutsBackend> GetShortcutsBackend() override;
   scoped_refptr<ShortcutsBackend> GetShortcutsBackendIfExists() override;
   std::unique_ptr<KeywordExtensionsDelegate> GetKeywordExtensionsDelegate(
       KeywordProvider* keyword_provider) override;
-  physical_web::PhysicalWebDataSource* GetPhysicalWebDataSource() override;
   std::string GetAcceptLanguages() const override;
   std::string GetEmbedderRepresentationOfAboutScheme() override;
   std::vector<base::string16> GetBuiltinURLs() override;
@@ -50,7 +51,7 @@ class ChromeAutocompleteProviderClient : public AutocompleteProviderClient {
   base::Time GetCurrentVisitTimestamp() const override;
   bool IsOffTheRecord() const override;
   bool SearchSuggestEnabled() const override;
-  bool TabSyncEnabledAndUnencrypted() const override;
+  bool IsTabUploadToGoogleActive() const override;
   bool IsAuthenticated() const override;
   void Classify(
       const base::string16& text,
@@ -76,7 +77,7 @@ class ChromeAutocompleteProviderClient : public AutocompleteProviderClient {
 
   bool StrippedURLsAreEqual(const GURL& url1,
                             const GURL& url2,
-                            const AutocompleteInput* input);
+                            const AutocompleteInput* input) const;
 
  private:
   Profile* profile_;

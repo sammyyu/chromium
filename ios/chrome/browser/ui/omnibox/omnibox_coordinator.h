@@ -14,13 +14,11 @@ class WebOmniboxEditController;
 @class CommandDispatcher;
 @class OmniboxPopupCoordinator;
 @class OmniboxTextFieldIOS;
+@protocol LocationBarOffsetProvider;
 @protocol OmniboxPopupPositioner;
 
 // The coordinator for the omnibox.
 @interface OmniboxCoordinator : NSObject
-// The textfield coordinated by this object. This has to be created elsewhere
-// and passed into this object before it's started.
-@property(nonatomic, strong) OmniboxTextFieldIOS* textField;
 // The edit controller interfacing the |textField| and the omnibox components
 // code. Needs to be set before the coordinator is started.
 @property(nonatomic, assign) WebOmniboxEditController* editController;
@@ -29,15 +27,30 @@ class WebOmniboxEditController;
 // The dispatcher for this view controller.
 @property(nonatomic, weak) CommandDispatcher* dispatcher;
 
+// The view controller managed by this coordinator. The parent of this
+// coordinator is expected to add it to the responder chain.
+- (UIViewController*)managedViewController;
+
+// Offset provider for location bar animations.
+- (id<LocationBarOffsetProvider>)offsetProvider;
+
 // Start this coordinator. When it starts, it expects to have |textField| and
 // |editController|.
 - (void)start;
 // Stop this coordinator.
 - (void)stop;
+// Indicates if the omnibox is the first responder.
+- (BOOL)isOmniboxFirstResponder;
+// Inserts text to the omnibox without triggering autocomplete.
+// Use this method to insert target URL or search terms for alternative input
+// methods, such as QR code scanner or voice search.
+- (void)insertTextToOmnibox:(NSString*)string;
 // Update the contents and the styling of the omnibox.
 - (void)updateOmniboxState;
-// Marks the next omnibox focus event source as the fakebox.
-- (void)setNextFocusSourceAsFakebox;
+// Use this method to make the omnibox first responder.
+- (void)focusOmnibox;
+// Marks the next omnibox focus event source as the search button.
+- (void)setNextFocusSourceAsSearchButton;
 // Use this method to resign |textField| as the first responder.
 - (void)endEditing;
 // Creates a child popup coordinator. The popup coordinator is linked to the

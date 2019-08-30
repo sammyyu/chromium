@@ -14,17 +14,16 @@ import org.chromium.chrome.browser.download.DownloadPromptStatus;
 import org.chromium.chrome.browser.preferences.ChromeSwitchPreference;
 import org.chromium.chrome.browser.preferences.PrefServiceBridge;
 import org.chromium.chrome.browser.preferences.PreferenceUtils;
-import org.chromium.chrome.browser.preferences.SpinnerPreference;
 
 /**
  * Fragment to keep track of all downloads related preferences.
  */
 public class DownloadPreferences
         extends PreferenceFragment implements Preference.OnPreferenceChangeListener {
-    private static final String PREF_LOCATION_CHANGE = "location_change";
+    public static final String PREF_LOCATION_CHANGE = "location_change";
     private static final String PREF_LOCATION_PROMPT_ENABLED = "location_prompt_enabled";
 
-    private SpinnerPreference mLocationChangePref;
+    private DownloadLocationPreference mLocationChangePref;
     private ChromeSwitchPreference mLocationPromptEnabledPref;
 
     @Override
@@ -38,27 +37,22 @@ public class DownloadPreferences
                 (ChromeSwitchPreference) findPreference(PREF_LOCATION_PROMPT_ENABLED);
         mLocationPromptEnabledPref.setOnPreferenceChangeListener(this);
 
-        mLocationChangePref = (SpinnerPreference) findPreference(PREF_LOCATION_CHANGE);
-        DownloadDirectoryAdapter directoryAdapter = new DownloadDirectoryAdapter(getActivity());
-        mLocationChangePref.setAdapter(directoryAdapter, directoryAdapter.getSelectedItemId());
-
-        updateSummaries();
+        mLocationChangePref = (DownloadLocationPreference) findPreference(PREF_LOCATION_CHANGE);
     }
 
     @Override
     public void onResume() {
         super.onResume();
-        updateSummaries();
+        updateData();
     }
 
-    private void updateSummaries() {
+    private void updateData() {
         if (mLocationChangePref != null) {
-            mLocationChangePref.setSummary(
-                    PrefServiceBridge.getInstance().getDownloadDefaultDirectory());
+            mLocationChangePref.updateSummary();
         }
 
         if (mLocationPromptEnabledPref != null) {
-            // Location prompt is marked enabled if the prompt status is not don't show.
+            // Location prompt is marked enabled if the prompt status is not DONT_SHOW.
             boolean isLocationPromptEnabled =
                     PrefServiceBridge.getInstance().getPromptForDownloadAndroid()
                     != DownloadPromptStatus.DONT_SHOW;
@@ -82,10 +76,6 @@ public class DownloadPreferences
                 PrefServiceBridge.getInstance().setPromptForDownloadAndroid(
                         DownloadPromptStatus.DONT_SHOW);
             }
-        } else if (PREF_LOCATION_CHANGE.equals(preference.getKey())) {
-            PrefServiceBridge.getInstance().setDownloadAndSaveFileDefaultDirectory(
-                    (String) newValue);
-            updateSummaries();
         }
         return true;
     }

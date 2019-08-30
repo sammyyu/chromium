@@ -29,8 +29,6 @@
 #include "content/browser/cache_storage/cache_storage_cache_handle.h"
 #include "content/browser/cache_storage/cache_storage_context_impl.h"
 #include "content/browser/cache_storage/cache_storage_manager.h"
-#include "content/browser/dom_storage/dom_storage_context_wrapper.h"
-#include "content/browser/dom_storage/session_storage_namespace_impl.h"
 #include "content/browser/gpu/gpu_data_manager_impl.h"
 #include "content/browser/gpu/gpu_process_host.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
@@ -40,13 +38,11 @@
 #include "content/browser/renderer_host/render_view_host_delegate.h"
 #include "content/browser/renderer_host/render_widget_helper.h"
 #include "content/browser/resource_context_impl.h"
-#include "content/common/cache_storage/cache_storage_types.h"
 #include "content/common/content_constants_internal.h"
 #include "content/common/render_message_filter.mojom.h"
 #include "content/common/view_messages.h"
 #include "content/public/browser/browser_child_process_host.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/resource_context.h"
 #include "content/public/common/content_switches.h"
@@ -89,23 +85,6 @@ namespace {
 
 const uint32_t kRenderFilteredMessageClasses[] = {ViewMsgStart};
 
-#if defined(OS_MACOSX)
-void ResizeHelperHandleMsgOnUIThread(int render_process_id,
-                                     const IPC::Message& message) {
-  RenderProcessHost* host = RenderProcessHost::FromID(render_process_id);
-  if (host)
-    host->OnMessageReceived(message);
-}
-
-void ResizeHelperPostMsgToUIThread(int render_process_id,
-                                   const IPC::Message& msg) {
-  ui::WindowResizeHelperMac::Get()->task_runner()->PostDelayedTask(
-      FROM_HERE,
-      base::Bind(ResizeHelperHandleMsgOnUIThread, render_process_id, msg),
-      base::TimeDelta());
-}
-#endif
-
 void NoOpCacheStorageErrorCallback(CacheStorageCacheHandle cache_handle,
                                    CacheStorageError error) {}
 
@@ -117,7 +96,6 @@ RenderMessageFilter::RenderMessageFilter(
     net::URLRequestContextGetter* request_context,
     RenderWidgetHelper* render_widget_helper,
     MediaInternals* media_internals,
-    DOMStorageContextWrapper* dom_storage_context,
     CacheStorageContextImpl* cache_storage_context)
     : BrowserMessageFilter(kRenderFilteredMessageClasses,
                            arraysize(kRenderFilteredMessageClasses)),
@@ -126,7 +104,6 @@ RenderMessageFilter::RenderMessageFilter(
       request_context_(request_context),
       resource_context_(browser_context->GetResourceContext()),
       render_widget_helper_(render_widget_helper),
-      dom_storage_context_(dom_storage_context),
       render_process_id_(render_process_id),
       media_internals_(media_internals),
       cache_storage_context_(cache_storage_context),
@@ -145,13 +122,6 @@ RenderMessageFilter::~RenderMessageFilter() {
 bool RenderMessageFilter::OnMessageReceived(const IPC::Message& message) {
   bool handled = true;
   IPC_BEGIN_MESSAGE_MAP(RenderMessageFilter, message)
-#if defined(OS_MACOSX)
-    // On Mac, ViewHostMsg_ResizeOrRepaint_ACK needs to be handled in a nested
-    // message loop during resize.
-    IPC_MESSAGE_HANDLER_GENERIC(
-        ViewHostMsg_ResizeOrRepaint_ACK,
-        ResizeHelperPostMsgToUIThread(render_process_id_, message))
-#endif
     IPC_MESSAGE_HANDLER(ViewHostMsg_MediaLogEvents, OnMediaLogEvents)
     IPC_MESSAGE_UNHANDLED(handled = false)
   IPC_END_MESSAGE_MAP()
@@ -268,7 +238,8 @@ void RenderMessageFilter::DidGenerateCacheableMetadataInCacheStorage(
     memcpy(buf->data(), &data.front(), data.size());
 
   cache_storage_context_->cache_manager()->OpenCache(
-      cache_storage_origin, cache_storage_cache_name,
+      cache_storage_origin, CacheStorageOwner::kCacheAPI,
+      cache_storage_cache_name,
       base::BindOnce(&RenderMessageFilter::OnCacheStorageOpenCallback,
                      weak_ptr_factory_.GetWeakPtr(), url,
                      expected_response_time, buf, data.size()));

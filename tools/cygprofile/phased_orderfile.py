@@ -1,12 +1,11 @@
-#!/usr/bin/python
+#!/usr/bin/env vpython
 # Copyright 2018 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
 """Utilities for creating a phased orderfile.
 
-This kind of orderfile is based on cygprofile lightweight instrumentation. The
-profile dump format is described in process_profiles.py. These tools assume
+The profile dump format is described in process_profiles.py. These tools assume
 profiling has been done with two phases.
 
 The first phase, labeled 0 in the filename, is called "startup" and the second,

@@ -31,11 +31,6 @@ const char kCrashDumpsDir[] = "crash-dumps-dir";
 // (experimental).
 const char kDeterministicMode[] = "deterministic-mode";
 
-// Instructs headless_shell to cause network fetches to complete in order of
-// creation. This removes a significant source of network related
-// non-determinism at the cost of slower page loads.
-const char kDeterministicFetch[] = "deterministic-fetch";
-
 // Instructs headless_shell to print document.body.innerHTML to stdout.
 const char kDumpDom[] = "dump-dom";
 
@@ -70,15 +65,6 @@ const char kProxyServer[] = "proxy-server";
 // Note that the remote debugging protocol does not perform any authentication,
 // so exposing it too widely can be a security risk.
 const char kRemoteDebuggingAddress[] = "remote-debugging-address";
-
-// The given value is the fd of a socket already opened by the parent process.
-// This allows automation to provide a listening socket for clients to connect
-// to before chrome is fully fired up. In particular, a parent process can
-// open the port, exec headles chrome, and connect to the devtools port
-// immediately. Waiting for chrome to be ready is then handled by the first
-// read from the port, which will block until chrome is ready. No polling is
-// needed.
-const char kRemoteDebuggingSocketFd[] = "remote-debugging-socket-fd";
 
 // Runs a read-eval-print loop that allows the user to evaluate Javascript
 // expressions.
@@ -126,5 +112,7 @@ const char kAuthServerWhitelist[] = "auth-server-whitelist";
 // Possible values: none|slight|medium|full|max. Default: full.
 const char kFontRenderHinting[] = "font-render-hinting";
 
+// If true, then all pop-ups and calls to window.open will fail.
+const char kBlockNewWebContents[] = "block-new-web-contents";
 }  // namespace switches
 }  // namespace headless

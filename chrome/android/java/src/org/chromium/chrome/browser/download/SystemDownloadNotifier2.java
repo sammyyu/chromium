@@ -4,9 +4,9 @@
 
 package org.chromium.chrome.browser.download;
 
-import android.content.Context;
-
+import org.chromium.base.ContextUtils;
 import org.chromium.components.offline_items_collection.ContentId;
+import org.chromium.components.offline_items_collection.FailState;
 import org.chromium.components.offline_items_collection.PendingState;
 
 /**
@@ -15,15 +15,13 @@ import org.chromium.components.offline_items_collection.PendingState;
  * to the latter to issue calls to show and update notifications.
  */
 public class SystemDownloadNotifier2 implements DownloadNotifier {
-    private final Context mApplicationContext;
     private final DownloadNotificationService2 mDownloadNotificationService;
 
     /**
      * Constructor.
      * @param context Application context.
      */
-    public SystemDownloadNotifier2(Context context) {
-        mApplicationContext = context.getApplicationContext();
+    public SystemDownloadNotifier2() {
         mDownloadNotificationService = DownloadNotificationService2.getInstance();
     }
 
@@ -38,7 +36,7 @@ public class SystemDownloadNotifier2 implements DownloadNotifier {
         final int notificationId = mDownloadNotificationService.notifyDownloadSuccessful(
                 info.getContentId(), info.getFilePath(), info.getFileName(), systemDownloadId,
                 info.isOffTheRecord(), isSupportedMimeType, info.getIsOpenable(), info.getIcon(),
-                info.getOriginalUrl(), info.getReferrer());
+                info.getOriginalUrl(), info.getReferrer(), info.getBytesTotalSize());
 
         if (info.getIsOpenable()) {
             DownloadManagerService.getDownloadManagerService().onSuccessNotificationShown(
@@ -47,9 +45,9 @@ public class SystemDownloadNotifier2 implements DownloadNotifier {
     }
 
     @Override
-    public void notifyDownloadFailed(DownloadInfo info) {
+    public void notifyDownloadFailed(DownloadInfo info, @FailState int failState) {
         mDownloadNotificationService.notifyDownloadFailed(
-                info.getContentId(), info.getFileName(), info.getIcon());
+                info.getContentId(), info.getFileName(), info.getIcon(), failState);
     }
 
     @Override
@@ -65,7 +63,7 @@ public class SystemDownloadNotifier2 implements DownloadNotifier {
     public void notifyDownloadPaused(DownloadInfo info) {
         mDownloadNotificationService.notifyDownloadPaused(info.getContentId(), info.getFileName(),
                 true, false, info.isOffTheRecord(), info.getIsTransient(), info.getIcon(), false,
-                false, PendingState.NOT_PENDING);
+                false, info.getPendingState());
     }
 
     @Override
@@ -83,7 +81,9 @@ public class SystemDownloadNotifier2 implements DownloadNotifier {
 
     @Override
     public void resumePendingDownloads() {
-        if (!DownloadNotificationService2.isTrackingResumableDownloads(mApplicationContext)) return;
-        mDownloadNotificationService.resumeAllPendingDownloads();
+        if (DownloadNotificationService2.isTrackingResumableDownloads(
+                    ContextUtils.getApplicationContext())) {
+            mDownloadNotificationService.resumeAllPendingDownloads();
+        }
     }
 }

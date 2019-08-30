@@ -1026,6 +1026,7 @@ cr.define('print_preview', function() {
       this.uiState_ = PrintPreviewUiState_.ERROR;
       this.isPreviewGenerationInProgress_ = false;
       this.printHeader_.isPrintButtonEnabled = false;
+      this.previewArea_.setDestinationValid(false);
       this.updateLinks_();
     },
 
@@ -1221,7 +1222,7 @@ cr.define('print_preview', function() {
         this.nativeLayer_.uiLoadedForTest();
       } else {
         combobox.value = 'landscape';
-        this.layoutSettings_.onSelectChange_();
+        this.layoutSettings_.onSelectChange();
       }
     },
 
@@ -1285,7 +1286,7 @@ cr.define('print_preview', function() {
         this.nativeLayer_.uiLoadedForTest();
       } else if (margins >= 0 && margins < combobox.length) {
         combobox.selectedIndex = margins;
-        this.marginSettings_.onSelectChange_();
+        this.marginSettings_.onSelectChange();
       } else {
         this.nativeLayer_.uiFailedLoadingForTest();
       }
@@ -1324,6 +1325,7 @@ cr.define('print_preview', function() {
       if (this.uiState_ == PrintPreviewUiState_.ERROR) {
         this.uiState_ = PrintPreviewUiState_.READY;
         this.updateLinks_();
+        this.previewArea_.setDestinationValid(true);
       }
       if (this.destinationStore_.selectedDestination &&
           this.isInKioskAutoPrintMode_) {

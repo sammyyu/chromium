@@ -21,27 +21,15 @@ TestShellDelegate::~TestShellDelegate() = default;
   return nullptr;
 }
 
-bool TestShellDelegate::IsRunningInForcedAppMode() const {
-  return false;
-}
-
 bool TestShellDelegate::CanShowWindowForUser(aura::Window* window) const {
   return true;
 }
 
-bool TestShellDelegate::IsForceMaximizeOnFirstRun() const {
-  return force_maximize_on_first_run_;
-}
-
 void TestShellDelegate::PreInit() {}
-
-void TestShellDelegate::PreShutdown() {}
 
 std::unique_ptr<keyboard::KeyboardUI> TestShellDelegate::CreateKeyboardUI() {
   return std::make_unique<TestKeyboardUI>();
 }
-
-void TestShellDelegate::OpenUrlFromArc(const GURL& url) {}
 
 NetworkingConfigDelegate* TestShellDelegate::GetNetworkingConfigDelegate() {
   return nullptr;

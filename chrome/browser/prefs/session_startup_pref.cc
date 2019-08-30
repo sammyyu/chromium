@@ -8,7 +8,6 @@
 
 #include <string>
 
-#include "base/memory/ptr_util.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "chrome/browser/profiles/profile.h"
@@ -133,21 +132,21 @@ bool SessionStartupPref::TypeIsManaged(PrefService* prefs) {
 }
 
 // static
-bool SessionStartupPref::TypeIsRecommended(PrefService* prefs) {
-  DCHECK(prefs);
-  const PrefService::Preference* pref_restore =
-      prefs->FindPreference(prefs::kRestoreOnStartup);
-  DCHECK(pref_restore);
-  return pref_restore->IsRecommended();
-}
-
-// static
 bool SessionStartupPref::URLsAreManaged(PrefService* prefs) {
   DCHECK(prefs);
   const PrefService::Preference* pref_urls =
       prefs->FindPreference(prefs::kURLsToRestoreOnStartup);
   DCHECK(pref_urls);
   return pref_urls->IsManaged();
+}
+
+// static
+bool SessionStartupPref::TypeHasRecommendedValue(PrefService* prefs) {
+  DCHECK(prefs);
+  const PrefService::Preference* pref_restore =
+      prefs->FindPreference(prefs::kRestoreOnStartup);
+  DCHECK(pref_restore);
+  return pref_restore->GetRecommendedValue() != nullptr;
 }
 
 // static

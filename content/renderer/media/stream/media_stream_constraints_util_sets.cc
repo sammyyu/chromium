@@ -7,9 +7,10 @@
 #include <cmath>
 
 #include "content/renderer/media/stream/media_stream_constraints_util.h"
-#include "third_party/WebKit/public/platform/WebMediaConstraints.h"
+#include "third_party/blink/public/platform/web_media_constraints.h"
 
 namespace content {
+namespace media_constraints {
 
 using Point = ResolutionSet::Point;
 
@@ -553,4 +554,5 @@ DiscreteSet<bool> BoolSetFromConstraint(
   return DiscreteSet<bool>({constraint.Exact()});
 }
 
+}  // namespace media_constraints
 }  // namespace content

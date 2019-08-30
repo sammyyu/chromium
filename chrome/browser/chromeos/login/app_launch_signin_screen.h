@@ -10,9 +10,9 @@
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
 #include "chrome/browser/ui/webui/chromeos/login/signin_screen_handler.h"
+#include "chromeos/components/proximity_auth/screenlock_bridge.h"
 #include "chromeos/login/auth/auth_status_consumer.h"
 #include "chromeos/login/auth/authenticator.h"
-#include "components/proximity_auth/screenlock_bridge.h"
 #include "components/user_manager/user.h"
 #include "components/user_manager/user_manager.h"
 
@@ -54,17 +54,13 @@ class AppLaunchSigninScreen : public SigninScreenHandlerDelegate,
   const user_manager::UserList& GetUsers() const;
 
   // SigninScreenHandlerDelegate implementation:
-  void CancelPasswordChangedFlow() override;
   void CancelUserAdding() override;
   void Login(const UserContext& user_context,
              const SigninSpecifics& specifics) override;
-  void MigrateUserData(const std::string& old_password) override;
   void OnSigninScreenReady() override;
   void RemoveUser(const AccountId& account_id) override;
-  void ResyncUserData() override;
   void ShowEnterpriseEnrollmentScreen() override;
   void ShowEnableDebuggingScreen() override;
-  void ShowDemoModeSetupScreen() override;
   void ShowKioskEnableScreen() override;
   void ShowKioskAutolaunchScreen() override;
   void ShowUpdateRequiredScreen() override;

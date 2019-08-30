@@ -8,12 +8,23 @@
 // Consumer for the location bar mediator.
 @protocol LocationBarConsumer
 
-// Notifies the consumer to update the omnibox state, including the displayed
-// text and the cursor position.
-- (void)updateOmniboxState;
+// Notifies the consumer to update the location text.
+- (void)updateLocationText:(NSString*)string;
+// Notifies the consumer to update the location icon and security status text.
+- (void)updateLocationIcon:(UIImage*)icon
+        securityStatusText:(NSString*)statusText;
+
+// Notifies the consumer about shareability of the current web page. Some web
+// pages are not considered shareable (e.g. chrome://flags), and the share
+// button for such pages should not be enabled.
+- (void)updateLocationShareable:(BOOL)shareable;
 
 // Notifies consumer to defocus the omnibox (for example on tab change).
 - (void)defocusOmnibox;
+
+// Notifies the consumer to update after a navigation to NTP. Will be called
+// after -updateLocationText. Used for triggering NTP-specific location bar UI.
+- (void)updateAfterNavigatingToNTP;
 
 @end
 

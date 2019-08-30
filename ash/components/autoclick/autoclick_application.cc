@@ -6,6 +6,7 @@
 
 #include <utility>
 
+#include "ash/public/cpp/ash_constants.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "base/bind_helpers.h"
 #include "base/macros.h"
@@ -14,8 +15,8 @@
 #include "services/service_manager/public/cpp/service_context.h"
 #include "services/ui/public/cpp/property_type_converters.h"
 #include "services/ui/public/interfaces/constants.mojom.h"
-#include "services/ui/public/interfaces/remote_event_dispatcher.mojom.h"
-#include "services/ui/public/interfaces/window_manager_constants.mojom.h"
+#include "services/ui/public/interfaces/event_injector.mojom.h"
+#include "services/ui/public/interfaces/window_tree_constants.mojom.h"
 #include "ui/aura/mus/property_converter.h"
 #include "ui/base/ui_base_types.h"
 #include "ui/display/display.h"
@@ -29,13 +30,6 @@
 #include "ui/views/widget/widget_delegate.h"
 
 namespace autoclick {
-namespace {
-
-// The default wait time between last mouse movement and sending
-// the autoclick.
-const int kDefaultAutoclickDelayMs = 1000;
-
-}  // namespace
 
 // AutoclickUI handles events to the autoclick app.
 class AutoclickUI : public views::WidgetDelegateView,
@@ -99,18 +93,19 @@ AutoclickApplication::AutoclickApplication()
 AutoclickApplication::~AutoclickApplication() = default;
 
 void AutoclickApplication::OnStart() {
-  const bool register_path_provider = running_standalone_;
-  aura_init_ = views::AuraInit::Create(
-      context()->connector(), context()->identity(), "views_mus_resources.pak",
-      std::string(), nullptr, views::AuraInit::Mode::AURA_MUS,
-      register_path_provider);
+  views::AuraInit::InitParams params;
+  params.connector = context()->connector();
+  params.identity = context()->identity();
+  params.register_path_provider = running_standalone_;
+  aura_init_ = views::AuraInit::Create(params);
   if (!aura_init_) {
     context()->QuitNow();
     return;
   }
   autoclick_controller_common_ =
       std::make_unique<ash::AutoclickControllerCommon>(
-          base::TimeDelta::FromMilliseconds(kDefaultAutoclickDelayMs), this);
+          base::TimeDelta::FromMilliseconds(ash::kDefaultAutoclickDelayMs),
+          this);
 }
 
 void AutoclickApplication::OnBindInterface(
@@ -181,9 +176,9 @@ void AutoclickApplication::DoAutoclick(const gfx::Point& point_in_screen,
       gfx::ScaleToFlooredPoint(point_in_root, display.device_scale_factor());
 
   // Connect to the window service event generation interface.
-  ui::mojom::RemoteEventDispatcherPtr remote_event_dispatcher;
+  ui::mojom::EventInjectorPtr event_injector;
   context()->connector()->BindInterface(ui::mojom::kServiceName,
-                                        &remote_event_dispatcher);
+                                        &event_injector);
 
   // Inject a synthetic click.
   ui::MouseEvent press_event(ui::ET_MOUSE_PRESSED, point_in_pixels,
@@ -194,14 +189,14 @@ void AutoclickApplication::DoAutoclick(const gfx::Point& point_in_screen,
                                point_in_pixels, ui::EventTimeForNow(),
                                mouse_event_flags | ui::EF_LEFT_MOUSE_BUTTON,
                                ui::EF_LEFT_MOUSE_BUTTON);
-  remote_event_dispatcher->DispatchEvent(
+  event_injector->InjectEvent(
       display.id(), std::make_unique<ui::PointerEvent>(press_event),
       base::BindOnce([](bool result) { DCHECK(result); }));
   // Don't check the next dispatch result because it's possible the first event
   // will initiate shutdown.
-  remote_event_dispatcher->DispatchEvent(
-      display.id(), std::make_unique<ui::PointerEvent>(release_event),
-      base::DoNothing());
+  event_injector->InjectEvent(display.id(),
+                              std::make_unique<ui::PointerEvent>(release_event),
+                              base::DoNothing());
 }
 
 void AutoclickApplication::OnAutoclickCanceled() {

@@ -816,9 +816,13 @@
     {
       "id": 100,
       "description": "Disable Direct3D11 on systems with AMD switchable graphics",
-      "cr_bugs": [451420, 755722],
+      "cr_bugs": [451420, 721121, 755722],
       "os": {
-        "type": "win"
+        "type": "win",
+        "version": {
+          "op": "<",
+          "value": "10"
+        }
       },
       "driver_date": {
         "op": "<",
@@ -1935,12 +1939,8 @@
           "value": "10.13.2"
         }
       },
-      "vendor_id": "0x8086",
-      "device_id" : [
-        "0x1902", "0x1906", "0x190A", "0x190B", "0x190E", "0x1912", "0x1913", "0x1915",
-        "0x1916", "0x1917", "0x191A", "0x191B", "0x191D", "0x191E", "0x1921", "0x1923",
-        "0x1926", "0x1927", "0x192A", "0x192B", "0x192D", "0x1932", "0x193A", "0x193B",
-        "0x193D"
+      "gpu_series" : [
+        "intel_skylake"
       ],
       "features" : [
         "emulate_isnan_on_float"
@@ -2367,17 +2367,11 @@
       "os": {
         "type": "win"
       },
-      "vendor_id": "0x8086",
-      "device_id": ["0x1602", "0x1606", "0x160a", "0x160b", "0x160d",
-                    "0x160e", "0x1612", "0x1616", "0x161a", "0x161b",
-                    "0x161d", "0x161e", "0x1622", "0x1626", "0x162a",
-                    "0x162b", "0x162d", "0x162e", "0x22b0", "0x22b1",
-                    "0x22b2", "0x22b3", "0x1902", "0x1906", "0x190a",
-                    "0x190b", "0x190e", "0x1912", "0x1913", "0x1915",
-                    "0x1916", "0x1917", "0x191a", "0x191b", "0x191d",
-                    "0x191e", "0x1921", "0x1923", "0x1926", "0x1927",
-                    "0x192a", "0x192b", "0x192d", "0x1932", "0x193a",
-                    "0x193b", "0x193d"],
+      "gpu_series": [
+        "intel_broadwell",
+        "intel_skylake",
+        "intel_cherryview"
+      ],
       "features": [
         "disable_accelerated_vpx_decode"
       ]
@@ -2608,10 +2602,11 @@
       "os": {
         "type": "macosx"
       },
-      "vendor_id": "0x8086",
-      "device_id": ["0x1927", "0x1926", "0x191e", "0x1916", "0x1912", "0x1912",
-                    "0x191b", "0x193b", "0x591e", "0x5926", "0x5927", "0x5912",
-                    "0x5916", "0x591b", "0x3e92"],
+      "gpu_series": [
+        "intel_skylake",
+        "intel_kabylake",
+        "intel_coffeelake"
+      ],
       "multi_gpu_category": "any",
       "features": [
         "flush_on_framebuffer_change"
@@ -2846,7 +2841,7 @@
         "type": "android"
       },
       "gl_vendor": "Imagination.*",
-      "gl_renderer": "PowerVR SGX54.",
+      "gl_renderer": "PowerVR SGX 54.*",
       "features": [
         "init_gl_position_in_vertex_shader"
       ]
@@ -2859,9 +2854,114 @@
         "type": "android"
       },
       "gl_vendor": "Imagination.*",
-      "gl_renderer": "PowerVR G6200",
+      "gl_renderer": "PowerVR.*G6200.*",
       "features": [
         "init_gl_position_in_vertex_shader"
+      ]
+    },
+    {
+      "id": 265,
+      "cr_bugs": [811661],
+      "description": "Crash in glQueryCounter() in VMware driver",
+      "os": {
+        "type": "linux"
+      },
+      "vendor_id": "0x15ad",
+      "device_id": ["0x0405"],
+      "features": [
+        "disable_timestamp_queries"
+      ],
+      "disabled_extensions": [
+        "GL_ARB_timer_query",
+        "GL_EXT_disjoint_timer_query",
+        "GL_EXT_disjoint_timer_query_webgl2"
+      ]
+    },
+    {
+      "id": 266,
+      "cr_bugs": [828721],
+      "description": "Crash in gl::GLApiBase::glGetQueryObjectui64vFn with NetEase devices ",
+      "os": {
+        "type": "android"
+      },
+      "gl_vendor": "NetEase",
+      "gl_renderer": "MuMu GL.*",
+      "features": [
+        "disable_timestamp_queries"
+      ],
+      "disabled_extensions": [
+        "GL_EXT_disjoint_timer_query",
+        "GL_EXT_disjoint_timer_query_webgl2"
+      ]
+    },
+    {
+      "id": 267,
+      "cr_bugs": [831781],
+      "description": "WebGL with multisampling produces errors on Mali",
+      "os": {
+        "type": "linux"
+      },
+      "gl_vendor": "ARM",
+      "gl_renderer": "Mali-TDVX",
+      "disabled_extensions": [
+        "GL_EXT_multisampled_render_to_texture"
+      ],
+      "features": [
+        "disable_chromium_framebuffer_multisample"
+      ]
+    },
+    {
+      "id": 268,
+      "cr_bugs": [797243],
+      "description": "Limit MSAA to 4x on Android devices",
+      "os": {
+        "type": "android"
+      },
+      "features": [
+        "max_msaa_sample_count_4"
+      ]
+    },
+    {
+      "id": 269,
+      "cr_bugs": [841755],
+      "description": "glFlush error on Mac",
+      "os": {
+        "type": "macosx"
+      },
+      "features": [
+        "disable_2d_canvas_auto_flush"
+      ]
+    },
+    {
+      "id": 270,
+      "cr_bugs": [859998],
+      "description": "AMD Linux driver crashes when copyTexImage2D is called with PIXEL_UNPACK_BUFFER set to an uninitialized buffer",
+      "os": {
+        "type": "linux"
+      },
+      "vendor_id": "0x1002",
+      "features": [
+        "clear_pixel_unpack_buffer_before_copyteximage"
+      ]
+    },
+    {
+      "id": 271,
+      "cr_bugs": [860418],
+      "description": "Frequent crashes in glClear on Mali-T7xx on N with driver 12.1.01alp0",
+      "os": {
+        "type": "android",
+        "version": {
+          "op": "<",
+          "value": "8.0"
+        }
+      },
+      "driver_version": {
+        "op": "=",
+        "value": "12.1.01alp0"
+      },
+      "gl_renderer": ".*Mali-T7.*",
+      "features": [
+        "gl_clear_broken"
       ]
     }
   ]

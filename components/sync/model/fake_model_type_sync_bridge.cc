@@ -10,6 +10,7 @@
 #include "base/bind.h"
 #include "base/stl_util.h"
 #include "components/sync/base/hash_util.h"
+#include "components/sync/model/conflict_resolution.h"
 #include "components/sync/model/model_type_store.h"
 #include "components/sync/model/mutable_data_batch.h"
 #include "components/sync/model_impl/in_memory_metadata_change_list.h"
@@ -157,8 +158,8 @@ void FakeModelTypeSyncBridge::Store::Reset() {
 }
 
 FakeModelTypeSyncBridge::FakeModelTypeSyncBridge(
-    const ChangeProcessorFactory& change_processor_factory)
-    : ModelTypeSyncBridge(change_processor_factory, PREFERENCES),
+    std::unique_ptr<ModelTypeChangeProcessor> change_processor)
+    : ModelTypeSyncBridge(std::move(change_processor)),
       db_(std::make_unique<Store>()) {}
 
 FakeModelTypeSyncBridge::~FakeModelTypeSyncBridge() {
@@ -300,7 +301,7 @@ void FakeModelTypeSyncBridge::GetData(StorageKeyList keys,
   std::move(callback).Run(std::move(batch));
 }
 
-void FakeModelTypeSyncBridge::GetAllData(DataCallback callback) {
+void FakeModelTypeSyncBridge::GetAllDataForDebugging(DataCallback callback) {
   if (error_next_) {
     error_next_ = false;
     change_processor()->ReportError({FROM_HERE, "boom"});

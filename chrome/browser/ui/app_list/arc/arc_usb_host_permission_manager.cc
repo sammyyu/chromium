@@ -10,6 +10,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/app_list/arc/arc_app_dialog.h"
 #include "chrome/browser/ui/app_list/arc/arc_usb_host_permission_manager_factory.h"
+#include "components/arc/arc_util.h"
 #include "components/arc/usb/usb_host_bridge.h"
 #include "extensions/browser/api/device_permissions_manager.h"
 
@@ -164,11 +165,11 @@ void ArcUsbHostPermissionManager::RestorePermissionFromChromePrefs() {
     const base::Value* access_permision_list_value =
         arc_app_list_prefs_->GetPackagePrefs(package, kUsbAccessPermission);
     if (!access_permision_list_value)
-      return;
+      continue;
 
     if (!access_permision_list_value->is_list()) {
       LOG(ERROR) << "Wrong value type found for device access permission list.";
-      return;
+      continue;
     }
 
     for (const auto& access_permision :
@@ -210,6 +211,10 @@ void ArcUsbHostPermissionManager::RestorePermissionFromChromePrefs() {
 void ArcUsbHostPermissionManager::RequestUsbScanDeviceListPermission(
     const std::string& package_name,
     ArcUsbHostUiDelegate::RequestPermissionCallback callback) {
+  // Grants Arc USB permission for |package_name| in Arc kiosk mode.
+  if (IsArcKioskMode())
+    UpdateArcUsbScanDeviceListPermission(package_name, true /*allowed*/);
+
   if (HasUsbScanDeviceListPermission(package_name)) {
     std::move(callback).Run(true);
     return;
@@ -240,6 +245,13 @@ void ArcUsbHostPermissionManager::RequestUsbAccessPermission(
           vendor_id, product_id, manufacturer_string, product_string,
           serial_number, true /*always_include_manufacturer*/),
       serial_number, vendor_id, product_id);
+
+  // Grants Arc USB permission for |package_name| in Arc kiosk mode.
+  if (IsArcKioskMode()) {
+    UpdateArcUsbAccessPermission(package_name, usb_device_entry,
+                                 true /*allowed*/);
+  }
+
   if (HasUsbAccessPermission(package_name, usb_device_entry)) {
     std::move(callback).Run(true);
     return;
@@ -256,10 +268,45 @@ bool ArcUsbHostPermissionManager::HasUsbAccessPermission(
     const std::string& guid,
     const base::string16& serial_number,
     uint16_t vendor_id,
-    uint16_t product_id) {
-  UsbDeviceEntry usb_device_entry(guid, base::string16(), serial_number,
-                                  vendor_id, product_id);
+    uint16_t product_id) const {
+  UsbDeviceEntry usb_device_entry(guid, base::string16() /*device_name*/,
+                                  serial_number, vendor_id, product_id);
   return HasUsbAccessPermission(package_name, usb_device_entry);
+}
+
+void ArcUsbHostPermissionManager::GrantUsbAccessPermission(
+    const std::string& package_name,
+    const std::string& guid,
+    uint16_t vendor_id,
+    uint16_t product_id) {
+  // Create non-persistent usb device entry with empty serial_number.
+  UsbDeviceEntry usb_device_entry(guid, base::string16() /*device_name*/,
+                                  base::string16() /*serial_number*/, vendor_id,
+                                  product_id);
+  DCHECK(!usb_device_entry.IsPersistent());
+  UpdateArcUsbAccessPermission(package_name, usb_device_entry,
+                               true /*allowed*/);
+}
+
+std::unordered_set<std::string>
+ArcUsbHostPermissionManager::GetEventPackageList(
+    const std::string& guid,
+    const base::string16& serial_number,
+    uint16_t vendor_id,
+    uint16_t product_id) const {
+  // Packages with USB device scan permission should receive USB events.
+  std::unordered_set<std::string> event_packages(
+      usb_scan_devicelist_permission_packages_);
+
+  // Packages have USB access permission to this device should receive USB
+  // events for this USB device.
+  UsbDeviceEntry usb_device_entry(guid, base::string16() /*device_name*/,
+                                  serial_number, vendor_id, product_id);
+  for (const auto& entry : usb_access_permission_dict_) {
+    if (entry.second.Matches(usb_device_entry))
+      event_packages.emplace(entry.first);
+  }
+  return event_packages;
 }
 
 void ArcUsbHostPermissionManager::DeviceRemoved(const std::string& guid) {
@@ -359,7 +406,7 @@ bool ArcUsbHostPermissionManager::HasUsbScanDeviceListPermission(
 
 bool ArcUsbHostPermissionManager::HasUsbAccessPermission(
     const std::string& package_name,
-    const UsbDeviceEntry& usb_device_entry) {
+    const UsbDeviceEntry& usb_device_entry) const {
   auto range = usb_access_permission_dict_.equal_range(package_name);
   for (auto iter = range.first; iter != range.second; iter++) {
     if (iter->second.Matches(usb_device_entry))
@@ -372,6 +419,7 @@ void ArcUsbHostPermissionManager::ClearPermissionRequests() {
   pending_requests_.clear();
   current_requesting_package_.clear();
   current_requesting_guid_.clear();
+  is_permission_dialog_visible_ = false;
 }
 
 void ArcUsbHostPermissionManager::OnUsbPermissionReceived(

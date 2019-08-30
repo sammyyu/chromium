@@ -13,6 +13,7 @@
 
 #include "base/callback.h"
 #include "base/optional.h"
+#include "content/public/browser/browser_context.h"
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/common/web_preferences.h"
 #include "headless/lib/browser/headless_network_conditions.h"
@@ -34,17 +35,13 @@ class HeadlessBrowserContextOptions;
 using content::WebPreferences;
 
 using DevToolsStatus = content::ResourceRequestInfo::DevToolsStatus;
-
-using ProtocolHandlerMap = std::unordered_map<
-    std::string,
-    std::unique_ptr<net::URLRequestJobFactory::ProtocolHandler>>;
+using content::ProtocolHandlerMap;
 
 // Represents an isolated session with a unique cache, cookies, and other
 // profile/session related data.
 // When browser context is deleted, all associated web contents are closed.
 class HEADLESS_EXPORT HeadlessBrowserContext {
  public:
-  class Observer;
   class Builder;
 
   virtual ~HeadlessBrowserContext() {}
@@ -70,9 +67,6 @@ class HEADLESS_EXPORT HeadlessBrowserContext {
   // GUID for this browser context.
   virtual const std::string& Id() const = 0;
 
-  virtual void AddObserver(Observer* observer) = 0;
-  virtual void RemoveObserver(Observer* observer) = 0;
-
   virtual HeadlessNetworkConditions GetNetworkConditions() = 0;
 
   // TODO(skyostil): Allow saving and restoring contexts (crbug.com/617931).
@@ -84,25 +78,6 @@ class HEADLESS_EXPORT HeadlessBrowserContext {
   DISALLOW_COPY_AND_ASSIGN(HeadlessBrowserContext);
 };
 
-class HEADLESS_EXPORT HeadlessBrowserContext::Observer {
- public:
-  // This will be delivered on the UI thread.
-  virtual void OnChildContentsCreated(HeadlessWebContents* parent,
-                                      HeadlessWebContents* child) {}
-
-  // Indicates that a network request failed or was canceled. This will be
-  // delivered on the IO thread.
-  virtual void UrlRequestFailed(net::URLRequest* request,
-                                int net_error,
-                                DevToolsStatus devtools_status) {}
-
-  // Indicates the HeadlessBrowserContext is about to be deleted.
-  virtual void OnHeadlessBrowserContextDestruct() {}
-
- protected:
-  virtual ~Observer() {}
-};
-
 class HEADLESS_EXPORT HeadlessBrowserContext::Builder {
  public:
   Builder(Builder&&);
@@ -111,8 +86,6 @@ class HEADLESS_EXPORT HeadlessBrowserContext::Builder {
   // Set custom network protocol handlers. These can be used to override URL
   // fetching for different network schemes.
   Builder& SetProtocolHandlers(ProtocolHandlerMap protocol_handlers);
-
-  Builder& AddTabSocketMojoBindings();
 
   // By default if you add mojo bindings, http and https are disabled because
   // its almost certinly unsafe for arbitary sites on the internet to have
@@ -140,8 +113,6 @@ class HEADLESS_EXPORT HeadlessBrowserContext::Builder {
   Builder& SetIncognitoMode(bool incognito_mode);
   Builder& SetSitePerProcess(bool site_per_process);
   Builder& SetBlockNewWebContents(bool block_new_web_contents);
-  Builder& SetInitialVirtualTime(base::Time initial_virtual_time);
-  Builder& SetAllowCookies(bool incognito_mode);
   Builder& SetOverrideWebPreferencesCallback(
       base::RepeatingCallback<void(WebPreferences*)> callback);
 

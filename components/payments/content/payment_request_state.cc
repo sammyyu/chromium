@@ -20,6 +20,7 @@
 #include "components/payments/content/payment_response_helper.h"
 #include "components/payments/content/service_worker_payment_instrument.h"
 #include "components/payments/core/autofill_payment_instrument.h"
+#include "components/payments/core/features.h"
 #include "components/payments/core/journey_logger.h"
 #include "components/payments/core/payment_instrument.h"
 #include "components/payments/core/payment_request_data_util.h"
@@ -53,12 +54,14 @@ PaymentRequestState::PaymentRequestState(
       payment_request_delegate_(payment_request_delegate),
       profile_comparator_(app_locale, *spec),
       weak_ptr_factory_(this) {
-  if (base::FeatureList::IsEnabled(features::kServiceWorkerPaymentApps)) {
+  if (base::FeatureList::IsEnabled(::features::kServiceWorkerPaymentApps)) {
     get_all_instruments_finished_ = false;
     ServiceWorkerPaymentAppFactory::GetInstance()->GetAllPaymentApps(
         web_contents,
         payment_request_delegate_->GetPaymentManifestWebDataService(),
         spec_->method_data(),
+        /*may_crawl_for_installable_payment_apps=*/
+        !spec_->supports_basic_card(),
         base::BindOnce(&PaymentRequestState::GetAllPaymentAppsCallback,
                        weak_ptr_factory_.GetWeakPtr(), web_contents,
                        top_level_origin, frame_origin),
@@ -412,7 +415,9 @@ void PaymentRequestState::PopulateProfileCache() {
   // Create the list of available instruments. A copy of each card will be made
   // by their respective AutofillPaymentInstrument.
   const std::vector<autofill::CreditCard*>& cards =
-      personal_data_manager_->GetCreditCardsToSuggest();
+      personal_data_manager_->GetCreditCardsToSuggest(
+          /*include_server_cards=*/base::FeatureList::IsEnabled(
+              payments::features::kReturnGooglePayInBasicCard));
   for (autofill::CreditCard* card : cards)
     AddAutofillPaymentInstrument(/*selected=*/false, *card);
 }

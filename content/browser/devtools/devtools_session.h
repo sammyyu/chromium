@@ -14,7 +14,7 @@
 #include "content/browser/devtools/devtools_agent_host_impl.h"
 #include "content/browser/devtools/protocol/devtools_domain_handler.h"
 #include "mojo/public/cpp/bindings/associated_binding.h"
-#include "third_party/WebKit/public/web/devtools_agent.mojom.h"
+#include "third_party/blink/public/web/devtools_agent.mojom.h"
 
 namespace content {
 
@@ -28,8 +28,10 @@ class DevToolsSession : public protocol::FrontendChannel,
                   DevToolsAgentHostClient* client,
                   bool restricted);
   ~DevToolsSession() override;
+  void Dispose();
 
   bool restricted() { return restricted_; }
+  DevToolsAgentHost* agent_host() { return agent_host_; };
   DevToolsAgentHostClient* client() { return client_; };
 
   // Browser-only sessions do not talk to mojom::DevToolsAgent, but instead
@@ -41,7 +43,8 @@ class DevToolsSession : public protocol::FrontendChannel,
   void SetRenderer(int process_host_id, RenderFrameHostImpl* frame_host);
 
   void AttachToAgent(const blink::mojom::DevToolsAgentAssociatedPtr& agent);
-  void DispatchProtocolMessage(const std::string& message);
+  void DispatchProtocolMessage(const std::string& message,
+                               base::DictionaryValue* parsed_message);
   void SuspendSendingMessagesToAgent();
   void ResumeSendingMessagesToAgent();
 
@@ -80,7 +83,9 @@ class DevToolsSession : public protocol::FrontendChannel,
       const std::string& message,
       int call_id,
       const base::Optional<std::string>& state) override;
-  void DispatchProtocolNotification(const std::string& message) override;
+  void DispatchProtocolNotification(
+      const std::string& message,
+      const base::Optional<std::string>& state) override;
 
   mojo::AssociatedBinding<blink::mojom::DevToolsSessionHost> binding_;
   blink::mojom::DevToolsSessionAssociatedPtr session_ptr_;

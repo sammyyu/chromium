@@ -11,14 +11,15 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
+#include "base/feature_list.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial.h"
 #include "base/sequenced_task_runner.h"
 #include "base/stl_util.h"
 #include "base/strings/string_util.h"
 #include "base/task_scheduler/post_task.h"
+#include "base/time/default_clock.h"
 #include "build/build_config.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
@@ -29,6 +30,7 @@
 #include "chrome/browser/net/chrome_network_delegate.h"
 #include "chrome/browser/net/predictor.h"
 #include "chrome/browser/net/quota_policy_channel_id_store.h"
+#include "chrome/browser/net/reporting_permissions_checker.h"
 #include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_io_data.h"
 #include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_settings.h"
 #include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_settings_factory.h"
@@ -36,10 +38,12 @@
 #include "chrome/browser/previews/previews_service_factory.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/common/chrome_constants.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/common/chrome_switches.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
 #include "components/cookie_config/cookie_store_util.h"
+#include "components/data_reduction_proxy/core/browser/data_reduction_proxy_config.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_io_data.h"
 #include "components/data_reduction_proxy/core/browser/data_reduction_proxy_settings.h"
 #include "components/data_reduction_proxy/core/browser/data_store_impl.h"
@@ -51,7 +55,7 @@
 #include "components/prefs/pref_filter.h"
 #include "components/prefs/pref_member.h"
 #include "components/prefs/pref_service.h"
-#include "components/previews/content/previews_io_data.h"
+#include "components/previews/content/previews_decider_impl.h"
 #include "components/safe_browsing/common/safe_browsing_prefs.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/browser_thread.h"
@@ -68,11 +72,12 @@
 #include "net/http/http_network_session.h"
 #include "net/http/http_server_properties.h"
 #include "net/http/http_server_properties_manager.h"
-#include "net/net_features.h"
+#include "net/net_buildflags.h"
 #include "net/ssl/channel_id_service.h"
 #include "net/url_request/url_request_context_builder.h"
 #include "net/url_request/url_request_intercepting_job_factory.h"
 #include "net/url_request/url_request_job_factory_impl.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/network/public/mojom/network_service.mojom.h"
 #include "storage/browser/quota/special_storage_policy.h"
 
@@ -143,6 +148,7 @@ void ProfileImplIOData::Handle::Init(
     const base::FilePath& profile_path,
     chrome_browser_net::Predictor* predictor,
     storage::SpecialStoragePolicy* special_storage_policy,
+    std::unique_ptr<ReportingPermissionsChecker> reporting_permissions_checker,
     std::unique_ptr<domain_reliability::DomainReliabilityMonitor>
         domain_reliability_monitor) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
@@ -159,10 +165,10 @@ void ProfileImplIOData::Handle::Init(
   lazy_params->persist_session_cookies =
       profile_->ShouldPersistSessionCookies();
   lazy_params->special_storage_policy = special_storage_policy;
+  lazy_params->reporting_permissions_checker =
+      std::move(reporting_permissions_checker);
   lazy_params->domain_reliability_monitor =
       std::move(domain_reliability_monitor);
-  lazy_params->reporting_permissions_checker =
-      std::make_unique<ReportingPermissionsChecker>(profile_);
 
   io_data_->lazy_params_.reset(lazy_params);
 
@@ -180,11 +186,13 @@ void ProfileImplIOData::Handle::Init(
   if (io_data_->lazy_params_->domain_reliability_monitor)
     io_data_->lazy_params_->domain_reliability_monitor->MoveToNetworkThread();
 
-  io_data_->set_previews_io_data(std::make_unique<previews::PreviewsIOData>(
-      BrowserThread::GetTaskRunnerForThread(BrowserThread::UI),
-      BrowserThread::GetTaskRunnerForThread(BrowserThread::IO)));
+  io_data_->set_previews_decider_impl(
+      std::make_unique<previews::PreviewsDeciderImpl>(
+          BrowserThread::GetTaskRunnerForThread(BrowserThread::UI),
+          BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
+          base::DefaultClock::GetInstance()));
   PreviewsServiceFactory::GetForProfile(profile_)->Initialize(
-      io_data_->previews_io_data(),
+      io_data_->previews_decider_impl(),
       g_browser_process->optimization_guide_service(),
       BrowserThread::GetTaskRunnerForThread(BrowserThread::IO), profile_path);
 
@@ -193,6 +201,12 @@ void ProfileImplIOData::Handle::Init(
           g_browser_process->io_thread()->net_log(), profile_->GetPrefs(),
           BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
           BrowserThread::GetTaskRunnerForThread(BrowserThread::UI)));
+
+#if defined(OS_CHROMEOS)
+  io_data_->data_reduction_proxy_io_data()
+      ->config()
+      ->EnableGetNetworkIdAsynchronously();
+#endif
 }
 
 content::ResourceContext*
@@ -231,15 +245,16 @@ ProfileImplIOData::Handle::CreateMainRequestContextGetter(
   DataReductionProxyChromeSettingsFactory::GetForBrowserContext(profile_)
       ->InitDataReductionProxySettings(
           io_data_->data_reduction_proxy_io_data(), profile_->GetPrefs(),
-          main_request_context_getter_.get(), std::move(store),
+          main_request_context_getter_.get(),
+          content::BrowserContext::GetDefaultStoragePartition(profile_)
+              ->GetURLLoaderFactoryForBrowserProcess(),
+          std::move(store),
           BrowserThread::GetTaskRunnerForThread(BrowserThread::UI),
           db_task_runner);
 
-  io_data_->predictor_
-      ->InitNetworkPredictor(profile_->GetPrefs(),
-                             io_thread,
-                             main_request_context_getter_.get(),
-                             io_data_);
+  io_data_->predictor_->InitNetworkPredictor(profile_->GetPrefs(), io_thread,
+                                             main_request_context_getter_.get(),
+                                             io_data_, profile_);
 
   content::NotificationService::current()->Notify(
       chrome::NOTIFICATION_PROFILE_URL_REQUEST_CONTEXT_GETTER_INITIALIZED,
@@ -435,9 +450,6 @@ void ProfileImplIOData::InitializeInternal(
   IOThread* const io_thread = profile_params->io_thread;
   IOThread::Globals* const io_thread_globals = io_thread->globals();
 
-  builder->set_network_quality_estimator(
-      io_thread_globals->network_quality_estimator.get());
-
   // This check is needed because with the network service the cookies are used
   // in a different process. See the bottom of
   // ProfileNetworkContextService::SetUpProfileIODataMainContext.
@@ -486,8 +498,7 @@ void ProfileImplIOData::InitializeInternal(
   // Install the Offline Page Interceptor.
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
   request_interceptors.push_back(
-      std::make_unique<offline_pages::OfflinePageRequestInterceptor>(
-          previews_io_data()));
+      std::make_unique<offline_pages::OfflinePageRequestInterceptor>());
 #endif
 
   // The data reduction proxy interceptor should be as close to the network
@@ -497,7 +508,7 @@ void ProfileImplIOData::InitializeInternal(
       data_reduction_proxy_io_data()->CreateInterceptor());
   data_reduction_proxy_io_data()->SetDataUseAscriber(
       io_thread_globals->data_use_ascriber.get());
-  data_reduction_proxy_io_data()->SetPreviewsDecider(previews_io_data());
+  data_reduction_proxy_io_data()->SetPreviewsDecider(previews_decider_impl());
   SetUpJobFactoryDefaultsForBuilder(
       builder, std::move(request_interceptors),
       std::move(profile_params->protocol_handler_interceptor));
@@ -660,6 +671,8 @@ net::URLRequestContext* ProfileImplIOData::InitializeMediaRequestContext(
   // Copy most state from the original context.
   MediaRequestContext* context = new MediaRequestContext(name);
   context->CopyFrom(original_context);
+  if (base::FeatureList::IsEnabled(features::kUseSameCacheForMedia))
+    return context;
 
   // For in-memory context, return immediately after creating the new
   // context before attaching a separate cache. It is important to return

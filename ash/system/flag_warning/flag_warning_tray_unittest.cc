@@ -4,30 +4,40 @@
 
 #include "ash/system/flag_warning/flag_warning_tray.h"
 
-#include "ash/public/cpp/config.h"
 #include "ash/root_window_controller.h"
 #include "ash/shell.h"
 #include "ash/system/status_area_widget.h"
 #include "ash/test/ash_test_base.h"
+#include "base/macros.h"
+#include "base/test/scoped_feature_list.h"
+#include "ui/base/ui_base_features.h"
 
 namespace ash {
 namespace {
 
-using FlagWarningTrayTest = AshTestBase;
+class FlagWarningTrayTest : public AshTestBase {
+ public:
+  FlagWarningTrayTest() = default;
+  ~FlagWarningTrayTest() override = default;
 
-TEST_F(FlagWarningTrayTest, Visibility) {
-  // Tray is always created.
+  // testing::Test:
+  void SetUp() override {
+    scoped_feature_list_.InitAndEnableFeature(::features::kMash);
+    AshTestBase::SetUp();
+  }
+
+ private:
+  base::test::ScopedFeatureList scoped_feature_list_;
+
+  DISALLOW_COPY_AND_ASSIGN(FlagWarningTrayTest);
+};
+
+TEST_F(FlagWarningTrayTest, VisibleForMash) {
   FlagWarningTray* tray = Shell::GetPrimaryRootWindowController()
                               ->GetStatusAreaWidget()
                               ->flag_warning_tray_for_testing();
   ASSERT_TRUE(tray);
-
-  // Warning should be visible in ash_unittests when mash is enabled, but not in
-  // regular ash_unittests. The warning does not show for Config::MUS because
-  // mus will roll out via experiment/Finch trial and showing the tray would
-  // reveal the experiment state to users.
-  const bool is_mash = Shell::GetAshConfig() == Config::MASH;
-  EXPECT_EQ(tray->visible(), is_mash);
+  EXPECT_TRUE(tray->visible());
 }
 
 }  // namespace

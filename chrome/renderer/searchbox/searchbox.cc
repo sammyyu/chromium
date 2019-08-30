@@ -21,11 +21,11 @@
 #include "components/favicon_base/favicon_url_parser.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_view.h"
-#include "third_party/WebKit/public/common/associated_interfaces/associated_interface_provider.h"
-#include "third_party/WebKit/public/common/associated_interfaces/associated_interface_registry.h"
-#include "third_party/WebKit/public/web/WebFrame.h"
-#include "third_party/WebKit/public/web/WebLocalFrame.h"
-#include "third_party/WebKit/public/web/WebPerformance.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#include "third_party/blink/public/web/web_frame.h"
+#include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_performance.h"
 
 namespace {
 
@@ -312,6 +312,23 @@ void SearchBox::StopCapturingKeyStrokes() {
 
 void SearchBox::UndoAllMostVisitedDeletions() {
   embedded_search_service_->UndoAllMostVisitedDeletions(page_seq_no_);
+}
+
+void SearchBox::SetCustomBackgroundURL(const GURL& background_url) {
+  embedded_search_service_->SetCustomBackgroundURL(background_url);
+}
+
+void SearchBox::SetCustomBackgroundURLWithAttributions(
+    const GURL& background_url,
+    const std::string& attribution_line_1,
+    const std::string& attribution_line_2,
+    const GURL& action_url) {
+  embedded_search_service_->SetCustomBackgroundURLWithAttributions(
+      background_url, attribution_line_1, attribution_line_2, action_url);
+}
+
+void SearchBox::SelectLocalBackgroundImage() {
+  embedded_search_service_->SelectLocalBackgroundImage();
 }
 
 void SearchBox::UndoMostVisitedDeletion(

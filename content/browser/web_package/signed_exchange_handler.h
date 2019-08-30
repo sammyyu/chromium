@@ -10,14 +10,15 @@
 #include "base/callback.h"
 #include "base/optional.h"
 #include "base/time/time.h"
-#include "content/browser/web_package/signed_exchange_header.h"
+#include "content/browser/web_package/signed_exchange_consts.h"
+#include "content/browser/web_package/signed_exchange_envelope.h"
+#include "content/browser/web_package/signed_exchange_prologue.h"
 #include "content/common/content_export.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "net/base/completion_callback.h"
 #include "net/cert/cert_verifier.h"
 #include "net/cert/cert_verify_result.h"
 #include "net/log/net_log_with_source.h"
-#include "net/ssl/ssl_info.h"
 #include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -28,18 +29,19 @@ class CertVerifyResult;
 class DrainableIOBuffer;
 class SourceStream;
 class URLRequestContextGetter;
-class X509Certificate;
+struct OCSPVerifyResult;
 }  // namespace net
 
 namespace network {
-class SharedURLLoaderFactory;
 struct ResourceResponseHead;
 }  // namespace network
 
 namespace content {
 
 class SignedExchangeCertFetcher;
-class URLLoaderThrottle;
+class SignedExchangeCertFetcherFactory;
+class SignedExchangeCertificateChain;
+class SignedExchangeDevToolsProxy;
 
 // IMPORTANT: Currenly SignedExchangeHandler partially implements the verifying
 // logic.
@@ -47,16 +49,12 @@ class URLLoaderThrottle;
 class CONTENT_EXPORT SignedExchangeHandler {
  public:
   // TODO(https://crbug.com/803774): Add verification status here.
-  using ExchangeHeadersCallback =
-      base::OnceCallback<void(net::Error error,
-                              const GURL& request_url,
-                              const std::string& request_method,
-                              const network::ResourceResponseHead&,
-                              std::unique_ptr<net::SourceStream> payload_stream,
-                              base::Optional<net::SSLInfo>)>;
-
-  using URLLoaderThrottlesGetter = base::RepeatingCallback<
-      std::vector<std::unique_ptr<content::URLLoaderThrottle>>()>;
+  using ExchangeHeadersCallback = base::OnceCallback<void(
+      net::Error error,
+      const GURL& request_url,
+      const std::string& request_method,
+      const network::ResourceResponseHead&,
+      std::unique_ptr<net::SourceStream> payload_stream)>;
 
   // TODO(https://crbug.com/817187): Find a more sophisticated way to use a
   // MockCertVerifier in browser tests instead of using the static method.
@@ -67,16 +65,16 @@ class CONTENT_EXPORT SignedExchangeHandler {
 
   // Once constructed |this| starts reading the |body| and parses the response
   // as a signed HTTP exchange. The response body of the exchange can be read
-  // from |payload_stream| passed to |headers_callback|. |url_loader_factory|
-  // and |url_loader_throttles_getter| are used to set up a network URLLoader to
-  // actually fetch the certificate.
+  // from |payload_stream| passed to |headers_callback|. |cert_fetcher_factory|
+  // is used to create a SignedExchangeCertFetcher that fetches the certificate.
   SignedExchangeHandler(
+      std::string content_type,
       std::unique_ptr<net::SourceStream> body,
       ExchangeHeadersCallback headers_callback,
-      url::Origin request_initiator,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      URLLoaderThrottlesGetter url_loader_throttles_getter,
-      scoped_refptr<net::URLRequestContextGetter> request_context_getter);
+      std::unique_ptr<SignedExchangeCertFetcherFactory> cert_fetcher_factory,
+      int load_flags,
+      scoped_refptr<net::URLRequestContextGetter> request_context_getter,
+      std::unique_ptr<SignedExchangeDevToolsProxy> devtools_proxy);
   ~SignedExchangeHandler();
 
  protected:
@@ -84,7 +82,7 @@ class CONTENT_EXPORT SignedExchangeHandler {
 
  private:
   enum class State {
-    kReadingHeadersLength,
+    kReadingPrologue,
     kReadingHeaders,
     kFetchingCertificate,
     kHeadersCallbackCalled,
@@ -93,38 +91,36 @@ class CONTENT_EXPORT SignedExchangeHandler {
   void SetupBuffers(size_t size);
   void DoHeaderLoop();
   void DidReadHeader(bool completed_syncly, int result);
-  bool ParseHeadersLength();
+  bool ParsePrologue();
   bool ParseHeadersAndFetchCertificate();
   void RunErrorCallback(net::Error);
 
   void OnCertReceived(
-      scoped_refptr<net::X509Certificate> cert);
+      std::unique_ptr<SignedExchangeCertificateChain> cert_chain);
   void OnCertVerifyComplete(int result);
+  bool CheckCertExtension(const net::X509Certificate* verified_cert);
+  bool CheckOCSPStatus(const net::OCSPVerifyResult& ocsp_result);
+  int VerifyCT(net::ct::CTVerifyResult* ct_verify_result);
 
   ExchangeHeadersCallback headers_callback_;
+  base::Optional<SignedExchangeVersion> version_;
   std::unique_ptr<net::SourceStream> source_;
 
-  State state_ = State::kReadingHeadersLength;
-  // Buffer used for header reading.
+  State state_ = State::kReadingPrologue;
+  // Buffer used for prologue and envelope reading.
   scoped_refptr<net::IOBuffer> header_buf_;
   // Wrapper around |header_buf_| to progressively read fixed-size data.
   scoped_refptr<net::DrainableIOBuffer> header_read_buf_;
-  size_t headers_length_ = 0;
+  base::Optional<SignedExchangePrologue> prologue_;
+  base::Optional<SignedExchangeEnvelope> envelope_;
 
-  base::Optional<SignedExchangeHeader> header_;
-
-  // Used to create |cert_fetcher_|.
-  url::Origin request_initiator_;
-  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
-  // This getter is guaranteed to be valid at least until the headers callback
-  // is run.
-  URLLoaderThrottlesGetter url_loader_throttles_getter_;
-
+  std::unique_ptr<SignedExchangeCertFetcherFactory> cert_fetcher_factory_;
   std::unique_ptr<SignedExchangeCertFetcher> cert_fetcher_;
+  const int load_flags_;
 
   scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
 
-  scoped_refptr<net::X509Certificate> unverified_cert_;
+  std::unique_ptr<SignedExchangeCertificateChain> unverified_cert_chain_;
 
   // CertVerifyResult must be freed after the Request has been destructed.
   // So |cert_verify_result_| must be written before |cert_verifier_request_|.
@@ -134,6 +130,8 @@ class CONTENT_EXPORT SignedExchangeHandler {
   // TODO(https://crbug.com/767450): figure out what we should do for NetLog
   // with Network Service.
   net::NetLogWithSource net_log_;
+
+  std::unique_ptr<SignedExchangeDevToolsProxy> devtools_proxy_;
 
   base::WeakPtrFactory<SignedExchangeHandler> weak_factory_;
 
@@ -148,10 +146,8 @@ class SignedExchangeHandlerFactory {
   virtual std::unique_ptr<SignedExchangeHandler> Create(
       std::unique_ptr<net::SourceStream> body,
       SignedExchangeHandler::ExchangeHeadersCallback headers_callback,
-      url::Origin request_initiator,
-      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
-      SignedExchangeHandler::URLLoaderThrottlesGetter
-          url_loader_throttles_getter) = 0;
+      std::unique_ptr<SignedExchangeCertFetcherFactory>
+          cert_fetcher_factory) = 0;
 };
 
 }  // namespace content

@@ -19,7 +19,8 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
-#include "content/public/test/scoped_overscroll_mode.h"
+#include "content/public/test/hit_test_region_observer.h"
+#include "content/public/test/scoped_overscroll_modes.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
@@ -422,7 +423,7 @@ IN_PROC_BROWSER_TEST_P(TouchSelectionControllerClientAuraSiteIsolationTest,
   // The child will change with the cross-site navigation. It shouldn't change
   // after this.
   child = root->child_at(0);
-  WaitForChildFrameSurfaceReady(child->current_frame_host());
+  WaitForHitTestDataOrChildSurfaceReady(child->current_frame_host());
 
   RenderWidgetHostViewChildFrame* child_view =
       static_cast<RenderWidgetHostViewChildFrame*>(
@@ -529,7 +530,7 @@ IN_PROC_BROWSER_TEST_P(TouchSelectionControllerClientAuraSiteIsolationTest,
   // The child will change with the cross-site navigation. It shouldn't change
   // after this.
   child = root->child_at(0);
-  WaitForChildFrameSurfaceReady(child->current_frame_host());
+  WaitForHitTestDataOrChildSurfaceReady(child->current_frame_host());
 
   RenderWidgetHostViewChildFrame* child_view =
       static_cast<RenderWidgetHostViewChildFrame*>(
@@ -549,8 +550,8 @@ IN_PROC_BROWSER_TEST_P(TouchSelectionControllerClientAuraSiteIsolationTest,
   ui::TouchSelectionControllerTestApi selection_controller_test_api(
       selection_controller);
 
-  scoped_refptr<UpdateResizeParamsMessageFilter> filter =
-      new UpdateResizeParamsMessageFilter();
+  scoped_refptr<SynchronizeVisualPropertiesMessageFilter> filter =
+      new SynchronizeVisualPropertiesMessageFilter();
   root->current_frame_host()->GetProcess()->AddFilter(filter.get());
 
   // Find the location of some text to select.
@@ -857,7 +858,8 @@ IN_PROC_BROWSER_TEST_F(TouchSelectionControllerClientAuraTest, HiddenOnScroll) {
 // This only happens in the gesture nav with parallax effect.
 IN_PROC_BROWSER_TEST_F(TouchSelectionControllerClientAuraTest,
                        HiddenAfterOverscroll) {
-  ScopedOverscrollMode scoped_mode(OverscrollConfig::Mode::kParallaxUi);
+  ScopedHistoryNavigationMode scoped_mode(
+      OverscrollConfig::HistoryNavigationMode::kParallaxUi);
 
   // Set the page up.
   ASSERT_NO_FATAL_FAILURE(StartTestWithPage("/touch_selection.html"));
@@ -1048,6 +1050,13 @@ IN_PROC_BROWSER_TEST_F(TouchSelectionControllerClientAuraScaleFactorTest,
 
   gfx::PointF point;
   ASSERT_TRUE(GetPointInsideTextfield(&point));
+
+  ui::GestureEventDetails gesture_tap_down_details(ui::ET_GESTURE_TAP_DOWN);
+  gesture_tap_down_details.set_device_type(
+      ui::GestureDeviceType::DEVICE_TOUCHSCREEN);
+  ui::GestureEvent gesture_tap_down(2, 2, 0, ui::EventTimeForNow(),
+                                    gesture_tap_down_details);
+  rwhva->OnGestureEvent(&gesture_tap_down);
   ui::GestureEventDetails tap_details(ui::ET_GESTURE_TAP);
   tap_details.set_device_type(ui::GestureDeviceType::DEVICE_TOUCHSCREEN);
   tap_details.set_tap_count(1);

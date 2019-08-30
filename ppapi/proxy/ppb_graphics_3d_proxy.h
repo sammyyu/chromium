@@ -42,7 +42,7 @@ class PPAPI_PROXY_EXPORT Graphics3D : public PPB_Graphics3D_Shared {
 
   bool Init(gpu::gles2::GLES2Implementation* share_gles2,
             const gpu::Capabilities& capabilities,
-            const SerializedHandle& shared_state,
+            SerializedHandle shared_state,
             gpu::CommandBufferId command_buffer_id);
 
   // Graphics3DTrusted API. These are not implemented in the proxy.
@@ -68,6 +68,8 @@ class PPAPI_PROXY_EXPORT Graphics3D : public PPB_Graphics3D_Shared {
                         const gfx::Size& size) override;
 
   std::unique_ptr<PpapiCommandBufferProxy> command_buffer_;
+
+  uint64_t swap_id_ = 0;
 
   DISALLOW_COPY_AND_ASSIGN(Graphics3D);
 };

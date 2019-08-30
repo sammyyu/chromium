@@ -73,6 +73,7 @@ class InProcessContextFactory : public ContextFactory,
   void SetDisplayVisible(ui::Compositor* compositor, bool visible) override;
   void ResizeDisplay(ui::Compositor* compositor,
                      const gfx::Size& size) override;
+  void DisableSwapUntilResize(ui::Compositor* compositor) override;
   void SetDisplayColorMatrix(ui::Compositor* compositor,
                              const SkMatrix44& matrix) override;
   void SetDisplayColorSpace(
@@ -89,6 +90,7 @@ class InProcessContextFactory : public ContextFactory,
   void SetOutputIsSecure(ui::Compositor* compositor, bool secure) override {}
   void AddObserver(ContextFactoryObserver* observer) override;
   void RemoveObserver(ContextFactoryObserver* observer) override;
+  bool SyncTokensRequiredForDisplayCompositor() override;
   viz::FrameSinkManagerImpl* GetFrameSinkManager() override;
 
   SkMatrix44 GetOutputColorMatrix(Compositor* compositor) const;

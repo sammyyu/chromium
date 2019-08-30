@@ -18,15 +18,22 @@ namespace debug {
 // such as task origins, queueing durations and memory usage.
 class BASE_EXPORT TaskAnnotator {
  public:
+  class ObserverForTesting {
+   public:
+    // Invoked just before RunTask() in the scope in which the task is about to
+    // be executed.
+    virtual void BeforeRunTask(const PendingTask* pending_task) = 0;
+  };
+
   TaskAnnotator();
   ~TaskAnnotator();
 
-  // Called to indicate that a task has been queued to run in the future.
-  // |queue_function| is used as the trace flow event name. |queue_function| can
-  // be null if the caller doesn't want trace flow events logged to
-  // toplevel.flow.
-  void DidQueueTask(const char* queue_function,
-                    const PendingTask& pending_task);
+  // Called to indicate that a task is about to be queued to run in the future,
+  // giving one last chance for this TaskAnnotator to add metadata to
+  // |pending_task| before it is moved into the queue. |queue_function| is used
+  // as the trace flow event name. |queue_function| can be null if the caller
+  // doesn't want trace flow events logged to toplevel.flow.
+  void WillQueueTask(const char* queue_function, PendingTask* pending_task);
 
   // Run a previously queued task. |queue_function| should match what was
   // passed into |DidQueueTask| for this task.
@@ -40,6 +47,14 @@ class BASE_EXPORT TaskAnnotator {
   uint64_t GetTaskTraceID(const PendingTask& task) const;
 
  private:
+  friend class TaskAnnotatorBacktraceIntegrationTest;
+
+  // Registers an ObserverForTesting that will be invoked by all TaskAnnotators'
+  // RunTask(). This registration and the implementation of BeforeRunTask() are
+  // responsible to ensure thread-safety.
+  static void RegisterObserverForTesting(ObserverForTesting* observer);
+  static void ClearObserverForTesting();
+
   DISALLOW_COPY_AND_ASSIGN(TaskAnnotator);
 };
 

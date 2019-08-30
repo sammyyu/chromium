@@ -8,7 +8,6 @@
 #include <utility>
 
 #include "base/base64.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
@@ -76,7 +75,7 @@ IgnoreErrorsCertVerifier::~IgnoreErrorsCertVerifier() {}
 int IgnoreErrorsCertVerifier::Verify(const RequestParams& params,
                                      net::CRLSet* crl_set,
                                      net::CertVerifyResult* verify_result,
-                                     const net::CompletionCallback& callback,
+                                     net::CompletionOnceCallback callback,
                                      std::unique_ptr<Request>* out_req,
                                      const net::NetLogWithSource& net_log) {
   SPKIHashSet spki_fingerprints;
@@ -123,11 +122,17 @@ int IgnoreErrorsCertVerifier::Verify(const RequestParams& params,
     std::transform(spki_fingerprints.begin(), spki_fingerprints.end(),
                    std::back_inserter(verify_result->public_key_hashes),
                    [](const SHA256HashValue& v) { return HashValue(v); });
+    if (!params.ocsp_response().empty()) {
+      verify_result->ocsp_result.response_status =
+          net::OCSPVerifyResult::PROVIDED;
+      verify_result->ocsp_result.revocation_status =
+          net::OCSPRevocationStatus::GOOD;
+    }
     return net::OK;
   }
 
-  return verifier_->Verify(params, crl_set, verify_result, callback, out_req,
-                           net_log);
+  return verifier_->Verify(params, crl_set, verify_result, std::move(callback),
+                           out_req, net_log);
 }
 
 void IgnoreErrorsCertVerifier::set_whitelist(const SPKIHashSet& whitelist) {

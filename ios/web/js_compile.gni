@@ -44,6 +44,7 @@ template("js_compile_bundle") {
 
   java_action(compile_js_target_name) {
     visibility = [ ":$_target_name" ]
+    forward_variables_from(invoker, [ "testonly" ])
     script = closure_compiler_path
     sources = invoker.sources
     outputs = [
@@ -68,6 +69,7 @@ template("js_compile_bundle") {
                              "data_deps",
                              "deps",
                              "public_deps",
+                             "testonly",
                              "visibility",
                            ])
 
@@ -114,11 +116,13 @@ template("js_compile_checked") {
 
     java_action_foreach(compile_js_target_name) {
       visibility = [ ":$_target_name" ]
+      forward_variables_from(invoker, [ "testonly" ])
       script = closure_compiler_path
       sources = invoker.sources
       _js_modules = [
         "//ios/web/web_state/js/resources/base.js",
         "//ios/web/web_state/js/resources/common.js",
+        "//ios/web/web_state/js/resources/frame_messaging.js",
         "//ios/web/web_state/js/resources/message.js",
       ]
       if (defined(invoker.js_modules)) {
@@ -178,6 +182,7 @@ template("js_compile_checked") {
                                "data_deps",
                                "deps",
                                "public_deps",
+                               "testonly",
                                "visibility",
                              ])
 
@@ -192,11 +197,13 @@ template("js_compile_checked") {
     }
   } else {
     bundle_data(target_name) {
+      not_needed(invoker, [ "js_modules" ])
       forward_variables_from(invoker,
                              [
                                "data_deps",
                                "deps",
                                "public_deps",
+                               "testonly",
                                "visibility",
                              ])
 
@@ -233,6 +240,7 @@ template("js_compile_unchecked") {
 
     java_action_foreach(compile_js_target_name) {
       visibility = [ ":$_target_name" ]
+      forward_variables_from(invoker, [ "testonly" ])
       script = closure_compiler_path
       sources = invoker.sources
       outputs = [
@@ -255,6 +263,7 @@ template("js_compile_unchecked") {
                                "data_deps",
                                "deps",
                                "public_deps",
+                               "testonly",
                                "visibility",
                              ])
 
@@ -274,6 +283,7 @@ template("js_compile_unchecked") {
                                "data_deps",
                                "deps",
                                "public_deps",
+                               "testonly",
                                "visibility",
                              ])
 

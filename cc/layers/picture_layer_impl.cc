@@ -336,10 +336,23 @@ void PictureLayerImpl::AppendQuads(viz::RenderPass* render_pass,
     gfx::Size texture_size = quad_content_rect.size();
     gfx::RectF texture_rect = gfx::RectF(gfx::SizeF(texture_size));
 
+    viz::PictureDrawQuad::ImageAnimationMap image_animation_map;
+    const auto* controller = layer_tree_impl()->image_animation_controller();
+    WhichTree tree = layer_tree_impl()->IsPendingTree()
+                         ? WhichTree::PENDING_TREE
+                         : WhichTree::ACTIVE_TREE;
+    for (const auto& image_data : raster_source_->GetDisplayItemList()
+                                      ->discardable_image_map()
+                                      .animated_images_metadata()) {
+      image_animation_map[image_data.paint_image_id] =
+          controller->GetFrameIndexForImage(image_data.paint_image_id, tree);
+    }
+
     auto* quad = render_pass->CreateAndAppendDrawQuad<viz::PictureDrawQuad>();
     quad->SetNew(shared_quad_state, geometry_rect, visible_geometry_rect,
                  needs_blending, texture_rect, texture_size, nearest_neighbor_,
                  viz::RGBA_8888, quad_content_rect, max_contents_scale,
+                 std::move(image_animation_map),
                  raster_source_->GetDisplayItemList());
     ValidateQuadResources(quad);
     return;
@@ -771,6 +784,10 @@ void PictureLayerImpl::UpdateRasterSource(
   // We could do this after doing UpdateTiles, which would avoid doing this for
   // tilings that are going to disappear on the pending tree (if scale changed).
   // But that would also be more complicated, so we just do it here for now.
+  //
+  // TODO(crbug.com/843787): If the LayerTreeFrameSink is lost, and we activate,
+  // this ends up running with the old LayerTreeFrameSink, or possibly with a
+  // null LayerTreeFrameSink, which can give incorrect results or maybe crash.
   if (pending_set) {
     tilings_->UpdateTilingsToCurrentRasterSourceForActivation(
         raster_source_, pending_set, invalidation_, MinimumContentsScale(),
@@ -932,8 +949,7 @@ bool PictureLayerImpl::ShouldAnimate(PaintImage::Id paint_image_id) const {
 
 gfx::Size PictureLayerImpl::CalculateTileSize(
     const gfx::Size& content_bounds) const {
-  int max_texture_size =
-      layer_tree_impl()->resource_provider()->max_texture_size();
+  int max_texture_size = layer_tree_impl()->max_texture_size();
 
   if (mask_type_ == Layer::LayerMaskType::SINGLE_TEXTURE_MASK) {
     // Masks are not tiled, so if we can't cover the whole mask with one tile,
@@ -1452,10 +1468,10 @@ float PictureLayerImpl::MaximumContentsScale() const {
   // have tilings that would become larger than the max_texture_size since they
   // use a single tile for the entire tiling. Other layers can have tilings such
   // that dimension * scale does not overflow.
-  float max_dimension = static_cast<float>(
-      mask_type_ == Layer::LayerMaskType::SINGLE_TEXTURE_MASK
-          ? layer_tree_impl()->resource_provider()->max_texture_size()
-          : std::numeric_limits<int>::max());
+  float max_dimension =
+      static_cast<float>(mask_type_ == Layer::LayerMaskType::SINGLE_TEXTURE_MASK
+                             ? layer_tree_impl()->max_texture_size()
+                             : std::numeric_limits<int>::max());
   float max_scale_width = max_dimension / bounds().width();
   float max_scale_height = max_dimension / bounds().height();
   float max_scale = std::min(max_scale_width, max_scale_height);
@@ -1514,7 +1530,8 @@ std::unique_ptr<PictureLayerTilingSet>
 PictureLayerImpl::CreatePictureLayerTilingSet() {
   const LayerTreeSettings& settings = layer_tree_impl()->settings();
   return PictureLayerTilingSet::Create(
-      GetTree(), this, settings.tiling_interest_area_padding,
+      IsActive() ? ACTIVE_TREE : PENDING_TREE, this,
+      settings.tiling_interest_area_padding,
       layer_tree_impl()->use_gpu_rasterization()
           ? settings.gpu_rasterization_skewport_target_time_in_seconds
           : settings.skewport_target_time_in_seconds,
@@ -1632,10 +1649,6 @@ size_t PictureLayerImpl::GPUMemoryUsageInBytes() const {
 
 void PictureLayerImpl::RunMicroBenchmark(MicroBenchmarkImpl* benchmark) {
   benchmark->RunOnLayer(this);
-}
-
-WhichTree PictureLayerImpl::GetTree() const {
-  return layer_tree_impl()->IsActiveTree() ? ACTIVE_TREE : PENDING_TREE;
 }
 
 bool PictureLayerImpl::IsOnActiveOrPendingTree() const {

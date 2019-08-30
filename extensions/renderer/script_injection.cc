@@ -10,7 +10,6 @@
 #include "base/feature_list.h"
 #include "base/lazy_instance.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/timer/elapsed_timer.h"
 #include "base/values.h"
@@ -25,11 +24,11 @@
 #include "extensions/renderer/extensions_renderer_client.h"
 #include "extensions/renderer/script_injection_callback.h"
 #include "extensions/renderer/scripts_run_info.h"
-#include "third_party/WebKit/public/platform/WebSecurityOrigin.h"
-#include "third_party/WebKit/public/platform/WebString.h"
-#include "third_party/WebKit/public/web/WebDocument.h"
-#include "third_party/WebKit/public/web/WebLocalFrame.h"
-#include "third_party/WebKit/public/web/WebScriptSource.h"
+#include "third_party/blink/public/platform/web_security_origin.h"
+#include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/public/web/web_document.h"
+#include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_script_source.h"
 #include "url/gurl.h"
 
 namespace extensions {
@@ -205,13 +204,13 @@ ScriptInjection::InjectionResult ScriptInjection::TryToInject(
   switch (injector_->CanExecuteOnFrame(
       injection_host_.get(), web_frame,
       ExtensionFrameHelper::Get(render_frame_)->tab_id())) {
-    case PermissionsData::ACCESS_DENIED:
+    case PermissionsData::PageAccess::kDenied:
       NotifyWillNotInject(ScriptInjector::NOT_ALLOWED);
       return INJECTION_FINISHED;  // We're done.
-    case PermissionsData::ACCESS_WITHHELD:
+    case PermissionsData::PageAccess::kWithheld:
       RequestPermissionFromBrowser();
       return INJECTION_WAITING;  // Wait around for permission.
-    case PermissionsData::ACCESS_ALLOWED:
+    case PermissionsData::PageAccess::kAllowed:
       InjectionResult result =
           Inject(scripts_run_info, std::move(async_run_info));
       // If the injection is blocked, we need to set the manager so we can

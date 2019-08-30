@@ -45,13 +45,44 @@ namespace {
 enum CookieLoadProblem {
   COOKIE_LOAD_PROBLEM_DECRYPT_FAILED = 0,
   COOKIE_LOAD_PROBLEM_DECRYPT_TIMEOUT = 1,
+  COOKIE_LOAD_PROBLEM_NON_CANONICAL = 2,
+  COOKIE_LOAD_PROBLEM_OPEN_DB = 3,
+  COOKIE_LOAD_PROBLEM_RECOVERY_FAILED = 4,
   COOKIE_LOAD_PROBLEM_LAST_ENTRY
+};
+
+// Used to populate a histogram for problems when committing cookies.
+//
+// Please do not reorder or remove entries. New entries must be added to the
+// end of the list, just before COOKIE_COMMIT_PROBLEM_LAST_ENTRY.
+enum CookieCommitProblem {
+  COOKIE_COMMIT_PROBLEM_ENCRYPT_FAILED = 0,
+  COOKIE_COMMIT_PROBLEM_ADD = 1,
+  COOKIE_COMMIT_PROBLEM_UPDATE_ACCESS = 2,
+  COOKIE_COMMIT_PROBLEM_DELETE = 3,
+  COOKIE_COMMIT_PROBLEM_LAST_ENTRY
+};
+
+// Used to report a histogram on status of cookie commit to disk.
+//
+// Please do not reorder or remove entries. New entries must be added to the
+// end of the list, just before BACKING_STORE_RESULTS_LAST_ENTRY.
+enum BackingStoreResults {
+  BACKING_STORE_RESULTS_SUCCESS = 0,
+  BACKING_STORE_RESULTS_FAILURE = 1,
+  BACKING_STORE_RESULTS_MIXED = 2,
+  BACKING_STORE_RESULTS_LAST_ENTRY
 };
 
 void RecordCookieLoadProblem(CookieLoadProblem event) {
   UMA_HISTOGRAM_ENUMERATION("Cookie.LoadProblem", event,
                             COOKIE_LOAD_PROBLEM_LAST_ENTRY);
-};
+}
+
+void RecordCookieCommitProblem(CookieCommitProblem event) {
+  UMA_HISTOGRAM_ENUMERATION("Cookie.CommitProblem", event,
+                            COOKIE_COMMIT_PROBLEM_LAST_ENTRY);
+}
 
 // The persistent cookie store is loaded into memory on eTLD at a time. This
 // variable controls the delay between loading eTLDs, so as to not overload the
@@ -153,8 +184,9 @@ class SQLitePersistentCookieStore::Backend
                          const LoadedCallback& loaded_callback);
 
   // Steps through all results of |smt|, makes a cookie from each, and adds the
-  // cookie to |cookies|. This method also updates |num_cookies_read_|.
-  void MakeCookiesFromSQLStatement(
+  // cookie to |cookies|. Returns true if everything loaded successfully.
+  // Always updates |num_cookies_read_|.
+  bool MakeCookiesFromSQLStatement(
       std::vector<std::unique_ptr<CanonicalCookie>>* cookies,
       sql::Statement* statement);
 
@@ -259,7 +291,8 @@ class SQLitePersistentCookieStore::Backend
   // all domains are loaded).
   void ChainLoadCookies(const LoadedCallback& loaded_callback);
 
-  // Load all cookies for a set of domains/hosts
+  // Load all cookies for a set of domains/hosts. The error recovery code
+  // assumes |key| includes all related domains within an eTLD + 1.
   bool LoadCookiesForDomains(const std::set<std::string>& key);
 
   // Batch a cookie operation (add or delete)
@@ -289,7 +322,7 @@ class SQLitePersistentCookieStore::Backend
   std::unique_ptr<sql::Connection> db_;
   sql::MetaTable meta_table_;
 
-  typedef std::list<PendingOperation*> PendingOperationsList;
+  typedef std::list<std::unique_ptr<PendingOperation>> PendingOperationsList;
   PendingOperationsList pending_;
   PendingOperationsList::size_type num_pending_;
   // Guard |cookies_|, |pending_|, |num_pending_|.
@@ -317,7 +350,8 @@ class SQLitePersistentCookieStore::Backend
   base::TimeDelta cookie_load_duration_;
 
   // The total number of cookies read. Incremented and reported on the
-  // background runner.
+  // background runner.  Includes those that were malformed, not decrypted
+  // correctly, etc.
   int num_cookies_read_;
 
   scoped_refptr<base::SequencedTaskRunner> client_task_runner_;
@@ -400,7 +434,7 @@ namespace {
 // expire them in decreasing order of use when we've reached the maximum
 // number of cookies.
 const int kCurrentVersionNumber = 10;
-const int kCompatibleVersionNumber = 5;
+const int kCompatibleVersionNumber = 10;
 
 // Possible values for the 'priority' column.
 enum DBCookiePriority {
@@ -715,7 +749,8 @@ bool SQLitePersistentCookieStore::Backend::InitializeDatabase() {
                  base::Unretained(this)));
 
   if (!db_->Open(path_)) {
-    NOTREACHED() << "Unable to open cookie DB.";
+    DLOG(ERROR) << "Unable to open cookie DB.";
+    RecordCookieLoadProblem(COOKIE_LOAD_PROBLEM_OPEN_DB);
     if (corruption_detected_)
       db_->Raze();
     meta_table_.Reset();
@@ -724,7 +759,8 @@ bool SQLitePersistentCookieStore::Backend::InitializeDatabase() {
   }
 
   if (!EnsureDatabaseVersion() || !InitTable(db_.get())) {
-    NOTREACHED() << "Unable to open cookie DB.";
+    DLOG(ERROR) << "Unable to open cookie DB.";
+    RecordCookieLoadProblem(COOKIE_LOAD_PROBLEM_OPEN_DB);
     if (corruption_detected_)
       db_->Raze();
     meta_table_.Reset();
@@ -825,7 +861,7 @@ bool SQLitePersistentCookieStore::Backend::LoadCookiesForDomains(
     const std::set<std::string>& domains) {
   DCHECK(background_task_runner_->RunsTasksInCurrentSequence());
 
-  sql::Statement smt;
+  sql::Statement smt, del_smt;
   if (restore_old_session_cookies_) {
     smt.Assign(db_->GetCachedStatement(
         SQL_FROM_HERE,
@@ -841,7 +877,10 @@ bool SQLitePersistentCookieStore::Backend::LoadCookiesForDomains(
         "has_expires, is_persistent, priority FROM cookies WHERE host_key = ? "
         "AND is_persistent = 1"));
   }
-  if (!smt.is_valid()) {
+  del_smt.Assign(db_->GetCachedStatement(
+      SQL_FROM_HERE, "DELETE FROM cookies WHERE host_key = ?"));
+  if (!smt.is_valid() || !del_smt.is_valid()) {
+    del_smt.Clear();
     smt.Clear();  // Disconnect smt_ref from db_.
     meta_table_.Reset();
     db_.reset();
@@ -850,24 +889,44 @@ bool SQLitePersistentCookieStore::Backend::LoadCookiesForDomains(
 
   std::vector<std::unique_ptr<CanonicalCookie>> cookies;
   std::set<std::string>::const_iterator it = domains.begin();
-  for (; it != domains.end(); ++it) {
+  bool ok = true;
+  for (; it != domains.end() && ok; ++it) {
     smt.BindString(0, *it);
-    MakeCookiesFromSQLStatement(&cookies, &smt);
+    ok = MakeCookiesFromSQLStatement(&cookies, &smt);
     smt.Reset(true);
   }
-  {
+
+  if (ok) {
     base::AutoLock locked(lock_);
     std::move(cookies.begin(), cookies.end(), std::back_inserter(cookies_));
+  } else {
+    // There were some cookies that were in database but could not be loaded
+    // and handed over to CookieMonster. This is trouble since it means that
+    // if some website tries to send them again, CookieMonster won't know to
+    // issue a delete, and then the addition would violate the uniqueness
+    // constraints and not go through.
+    //
+    // For data consistency, we drop the entire eTLD group.
+    for (const std::string& domain : domains) {
+      del_smt.BindString(0, domain);
+      if (!del_smt.Run()) {
+        // TODO(morlovich): Is something more drastic called for here?
+        RecordCookieLoadProblem(COOKIE_LOAD_PROBLEM_RECOVERY_FAILED);
+      }
+      del_smt.Reset(true);
+    }
   }
   return true;
 }
 
-void SQLitePersistentCookieStore::Backend::MakeCookiesFromSQLStatement(
+bool SQLitePersistentCookieStore::Backend::MakeCookiesFromSQLStatement(
     std::vector<std::unique_ptr<CanonicalCookie>>* cookies,
     sql::Statement* statement) {
   DCHECK(background_task_runner_->RunsTasksInCurrentSequence());
   sql::Statement& smt = *statement;
+  bool ok = true;
   while (smt.Step()) {
+    ++num_cookies_read_;
     std::string value;
     std::string encrypted_value = smt.ColumnString(4);
     if (!encrypted_value.empty() && crypto_) {
@@ -877,6 +936,7 @@ void SQLitePersistentCookieStore::Backend::MakeCookiesFromSQLStatement(
       timeout_tracker->End();
       if (!decrypt_ok) {
         RecordCookieLoadProblem(COOKIE_LOAD_PROBLEM_DECRYPT_FAILED);
+        ok = false;
         continue;
       }
     } else {
@@ -898,10 +958,15 @@ void SQLitePersistentCookieStore::Backend::MakeCookiesFromSQLStatement(
             static_cast<DBCookiePriority>(smt.ColumnInt(13)))));  // priority
     DLOG_IF(WARNING, cc->CreationDate() > Time::Now())
         << L"CreationDate too recent";
-    if (cc->IsCanonical())
+    if (cc->IsCanonical()) {
       cookies->push_back(std::move(cc));
-    ++num_cookies_read_;
+    } else {
+      RecordCookieLoadProblem(COOKIE_LOAD_PROBLEM_NON_CANONICAL);
+      ok = false;
+    }
   }
+
+  return ok;
 }
 
 bool SQLitePersistentCookieStore::Backend::EnsureDatabaseVersion() {
@@ -1113,26 +1178,18 @@ bool SQLitePersistentCookieStore::Backend::EnsureDatabaseVersion() {
       return false;
     }
     // If any cookies violate the new uniqueness constraints (no two
-    // cookies with the same (name, domain, path)) erase the cookie store.
-    // That "shouldn't happen", which means probably not too many users'
-    // cookie stores will have it.
-    // The choice to drop rather than pick one of the cookies randomly is
-    // because it is expected that servers will be able to deal with a known
-    // state (no cookies == first visit), and there may be cookie values they
-    // may not be able to deal with.
+    // cookies with the same (name, domain, path)), pick the newer version,
+    // since that's what CookieMonster would do anyway.
     if (!db_->Execute(
-            "INSERT OR FAIL INTO cookies "
+            "INSERT OR REPLACE INTO cookies "
             "(creation_utc, host_key, name, value, path, expires_utc, "
             "is_secure, is_httponly, last_access_utc, has_expires, "
             "is_persistent, priority, encrypted_value, firstpartyonly) "
             "SELECT creation_utc, host_key, name, value, path, expires_utc, "
             "       secure, httponly, last_access_utc, has_expires, "
             "       persistent, priority, encrypted_value, firstpartyonly "
-            "FROM cookies_old")) {
-      // The old database had duplicate cookies in a way that violates
-      // the spec.  Treat that as DB corruption and start with a clean slate.
-      if (!db_->Execute("DELETE FROM COOKIES;"))
-        return false;
+            "FROM cookies_old ORDER BY creation_utc ASC")) {
+      return false;
     }
     if (!db_->Execute("DROP TABLE cookies_old"))
       return false;
@@ -1196,7 +1253,7 @@ void SQLitePersistentCookieStore::Backend::BatchOperation(
   PendingOperationsList::size_type num_pending;
   {
     base::AutoLock locked(lock_);
-    pending_.push_back(po.release());
+    pending_.push_back(std::move(po));
     num_pending = ++num_pending_;
   }
 
@@ -1260,10 +1317,11 @@ void SQLitePersistentCookieStore::Backend::Commit() {
   if (!transaction.Begin())
     return;
 
+  bool trouble = false;
   for (PendingOperationsList::iterator it = ops.begin(); it != ops.end();
        ++it) {
     // Free the cookies as we commit them to the database.
-    std::unique_ptr<PendingOperation> po(*it);
+    std::unique_ptr<PendingOperation> po(std::move(*it));
     switch (po->op()) {
       case PendingOperation::COOKIE_ADD:
         add_smt.Reset(true);
@@ -1272,8 +1330,12 @@ void SQLitePersistentCookieStore::Backend::Commit() {
         add_smt.BindString(2, po->cc().Name());
         if (crypto_ && crypto_->ShouldEncrypt()) {
           std::string encrypted_value;
-          if (!crypto_->EncryptString(po->cc().Value(), &encrypted_value))
+          if (!crypto_->EncryptString(po->cc().Value(), &encrypted_value)) {
+            DLOG(WARNING) << "Could not encrypt a cookie, skipping add.";
+            RecordCookieCommitProblem(COOKIE_COMMIT_PROBLEM_ENCRYPT_FAILED);
+            trouble = true;
             continue;
+          }
           add_smt.BindCString(3, "");  // value
           // BindBlob() immediately makes an internal copy of the data.
           add_smt.BindBlob(4, encrypted_value.data(),
@@ -1293,8 +1355,11 @@ void SQLitePersistentCookieStore::Backend::Commit() {
         add_smt.BindInt(12, po->cc().IsPersistent());
         add_smt.BindInt(13,
                         CookiePriorityToDBCookiePriority(po->cc().Priority()));
-        if (!add_smt.Run())
-          NOTREACHED() << "Could not add a cookie to the DB.";
+        if (!add_smt.Run()) {
+          DLOG(WARNING) << "Could not add a cookie to the DB.";
+          RecordCookieCommitProblem(COOKIE_COMMIT_PROBLEM_ADD);
+          trouble = true;
+        }
         break;
 
       case PendingOperation::COOKIE_UPDATEACCESS:
@@ -1304,8 +1369,12 @@ void SQLitePersistentCookieStore::Backend::Commit() {
         update_access_smt.BindString(1, po->cc().Name());
         update_access_smt.BindString(2, po->cc().Domain());
         update_access_smt.BindString(3, po->cc().Path());
-        if (!update_access_smt.Run())
-          NOTREACHED() << "Could not update cookie last access time in the DB.";
+        if (!update_access_smt.Run()) {
+          DLOG(WARNING)
+              << "Could not update cookie last access time in the DB.";
+          RecordCookieCommitProblem(COOKIE_COMMIT_PROBLEM_UPDATE_ACCESS);
+          trouble = true;
+        }
         break;
 
       case PendingOperation::COOKIE_DELETE:
@@ -1313,8 +1382,11 @@ void SQLitePersistentCookieStore::Backend::Commit() {
         del_smt.BindString(0, po->cc().Name());
         del_smt.BindString(1, po->cc().Domain());
         del_smt.BindString(2, po->cc().Path());
-        if (!del_smt.Run())
-          NOTREACHED() << "Could not delete a cookie from the DB.";
+        if (!del_smt.Run()) {
+          DLOG(WARNING) << "Could not delete a cookie from the DB.";
+          RecordCookieCommitProblem(COOKIE_COMMIT_PROBLEM_DELETE);
+          trouble = true;
+        }
         break;
 
       default:
@@ -1324,7 +1396,11 @@ void SQLitePersistentCookieStore::Backend::Commit() {
   }
   bool succeeded = transaction.Commit();
   UMA_HISTOGRAM_ENUMERATION("Cookie.BackingStoreUpdateResults",
-                            succeeded ? 0 : 1, 2);
+                            succeeded
+                                ? (trouble ? BACKING_STORE_RESULTS_MIXED
+                                           : BACKING_STORE_RESULTS_SUCCESS)
+                                : BACKING_STORE_RESULTS_FAILURE,
+                            BACKING_STORE_RESULTS_LAST_ENTRY);
 }
 
 void SQLitePersistentCookieStore::Backend::SetBeforeFlushCallback(

@@ -8,8 +8,8 @@
 #include "base/single_thread_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "content/renderer/media/stream/media_stream_audio_track.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamSource.h"
-#include "third_party/WebKit/public/platform/WebString.h"
+#include "third_party/blink/public/platform/web_media_stream_source.h"
+#include "third_party/blink/public/platform/web_string.h"
 
 namespace content {
 
@@ -166,6 +166,10 @@ void MediaStreamAudioSource::SetMutedState(bool muted_state) {
   task_runner_->PostTask(FROM_HERE,
                          base::BindOnce(&MediaStreamSource::SetSourceMuted,
                                         GetWeakPtr(), muted_state));
+}
+
+base::SingleThreadTaskRunner* MediaStreamAudioSource::GetTaskRunner() const {
+  return task_runner_.get();
 }
 
 }  // namespace content

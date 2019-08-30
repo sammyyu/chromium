@@ -15,12 +15,12 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "net/base/completion_callback.h"
 #include "net/base/net_errors.h"
 #include "net/base/proxy_delegate.h"
 #include "net/base/url_util.h"
@@ -59,6 +59,36 @@ using base::TimeTicks;
 namespace net {
 
 namespace {
+
+#if defined(OS_WIN) || defined(OS_IOS) || defined(OS_MACOSX) || \
+    (defined(OS_LINUX) && !defined(OS_CHROMEOS))
+constexpr net::NetworkTrafficAnnotationTag kSystemProxyConfigTrafficAnnotation =
+    net::DefineNetworkTrafficAnnotation("proxy_config_system", R"(
+      semantics {
+        sender: "Proxy Config"
+        description:
+          "Establishing a connection through a proxy server using system proxy "
+          "settings."
+        trigger:
+          "Whenever a network request is made when the system proxy settings "
+          "are used, and they indicate to use a proxy server."
+        data:
+          "Proxy configuration."
+        destination: OTHER
+        destination_other:
+          "The proxy server specified in the configuration."
+      }
+      policy {
+        cookies_allowed: NO
+        setting:
+          "User cannot override system proxy settings, but can change them "
+          "through 'Advanced/System/Open proxy settings'."
+        policy_exception_justification:
+          "Using either of 'ProxyMode', 'ProxyServer', or 'ProxyPacUrl' "
+          "policies can set Chrome to use a specific proxy settings and avoid "
+          "system proxy."
+      })");
+#endif
 
 const size_t kDefaultNumPacThreads = 4;
 
@@ -187,7 +217,7 @@ class ProxyResolverNull : public ProxyResolver {
   // ProxyResolver implementation.
   int GetProxyForURL(const GURL& url,
                      ProxyInfo* results,
-                     const CompletionCallback& callback,
+                     CompletionOnceCallback callback,
                      std::unique_ptr<Request>* request,
                      const NetLogWithSource& net_log) override {
     return ERR_NOT_IMPLEMENTED;
@@ -204,7 +234,7 @@ class ProxyResolverFromPacString : public ProxyResolver {
 
   int GetProxyForURL(const GURL& url,
                      ProxyInfo* results,
-                     const CompletionCallback& callback,
+                     CompletionOnceCallback callback,
                      std::unique_ptr<Request>* request,
                      const NetLogWithSource& net_log) override {
     results->UsePacString(pac_string_);
@@ -252,7 +282,7 @@ class ProxyResolverFactoryForNullResolver : public ProxyResolverFactory {
   // ProxyResolverFactory overrides.
   int CreateProxyResolver(const scoped_refptr<PacFileData>& pac_script,
                           std::unique_ptr<ProxyResolver>* resolver,
-                          const net::CompletionCallback& callback,
+                          CompletionOnceCallback callback,
                           std::unique_ptr<Request>* request) override {
     resolver->reset(new ProxyResolverNull());
     return OK;
@@ -270,7 +300,7 @@ class ProxyResolverFactoryForPacResult : public ProxyResolverFactory {
   // ProxyResolverFactory override.
   int CreateProxyResolver(const scoped_refptr<PacFileData>& pac_script,
                           std::unique_ptr<ProxyResolver>* resolver,
-                          const net::CompletionCallback& callback,
+                          CompletionOnceCallback callback,
                           std::unique_ptr<Request>* request) override {
     resolver->reset(new ProxyResolverFromPacString(pac_string_));
     return OK;
@@ -355,6 +385,34 @@ GURL SanitizeUrl(const GURL& url,
   return url.ReplaceComponents(replacements);
 }
 
+// Do not change the enumerated value as it is relied on by histograms.
+enum class PacUrlSchemeForHistogram {
+  kOther = 0,
+
+  kHttp = 1,
+  kHttps = 2,
+  kFtp = 3,
+  kFile = 4,
+  kData = 5,
+
+  kMaxValue = kData,
+};
+
+PacUrlSchemeForHistogram GetPacUrlScheme(const GURL& pac_url) {
+  if (pac_url.SchemeIs("http"))
+    return PacUrlSchemeForHistogram::kHttp;
+  if (pac_url.SchemeIs("https"))
+    return PacUrlSchemeForHistogram::kHttps;
+  if (pac_url.SchemeIs("data"))
+    return PacUrlSchemeForHistogram::kData;
+  if (pac_url.SchemeIs("ftp"))
+    return PacUrlSchemeForHistogram::kFtp;
+  if (pac_url.SchemeIs("file"))
+    return PacUrlSchemeForHistogram::kFile;
+
+  return PacUrlSchemeForHistogram::kOther;
+}
+
 }  // namespace
 
 // ProxyResolutionService::InitProxyResolver ----------------------------------
@@ -392,7 +450,7 @@ class ProxyResolutionService::InitProxyResolver {
             NetLog* net_log,
             const ProxyConfigWithAnnotation& config,
             TimeDelta wait_delay,
-            const CompletionCallback& callback) {
+            CompletionOnceCallback callback) {
     DCHECK_EQ(STATE_NONE, next_state_);
     proxy_resolver_ = proxy_resolver;
     proxy_resolver_factory_ = proxy_resolver_factory;
@@ -402,7 +460,7 @@ class ProxyResolutionService::InitProxyResolver {
     decider_->set_quick_check_enabled(quick_check_enabled_);
     config_ = config;
     wait_delay_ = wait_delay;
-    callback_ = callback;
+    callback_ = std::move(callback);
 
     next_state_ = STATE_DECIDE_PAC_FILE;
     return DoLoop(OK);
@@ -418,14 +476,14 @@ class ProxyResolutionService::InitProxyResolver {
                        const ProxyConfigWithAnnotation& effective_config,
                        int decider_result,
                        PacFileData* script_data,
-                       const CompletionCallback& callback) {
+                       CompletionOnceCallback callback) {
     DCHECK_EQ(STATE_NONE, next_state_);
     proxy_resolver_ = proxy_resolver;
     proxy_resolver_factory_ = proxy_resolver_factory;
 
     effective_config_ = effective_config;
     script_data_ = script_data;
-    callback_ = callback;
+    callback_ = std::move(callback);
 
     if (decider_result != OK)
       return decider_result;
@@ -544,12 +602,7 @@ class ProxyResolutionService::InitProxyResolver {
     DCHECK_NE(STATE_NONE, next_state_);
     int rv = DoLoop(result);
     if (rv != ERR_IO_PENDING)
-      DoCallback(rv);
-  }
-
-  void DoCallback(int result) {
-    DCHECK_NE(ERR_IO_PENDING, result);
-    callback_.Run(result);
+      std::move(callback_).Run(result);
   }
 
   ProxyConfigWithAnnotation config_;
@@ -560,7 +613,7 @@ class ProxyResolutionService::InitProxyResolver {
   ProxyResolverFactory* proxy_resolver_factory_;
   std::unique_ptr<ProxyResolverFactory::Request> create_resolver_request_;
   std::unique_ptr<ProxyResolver>* proxy_resolver_;
-  CompletionCallback callback_;
+  CompletionOnceCallback callback_;
   State next_state_;
   bool quick_check_enabled_;
 
@@ -698,9 +751,10 @@ class ProxyResolutionService::PacFileDeciderPoller {
       // the notification.
       base::ThreadTaskRunnerHandle::Get()->PostTask(
           FROM_HERE,
-          base::Bind(&PacFileDeciderPoller::NotifyProxyServiceOfChange,
-                     weak_factory_.GetWeakPtr(), result,
-                     decider_->script_data(), decider_->effective_config()));
+          base::Bind(
+              &PacFileDeciderPoller::NotifyProxyResolutionServiceOfChange,
+              weak_factory_.GetWeakPtr(), result, decider_->script_data(),
+              decider_->effective_config()));
       return;
     }
 
@@ -734,7 +788,7 @@ class ProxyResolutionService::PacFileDeciderPoller {
     return !script_data->Equals(last_script_data_.get());
   }
 
-  void NotifyProxyServiceOfChange(
+  void NotifyProxyResolutionServiceOfChange(
       int result,
       const scoped_refptr<PacFileData>& script_data,
       const ProxyConfigWithAnnotation& effective_config) {
@@ -785,10 +839,10 @@ class ProxyResolutionService::Request
           const std::string& method,
           ProxyDelegate* proxy_delegate,
           ProxyInfo* results,
-          const CompletionCallback& user_callback,
+          CompletionOnceCallback user_callback,
           const NetLogWithSource& net_log)
       : service_(service),
-        user_callback_(user_callback),
+        user_callback_(std::move(user_callback)),
         results_(results),
         url_(url),
         method_(method),
@@ -796,7 +850,7 @@ class ProxyResolutionService::Request
         resolve_job_(nullptr),
         net_log_(net_log),
         creation_time_(TimeTicks::Now()) {
-    DCHECK(!user_callback.is_null());
+    DCHECK(!user_callback_.is_null());
   }
 
   // Starts the resolve proxy request.
@@ -869,10 +923,18 @@ class ProxyResolutionService::Request
 
     // Make a note in the results which configuration was in use at the
     // time of the resolve.
-    results_->set_traffic_annotation(traffic_annotation_);
     results_->did_use_pac_script_ = true;
     results_->proxy_resolve_start_time_ = creation_time_;
     results_->proxy_resolve_end_time_ = TimeTicks::Now();
+
+    // If annotation is not already set, e.g. through TryToCompleteSynchronously
+    // function, use in-progress-resolve annotation.
+    if (!results_->traffic_annotation_.is_valid())
+      results_->set_traffic_annotation(traffic_annotation_);
+
+    // If proxy is set without error, ensure that an annotation is provided.
+    if (!rv)
+      DCHECK(results_->traffic_annotation_.is_valid());
 
     // Reset the state associated with in-progress-resolve.
     traffic_annotation_.reset();
@@ -900,9 +962,9 @@ class ProxyResolutionService::Request
     // Remove this completed Request from the service's pending list.
     /// (which will probably cause deletion of |this|).
     if (!user_callback_.is_null()) {
-      CompletionCallback callback = user_callback_;
+      CompletionOnceCallback callback = std::move(user_callback_);
       service_->RemovePendingRequest(this);
-      callback.Run(result_code);
+      std::move(callback).Run(result_code);
     }
   }
 
@@ -912,7 +974,7 @@ class ProxyResolutionService::Request
   // Outstanding requests are cancelled during ~ProxyResolutionService, so this
   // is guaranteed to be valid throughout our lifetime.
   ProxyResolutionService* service_;
-  CompletionCallback user_callback_;
+  CompletionOnceCallback user_callback_;
   ProxyInfo* results_;
   GURL url_;
   std::string method_;
@@ -1022,20 +1084,20 @@ ProxyResolutionService::CreateFixedFromPacResult(
 int ProxyResolutionService::ResolveProxy(const GURL& raw_url,
                                          const std::string& method,
                                          ProxyInfo* result,
-                                         const CompletionCallback& callback,
+                                         CompletionOnceCallback callback,
                                          Request** pac_request,
                                          ProxyDelegate* proxy_delegate,
                                          const NetLogWithSource& net_log) {
   DCHECK(!callback.is_null());
-  return ResolveProxyHelper(raw_url, method, result, callback, pac_request,
-                            proxy_delegate, net_log);
+  return ResolveProxyHelper(raw_url, method, result, std::move(callback),
+                            pac_request, proxy_delegate, net_log);
 }
 
 int ProxyResolutionService::ResolveProxyHelper(
     const GURL& raw_url,
     const std::string& method,
     ProxyInfo* result,
-    const CompletionCallback& callback,
+    CompletionOnceCallback callback,
     Request** pac_request,
     ProxyDelegate* proxy_delegate,
     const NetLogWithSource& net_log) {
@@ -1071,7 +1133,7 @@ int ProxyResolutionService::ResolveProxyHelper(
     return ERR_IO_PENDING;
 
   scoped_refptr<Request> req(new Request(this, url, method, proxy_delegate,
-                                         result, callback, net_log));
+                                         result, std::move(callback), net_log));
 
   if (current_state_ == STATE_READY) {
     // Start the resolve request.
@@ -1100,8 +1162,7 @@ bool ProxyResolutionService::TryResolveProxySynchronously(
     ProxyInfo* result,
     ProxyDelegate* proxy_delegate,
     const NetLogWithSource& net_log) {
-  CompletionCallback null_callback;
-  return ResolveProxyHelper(raw_url, method, result, null_callback,
+  return ResolveProxyHelper(raw_url, method, result, CompletionOnceCallback(),
                             nullptr /* pac_request*/, proxy_delegate,
                             net_log) == OK;
 }
@@ -1419,9 +1480,9 @@ ProxyResolutionService::State ProxyResolutionService::ResetProxyConfig(
   init_proxy_resolver_.reset();
   SuspendAllPendingRequests();
   resolver_.reset();
-  config_ = base::Optional<ProxyConfigWithAnnotation>();
+  config_ = base::nullopt;
   if (reset_fetched_config)
-    fetched_config_ = base::Optional<ProxyConfigWithAnnotation>();
+    fetched_config_ = base::nullopt;
   current_state_ = STATE_NONE;
 
   return previous_state;
@@ -1453,17 +1514,16 @@ void ProxyResolutionService::ForceReloadProxyConfig() {
 // static
 std::unique_ptr<ProxyConfigService>
 ProxyResolutionService::CreateSystemProxyConfigService(
-    const scoped_refptr<base::SequencedTaskRunner>& io_task_runner) {
-// TODO(https://crbug.com/656607): Add traffic annotation here.
+    const scoped_refptr<base::SequencedTaskRunner>& main_task_runner) {
 #if defined(OS_WIN)
   return std::make_unique<ProxyConfigServiceWin>(
-      NO_TRAFFIC_ANNOTATION_BUG_656607);
+      kSystemProxyConfigTrafficAnnotation);
 #elif defined(OS_IOS)
   return std::make_unique<ProxyConfigServiceIOS>(
-      NO_TRAFFIC_ANNOTATION_BUG_656607);
+      kSystemProxyConfigTrafficAnnotation);
 #elif defined(OS_MACOSX)
   return std::make_unique<ProxyConfigServiceMac>(
-      io_task_runner, NO_TRAFFIC_ANNOTATION_BUG_656607);
+      main_task_runner, kSystemProxyConfigTrafficAnnotation);
 #elif defined(OS_CHROMEOS)
   LOG(ERROR) << "ProxyConfigService for ChromeOS should be created in "
              << "profile_io_data.cc::CreateProxyConfigService and this should "
@@ -1484,13 +1544,13 @@ ProxyResolutionService::CreateSystemProxyConfigService(
   // either |glib_default_loop| or an internal sequenced task runner) to
   // keep us updated when the proxy config changes.
   linux_config_service->SetupAndFetchInitialConfig(
-      glib_thread_task_runner, io_task_runner,
-      NO_TRAFFIC_ANNOTATION_BUG_656607);
+      glib_thread_task_runner, main_task_runner,
+      kSystemProxyConfigTrafficAnnotation);
 
   return std::move(linux_config_service);
 #elif defined(OS_ANDROID)
   return std::make_unique<ProxyConfigServiceAndroid>(
-      io_task_runner, base::ThreadTaskRunnerHandle::Get());
+      main_task_runner, base::ThreadTaskRunnerHandle::Get());
 #else
   LOG(WARNING) << "Failed to choose a system proxy settings fetcher "
                   "for this platform.";
@@ -1536,6 +1596,11 @@ void ProxyResolutionService::OnProxyConfigChanged(
     net_log_->AddGlobalEntry(NetLogEventType::PROXY_CONFIG_CHANGED,
                              base::Bind(&NetLogProxyConfigChangedCallback,
                                         &fetched_config_, &effective_config));
+  }
+
+  if (config.value().has_pac_url()) {
+    UMA_HISTOGRAM_ENUMERATION("Net.ProxyResolutionService.PacUrlScheme",
+                              GetPacUrlScheme(config.value().pac_url()));
   }
 
   // Set the new configuration as the most recently fetched one.

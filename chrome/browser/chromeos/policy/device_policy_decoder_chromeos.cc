@@ -394,6 +394,19 @@ void DecodeLoginPolicies(const em::ChromeDeviceSettingsProto& policy,
                   POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
                   POLICY_SOURCE_CLOUD, std::move(rules), nullptr);
   }
+
+  if (policy.has_saml_login_authentication_type()) {
+    const em::SamlLoginAuthenticationTypeProto& container(
+        policy.saml_login_authentication_type());
+    if (container.has_saml_login_authentication_type()) {
+      policies->Set(key::kDeviceSamlLoginAuthenticationType,
+                    POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+                    POLICY_SOURCE_CLOUD,
+                    std::make_unique<base::Value>(
+                        container.saml_login_authentication_type()),
+                    nullptr);
+    }
+  }
 }
 
 void DecodeNetworkPolicies(const em::ChromeDeviceSettingsProto& policy,
@@ -658,6 +671,42 @@ void DecodeAutoUpdatePolicies(const em::ChromeDeviceSettingsProto& policy,
                     POLICY_SCOPE_MACHINE, POLICY_SOURCE_CLOUD,
                     std::make_unique<base::Value>(container.p2p_enabled()),
                     nullptr);
+    }
+
+    if (container.has_disallowed_time_intervals()) {
+      std::unique_ptr<base::Value> decoded_json =
+          DecodeJsonStringAndDropUnknownBySchema(
+              container.disallowed_time_intervals(),
+              key::kDeviceAutoUpdateTimeRestrictions);
+      if (decoded_json && !decoded_json->is_none()) {
+        policies->Set(key::kDeviceAutoUpdateTimeRestrictions,
+                      POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE,
+                      POLICY_SOURCE_CLOUD, std::move(decoded_json), nullptr);
+      }
+    }
+
+    if (container.staging_percent_of_fleet_per_week_size()) {
+      auto staging_percent_of_fleet_per_week_policy =
+          std::make_unique<base::ListValue>();
+
+      bool error_decoding = false;
+      for (const auto& entry : container.staging_percent_of_fleet_per_week()) {
+        std::unique_ptr<base::Value> value = DecodeIntegerValue(entry);
+        if (value) {
+          staging_percent_of_fleet_per_week_policy->Append(std::move(value));
+        } else {
+          error_decoding = true;
+          LOG(ERROR)
+              << "Could not decode integer value for staging percentage.";
+          break;
+        }
+      }
+      if (!error_decoding) {
+        policies->Set(
+            key::kDeviceUpdateStagingPercentOfFleetPerWeek,
+            POLICY_LEVEL_MANDATORY, POLICY_SCOPE_MACHINE, POLICY_SOURCE_CLOUD,
+            std::move(staging_percent_of_fleet_per_week_policy), nullptr);
+      }
     }
   }
 
@@ -1006,11 +1055,13 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
   if (policy.has_unaffiliated_arc_allowed()) {
     const em::UnaffiliatedArcAllowedProto& container(
         policy.unaffiliated_arc_allowed());
-    policies->Set(
-        key::kUnaffiliatedArcAllowed, POLICY_LEVEL_MANDATORY,
-        POLICY_SCOPE_MACHINE, POLICY_SOURCE_CLOUD,
-        std::make_unique<base::Value>(container.unaffiliated_arc_allowed()),
-        nullptr);
+    if (container.has_unaffiliated_arc_allowed()) {
+      policies->Set(
+          key::kUnaffiliatedArcAllowed, POLICY_LEVEL_MANDATORY,
+          POLICY_SCOPE_MACHINE, POLICY_SOURCE_CLOUD,
+          std::make_unique<base::Value>(container.unaffiliated_arc_allowed()),
+          nullptr);
+    }
   }
 
   if (policy.has_device_user_policy_loopback_processing_mode()) {
@@ -1049,11 +1100,13 @@ void DecodeGenericPolicies(const em::ChromeDeviceSettingsProto& policy,
   if (policy.has_virtual_machines_allowed()) {
     const em::VirtualMachinesAllowedProto& container(
         policy.virtual_machines_allowed());
-    policies->Set(
-        key::kVirtualMachinesAllowed, POLICY_LEVEL_MANDATORY,
-        POLICY_SCOPE_MACHINE, POLICY_SOURCE_CLOUD,
-        std::make_unique<base::Value>(container.virtual_machines_allowed()),
-        nullptr);
+    if (container.has_virtual_machines_allowed()) {
+      policies->Set(
+          key::kVirtualMachinesAllowed, POLICY_LEVEL_MANDATORY,
+          POLICY_SCOPE_MACHINE, POLICY_SOURCE_CLOUD,
+          std::make_unique<base::Value>(container.virtual_machines_allowed()),
+          nullptr);
+    }
   }
 
   if (policy.has_device_machine_password_change_rate()) {

@@ -10,8 +10,6 @@
 #include "ash/accessibility/accessibility_observer.h"
 #include "ash/keyboard/keyboard_ui_observer.h"
 #include "ash/shell.h"
-#include "ash/system/tray/system_tray_notifier.h"
-#include "ash/system/tray_accessibility.h"
 #include "ui/keyboard/keyboard_controller.h"
 
 namespace ash {
@@ -27,13 +25,12 @@ class KeyboardUIImpl : public KeyboardUI, public AccessibilityObserver {
       Shell::Get()->accessibility_controller()->RemoveObserver(this);
   }
 
-  void ShowInDisplay(const int64_t display_id) override {
-    keyboard::KeyboardController* controller =
-        keyboard::KeyboardController::GetInstance();
-    // Controller may not exist if keyboard has been disabled. crbug.com/749989
-    if (!controller)
+  void ShowInDisplay(const display::Display& display) override {
+    auto* controller = keyboard::KeyboardController::Get();
+    // Keyboard may not always be enabled. https://crbug.com/749989
+    if (!controller->enabled())
       return;
-    controller->ShowKeyboardInDisplay(display_id);
+    controller->ShowKeyboardInDisplay(display);
   }
   void Hide() override {
     // Do nothing as this is called from ash::Shell, which also calls through
@@ -44,8 +41,7 @@ class KeyboardUIImpl : public KeyboardUI, public AccessibilityObserver {
   }
 
   // AccessibilityObserver:
-  void OnAccessibilityStatusChanged(
-      AccessibilityNotificationVisibility notify) override {
+  void OnAccessibilityStatusChanged() override {
     bool enabled = IsEnabled();
     if (enabled_ == enabled)
       return;

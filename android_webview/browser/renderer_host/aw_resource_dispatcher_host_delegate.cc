@@ -11,7 +11,6 @@
 #include "android_webview/browser/aw_contents_client_bridge.h"
 #include "android_webview/browser/aw_contents_io_thread_client.h"
 #include "android_webview/browser/aw_resource_context.h"
-#include "android_webview/browser/aw_safe_browsing_config_helper.h"
 #include "android_webview/browser/aw_safe_browsing_resource_throttle.h"
 #include "android_webview/browser/net/aw_web_resource_request.h"
 #include "android_webview/browser/renderer_host/auto_login_parser.h"
@@ -24,7 +23,6 @@
 #include "content/public/browser/resource_dispatcher_host.h"
 #include "content/public/browser/resource_request_info.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 #include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/http/http_response_headers.h"
@@ -299,12 +297,8 @@ void AwResourceDispatcherHostDelegate::RequestBeginning(
 
   if (ioThreadThrottle->GetSafeBrowsingEnabled()) {
     DCHECK(!base::FeatureList::IsEnabled(network::features::kNetworkService));
-    bool safe_browsing_url_loader_throttle_used =
-        base::FeatureList::IsEnabled(
-            safe_browsing::kCheckByURLLoaderThrottle) &&
-        (!content::IsResourceTypeFrame(resource_type) ||
-         content::IsNavigationMojoResponseEnabled());
-    if (!safe_browsing_url_loader_throttle_used) {
+    if (!base::FeatureList::IsEnabled(
+            safe_browsing::kCheckByURLLoaderThrottle)) {
       content::ResourceThrottle* throttle =
           MaybeCreateAwSafeBrowsingResourceThrottle(
               request, resource_type,
@@ -357,10 +351,10 @@ void AwResourceDispatcherHostDelegate::RequestComplete(
     }
     BrowserThread::PostTask(
         BrowserThread::UI, FROM_HERE,
-        base::Bind(&OnReceivedErrorOnUiThread,
-                   request_info->GetWebContentsGetterForRequest(),
-                   AwWebResourceRequest(*request), request->status().error(),
-                   safebrowsing_hit));
+        base::BindOnce(&OnReceivedErrorOnUiThread,
+                       request_info->GetWebContentsGetterForRequest(),
+                       AwWebResourceRequest(*request),
+                       request->status().error(), safebrowsing_hit));
   }
 }
 
@@ -399,9 +393,10 @@ void AwResourceDispatcherHostDelegate::DownloadStarting(
 
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      base::Bind(&DownloadStartingOnUIThread,
-                 request_info->GetWebContentsGetterForRequest(), url,
-                 user_agent, content_disposition, mime_type, content_length));
+      base::BindOnce(&DownloadStartingOnUIThread,
+                     request_info->GetWebContentsGetterForRequest(), url,
+                     user_agent, content_disposition, mime_type,
+                     content_length));
 }
 
 void AwResourceDispatcherHostDelegate::OnResponseStarted(
@@ -422,9 +417,10 @@ void AwResourceDispatcherHostDelegate::OnResponseStarted(
     if (ParserHeaderInResponse(request, ALLOW_ANY_REALM, &header_data)) {
       BrowserThread::PostTask(
           BrowserThread::UI, FROM_HERE,
-          base::Bind(&NewLoginRequestOnUIThread,
-                     request_info->GetWebContentsGetterForRequest(),
-                     header_data.realm, header_data.account, header_data.args));
+          base::BindOnce(&NewLoginRequestOnUIThread,
+                         request_info->GetWebContentsGetterForRequest(),
+                         header_data.realm, header_data.account,
+                         header_data.args));
     }
   }
 }
@@ -444,8 +440,9 @@ void AwResourceDispatcherHostDelegate::RemovePendingThrottleOnIoThread(
 void AwResourceDispatcherHostDelegate::OnIoThreadClientReady(
     int new_render_process_id,
     int new_render_frame_id) {
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-      base::Bind(
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(
           &AwResourceDispatcherHostDelegate::OnIoThreadClientReadyInternal,
           base::Unretained(
               g_webview_resource_dispatcher_host_delegate.Pointer()),
@@ -457,8 +454,9 @@ void AwResourceDispatcherHostDelegate::AddPendingThrottle(
     int render_process_id,
     int render_frame_id,
     IoThreadClientThrottle* pending_throttle) {
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-      base::Bind(
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(
           &AwResourceDispatcherHostDelegate::AddPendingThrottleOnIoThread,
           base::Unretained(
               g_webview_resource_dispatcher_host_delegate.Pointer()),

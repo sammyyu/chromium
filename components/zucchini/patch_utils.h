@@ -14,23 +14,6 @@
 
 namespace zucchini {
 
-// Constants that appear inside a patch.
-enum class PatchType : uint32_t {
-  // Patch contains a single raw element, corresponding to an element match that
-  // covers the entire images, and with ExecutableType::kExeTypeNoOp.
-  kRawPatch = 0,
-
-  // Patch contains a single executable element, corresponding to an element
-  // match that covers the entire images.
-  kSinglePatch = 1,
-
-  // Patch contains multiple raw and/or executable elements.
-  kEnsemblePatch = 2,
-
-  // Used when type is uninitialized.
-  kUnrecognisedPatch
-};
-
 // A Zucchini 'ensemble' patch is the concatenation of a patch header with a
 // list of patch 'elements', each containing data for patching individual
 // elements.
@@ -51,20 +34,20 @@ struct PatchHeader {
 };
 
 // Sanity check.
-static_assert(sizeof(PatchHeader) == 20, "PatchHeader is 20 bytes");
+static_assert(sizeof(PatchHeader) == 20, "PatchHeader must be 20 bytes");
 
 // Header for a patch element, found at the beginning of every patch element.
 struct PatchElementHeader {
   uint32_t old_offset;
-  uint32_t new_offset;
   uint32_t old_length;
+  uint32_t new_offset;
   uint32_t new_length;
-  uint32_t exe_type;
+  uint32_t exe_type;  // ExecutableType.
 };
 
 // Sanity check.
 static_assert(sizeof(PatchElementHeader) == 20,
-              "PatchElementHeader is 28 bytes");
+              "PatchElementHeader must be 20 bytes");
 
 #pragma pack(pop)
 

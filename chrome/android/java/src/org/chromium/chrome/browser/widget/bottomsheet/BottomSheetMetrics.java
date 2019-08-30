@@ -23,16 +23,16 @@ public class BottomSheetMetrics extends EmptyBottomSheetObserver {
      * The different ways that the bottom sheet can be opened. This is used to back a UMA
      * histogram and should therefore be treated as append-only.
      */
-    @IntDef({OPENED_BY_SWIPE, OPENED_BY_OMNIBOX_FOCUS, OPENED_BY_NEW_TAB_CREATION,
-            OPENED_BY_EXPAND_BUTTON, OPENED_BY_STARTUP})
+    @IntDef({SheetOpenReason.OPENED_BY_SWIPE})
     @Retention(RetentionPolicy.SOURCE)
-    private @interface SheetOpenReason {}
-    private static final int OPENED_BY_SWIPE = 0;
-    private static final int OPENED_BY_OMNIBOX_FOCUS = 1;
-    private static final int OPENED_BY_NEW_TAB_CREATION = 2;
-    private static final int OPENED_BY_EXPAND_BUTTON = 3;
-    private static final int OPENED_BY_STARTUP = 4;
-    private static final int OPENED_BY_BOUNDARY = 5;
+    private @interface SheetOpenReason {
+        int OPENED_BY_SWIPE = 0;
+        // Obsolete: int OPENED_BY_OMNIBOX_FOCUS = 1;
+        // Obsolete: int OPENED_BY_NEW_TAB_CREATION = 2;
+        // Obsolete: int OPENED_BY_EXPAND_BUTTON = 3;
+        // Obsolete: int OPENED_BY_STARTUP = 4;
+        int NUM_ENTRIES = 5;
+    }
 
     private static final CachedMetrics.TimesHistogramSample TIMES_FIRST_OPEN =
             new CachedMetrics.TimesHistogramSample(
@@ -48,7 +48,7 @@ public class BottomSheetMetrics extends EmptyBottomSheetObserver {
 
     private static final CachedMetrics.EnumeratedHistogramSample ENUMERATED_OPEN_REASON =
             new CachedMetrics.EnumeratedHistogramSample(
-                    "Android.ChromeHome.OpenReason", OPENED_BY_BOUNDARY);
+                    "Android.ChromeHome.OpenReason", SheetOpenReason.NUM_ENTRIES);
 
     private static final CachedMetrics.ActionEvent ACTION_HALF_STATE =
             new CachedMetrics.ActionEvent("Android.ChromeHome.HalfState");
@@ -57,14 +57,6 @@ public class BottomSheetMetrics extends EmptyBottomSheetObserver {
 
     private static final CachedMetrics.ActionEvent ACTION_OPENED_BY_SWIPE =
             new CachedMetrics.ActionEvent("Android.ChromeHome.OpenedBySwipe");
-    private static final CachedMetrics.ActionEvent ACTION_OPENED_BY_OMNIBOX_FOCUS =
-            new CachedMetrics.ActionEvent("Android.ChromeHome.OpenedByOmnibox");
-    private static final CachedMetrics.ActionEvent ACTION_OPENED_BY_NEW_TAB_CREATION =
-            new CachedMetrics.ActionEvent("Android.ChromeHome.OpenedByNTP");
-    private static final CachedMetrics.ActionEvent ACTION_OPENED_BY_EXPAND_BUTTON =
-            new CachedMetrics.ActionEvent("Android.ChromeHome.OpenedByExpandButton");
-    private static final CachedMetrics.ActionEvent ACTION_OPENED_BY_STARTUP =
-            new CachedMetrics.ActionEvent("Android.ChromeHome.OpenedByStartup");
 
     private static final CachedMetrics.ActionEvent ACTION_CLOSED_BY_SWIPE =
             new CachedMetrics.ActionEvent("Android.ChromeHome.ClosedBySwipe");
@@ -124,9 +116,9 @@ public class BottomSheetMetrics extends EmptyBottomSheetObserver {
 
     @Override
     public void onSheetStateChanged(int newState) {
-        if (newState == BottomSheet.SHEET_STATE_HALF) {
+        if (newState == BottomSheet.SheetState.HALF) {
             ACTION_HALF_STATE.record();
-        } else if (newState == BottomSheet.SHEET_STATE_FULL) {
+        } else if (newState == BottomSheet.SheetState.FULL) {
             ACTION_FULL_STATE.record();
         }
     }
@@ -137,27 +129,11 @@ public class BottomSheetMetrics extends EmptyBottomSheetObserver {
      */
     public void recordSheetOpenReason(@StateChangeReason int reason) {
         @SheetOpenReason
-        int metricsReason = OPENED_BY_SWIPE;
+        int metricsReason = SheetOpenReason.OPENED_BY_SWIPE;
         switch (reason) {
             case StateChangeReason.SWIPE:
-                metricsReason = OPENED_BY_SWIPE;
+                metricsReason = SheetOpenReason.OPENED_BY_SWIPE;
                 ACTION_OPENED_BY_SWIPE.record();
-                break;
-            case StateChangeReason.OMNIBOX_FOCUS:
-                metricsReason = OPENED_BY_OMNIBOX_FOCUS;
-                ACTION_OPENED_BY_OMNIBOX_FOCUS.record();
-                break;
-            case StateChangeReason.NEW_TAB:
-                metricsReason = OPENED_BY_NEW_TAB_CREATION;
-                ACTION_OPENED_BY_NEW_TAB_CREATION.record();
-                break;
-            case StateChangeReason.EXPAND_BUTTON:
-                metricsReason = OPENED_BY_EXPAND_BUTTON;
-                ACTION_OPENED_BY_EXPAND_BUTTON.record();
-                break;
-            case StateChangeReason.STARTUP:
-                metricsReason = OPENED_BY_STARTUP;
-                ACTION_OPENED_BY_STARTUP.record();
                 break;
             case StateChangeReason.NONE:
                 // Intentionally empty.

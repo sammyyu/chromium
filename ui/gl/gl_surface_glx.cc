@@ -11,7 +11,6 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop/message_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/cancellation_flag.h"
 #include "base/synchronization/lock.h"
@@ -26,6 +25,7 @@
 #include "ui/gfx/x/x11_connection.h"
 #include "ui/gfx/x/x11_types.h"
 #include "ui/gl/gl_bindings.h"
+#include "ui/gl/gl_context.h"
 #include "ui/gl/gl_implementation.h"
 #include "ui/gl/gl_surface_presentation_helper.h"
 #include "ui/gl/gl_visual_picker_glx.h"
@@ -346,8 +346,8 @@ class SGIVideoSyncVSyncProvider
       const gfx::VSyncProvider::UpdateVSyncCallback& callback) override {
     // Only one outstanding request per surface.
     if (!pending_callback_) {
-      pending_callback_ =
-          std::make_unique<gfx::VSyncProvider::UpdateVSyncCallback>(callback);
+      DCHECK(callback);
+      pending_callback_ = callback;
       vsync_thread_->task_runner()->PostTask(
           FROM_HERE,
           base::BindOnce(&SGIVideoSyncProviderThreadShim::GetVSyncParameters,
@@ -370,8 +370,7 @@ class SGIVideoSyncVSyncProvider
   void PendingCallbackRunner(const base::TimeTicks timebase,
                              const base::TimeDelta interval) {
     DCHECK(pending_callback_);
-    pending_callback_->Run(timebase, interval);
-    pending_callback_.reset();
+    std::move(pending_callback_).Run(timebase, interval);
   }
 
   scoped_refptr<SGIVideoSyncThread> vsync_thread_;
@@ -379,7 +378,7 @@ class SGIVideoSyncVSyncProvider
   // Thread shim through which the sync provider is accessed on |vsync_thread_|.
   std::unique_ptr<SGIVideoSyncProviderThreadShim> shim_;
 
-  std::unique_ptr<gfx::VSyncProvider::UpdateVSyncCallback> pending_callback_;
+  gfx::VSyncProvider::UpdateVSyncCallback pending_callback_;
 
   // Raw pointers to sync primitives owned by the shim_.
   // These will only be referenced before we post a task to destroy
@@ -420,7 +419,7 @@ bool GLSurfaceGLX::InitializeOneOff() {
     return false;
   }
 
-  int major, minor;
+  int major = 0, minor = 0;
   if (!glXQueryVersion(gfx::GetXDisplay(), &major, &minor)) {
     LOG(ERROR) << "glxQueryVersion failed";
     return false;
@@ -572,7 +571,8 @@ NativeViewGLSurfaceGLX::NativeViewGLSurfaceGLX(gfx::AcceleratedWidget window)
       window_(0),
       glx_window_(0),
       config_(nullptr),
-      visual_id_(CopyFromParent) {}
+      visual_id_(CopyFromParent),
+      has_swapped_buffers_(false) {}
 
 bool NativeViewGLSurfaceGLX::Initialize(GLSurfaceFormat format) {
   XWindowAttributes attributes;
@@ -679,7 +679,19 @@ gfx::SwapResult NativeViewGLSurfaceGLX::SwapBuffers(
                GetSize().width(), "height", GetSize().height());
   GLSurfacePresentationHelper::ScopedSwapBuffers scoped_swap_buffers(
       presentation_helper_.get(), callback);
-  glXSwapBuffers(gfx::GetXDisplay(), GetDrawableHandle());
+
+  XDisplay* display = gfx::GetXDisplay();
+  glXSwapBuffers(display, GetDrawableHandle());
+
+  // We need to restore the background pixel that we set to WhitePixel on
+  // views::DesktopWindowTreeHostX11::InitX11Window back to None for the
+  // XWindow associated to this surface after the first SwapBuffers has
+  // happened, to avoid showing a weird white background while resizing.
+  if (!has_swapped_buffers_) {
+    XSetWindowBackgroundPixmap(display, parent_window_, 0);
+    has_swapped_buffers_ = true;
+  }
+
   return scoped_swap_buffers.result();
 }
 
@@ -735,6 +747,19 @@ bool NativeViewGLSurfaceGLX::OnMakeCurrent(GLContext* context) {
 
 gfx::VSyncProvider* NativeViewGLSurfaceGLX::GetVSyncProvider() {
   return vsync_provider_.get();
+}
+
+void NativeViewGLSurfaceGLX::SetVSyncEnabled(bool enabled) {
+  DCHECK(GLContext::GetCurrent() && GLContext::GetCurrent()->IsCurrent(this));
+  int interval = enabled ? 1 : 0;
+  if (GLSurfaceGLX::IsEXTSwapControlSupported()) {
+    glXSwapIntervalEXT(gfx::GetXDisplay(), glx_window_, interval);
+  } else if (GLSurfaceGLX::IsMESASwapControlSupported()) {
+    glXSwapIntervalMESA(interval);
+  } else if (interval == 0) {
+    LOG(WARNING)
+        << "Could not disable vsync: driver does not support swap control";
+  }
 }
 
 NativeViewGLSurfaceGLX::~NativeViewGLSurfaceGLX() {

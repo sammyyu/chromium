@@ -51,6 +51,7 @@ class InProcessVideoCaptureDeviceLauncher : public VideoCaptureDeviceLauncher {
   };
 
   std::unique_ptr<media::VideoCaptureDeviceClient> CreateDeviceClient(
+      media::VideoCaptureBufferType requested_buffer_type,
       int buffer_pool_max_buffer_count,
       std::unique_ptr<media::VideoFrameReceiver> receiver,
       base::WeakPtr<media::VideoFrameReceiver> receiver_on_io_thread);
@@ -67,6 +68,12 @@ class InProcessVideoCaptureDeviceLauncher : public VideoCaptureDeviceLauncher {
 
   void DoStartTabCaptureOnDeviceThread(
       const std::string& device_id,
+      const media::VideoCaptureParams& params,
+      std::unique_ptr<media::VideoFrameReceiver> receiver,
+      ReceiveDeviceCallback result_callback);
+
+  void DoStartAuraWindowCaptureOnDeviceThread(
+      const DesktopMediaID& device_id,
       const media::VideoCaptureParams& params,
       std::unique_ptr<media::VideoFrameReceiver> receiver,
       ReceiveDeviceCallback result_callback);

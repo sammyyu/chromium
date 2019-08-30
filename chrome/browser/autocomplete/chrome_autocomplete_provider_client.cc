@@ -8,11 +8,11 @@
 
 #include "base/bind.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
 #include "chrome/browser/autocomplete/autocomplete_classifier_factory.h"
 #include "chrome/browser/autocomplete/contextual_suggestions_service_factory.h"
+#include "chrome/browser/autocomplete/document_suggestions_service_factory.h"
 #include "chrome/browser/autocomplete/in_memory_url_index_factory.h"
 #include "chrome/browser/autocomplete/shortcuts_backend_factory.h"
 #include "chrome/browser/bitmap_fetcher/bitmap_fetcher_service.h"
@@ -37,6 +37,7 @@
 #include "components/omnibox/browser/autocomplete_match.h"
 #include "components/prefs/pref_service.h"
 #include "components/signin/core/browser/signin_manager.h"
+#include "components/sync/base/model_type.h"
 #include "components/sync/driver/sync_service_utils.h"
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/notification_service.h"
@@ -67,7 +68,7 @@ const char* const kChromeSettingsSubPages[] = {
     chrome::kStylusSubPage,
 #else
     chrome::kCreateProfileSubPage,   chrome::kImportDataSubPage,
-    chrome::kManageProfileSubPage,
+    chrome::kManageProfileSubPage,   chrome::kPeopleSubPage,
 #endif
 };
 #endif  // !defined(OS_ANDROID)
@@ -84,9 +85,10 @@ ChromeAutocompleteProviderClient::ChromeAutocompleteProviderClient(
 ChromeAutocompleteProviderClient::~ChromeAutocompleteProviderClient() {
 }
 
-net::URLRequestContextGetter*
-ChromeAutocompleteProviderClient::GetRequestContext() {
-  return profile_->GetRequestContext();
+scoped_refptr<network::SharedURLLoaderFactory>
+ChromeAutocompleteProviderClient::GetURLLoaderFactory() {
+  return content::BrowserContext::GetDefaultStoragePartition(profile_)
+      ->GetURLLoaderFactoryForBrowserProcess();
 }
 
 PrefService* ChromeAutocompleteProviderClient::GetPrefs() {
@@ -145,6 +147,13 @@ ChromeAutocompleteProviderClient::GetContextualSuggestionsService(
       profile_, create_if_necessary);
 }
 
+DocumentSuggestionsService*
+ChromeAutocompleteProviderClient::GetDocumentSuggestionsService(
+    bool create_if_necessary) const {
+  return DocumentSuggestionsServiceFactory::GetForProfile(profile_,
+                                                          create_if_necessary);
+}
+
 const
 SearchTermsData& ChromeAutocompleteProviderClient::GetSearchTermsData() const {
   return search_terms_data_;
@@ -169,11 +178,6 @@ ChromeAutocompleteProviderClient::GetKeywordExtensionsDelegate(
 #else
   return nullptr;
 #endif
-}
-
-physical_web::PhysicalWebDataSource*
-ChromeAutocompleteProviderClient::GetPhysicalWebDataSource() {
-  return g_browser_process->GetPhysicalWebDataSource();
 }
 
 std::string ChromeAutocompleteProviderClient::GetAcceptLanguages() const {
@@ -255,10 +259,10 @@ bool ChromeAutocompleteProviderClient::SearchSuggestEnabled() const {
   return profile_->GetPrefs()->GetBoolean(prefs::kSearchSuggestEnabled);
 }
 
-bool ChromeAutocompleteProviderClient::TabSyncEnabledAndUnencrypted() const {
-  return syncer::IsTabSyncEnabledAndUnencrypted(
-      ProfileSyncServiceFactory::GetInstance()->GetForProfile(profile_),
-      profile_->GetPrefs());
+bool ChromeAutocompleteProviderClient::IsTabUploadToGoogleActive() const {
+  return syncer::GetUploadToGoogleState(
+             ProfileSyncServiceFactory::GetInstance()->GetForProfile(profile_),
+             syncer::ModelType::PROXY_TABS) == syncer::UploadState::ACTIVE;
 }
 
 bool ChromeAutocompleteProviderClient::IsAuthenticated() const {
@@ -393,14 +397,13 @@ bool ChromeAutocompleteProviderClient::IsTabOpenWithURL(
 bool ChromeAutocompleteProviderClient::StrippedURLsAreEqual(
     const GURL& url1,
     const GURL& url2,
-    const AutocompleteInput* input) {
+    const AutocompleteInput* input) const {
   AutocompleteInput empty_input;
   if (!input)
     input = &empty_input;
-  TemplateURLService* template_url_service = GetTemplateURLService();
-  return AutocompleteMatch::GURLToStrippedGURL(url1, AutocompleteInput(),
-                                               template_url_service,
-                                               base::string16()) ==
+  const TemplateURLService* template_url_service = GetTemplateURLService();
+  return AutocompleteMatch::GURLToStrippedGURL(
+             url1, *input, template_url_service, base::string16()) ==
          AutocompleteMatch::GURLToStrippedGURL(
              url2, *input, template_url_service, base::string16());
 }

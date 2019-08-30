@@ -154,7 +154,7 @@ TEST_F(BufferViewTest, LocalRegion) {
 }
 
 TEST_F(BufferViewTest, Covers) {
-  EXPECT_FALSE(ConstBufferView().covers({0, 0}));
+  EXPECT_TRUE(ConstBufferView().covers({0, 0}));
   EXPECT_FALSE(ConstBufferView().covers({0, 1}));
 
   ConstBufferView view(bytes_.data(), bytes_.size());
@@ -168,12 +168,48 @@ TEST_F(BufferViewTest, Covers) {
   EXPECT_TRUE(view.covers({bytes_.size() - 1, 0}));
   EXPECT_TRUE(view.covers({bytes_.size() - 1, 1}));
   EXPECT_FALSE(view.covers({bytes_.size() - 1, 2}));
-  EXPECT_FALSE(view.covers({bytes_.size(), 0}));
+  EXPECT_TRUE(view.covers({bytes_.size(), 0}));
   EXPECT_FALSE(view.covers({bytes_.size(), 1}));
+  EXPECT_FALSE(view.covers({bytes_.size() + 1, 0}));
+  EXPECT_FALSE(view.covers({bytes_.size() + 1, 1}));
 
   EXPECT_FALSE(view.covers({1, size_t(-1)}));
   EXPECT_FALSE(view.covers({size_t(-1), 1}));
   EXPECT_FALSE(view.covers({size_t(-1), size_t(-1)}));
+}
+
+TEST_F(BufferViewTest, CoversArray) {
+  ConstBufferView view(bytes_.data(), bytes_.size());
+
+  for (uint32_t i = 1; i <= bytes_.size(); ++i) {
+    EXPECT_TRUE(view.covers_array(0, 1, i));
+    EXPECT_TRUE(view.covers_array(0, i, 1));
+    EXPECT_TRUE(view.covers_array(0, i, bytes_.size() / i));
+    EXPECT_TRUE(view.covers_array(0, bytes_.size() / i, i));
+    if (i < bytes_.size()) {
+      EXPECT_TRUE(view.covers_array(i, 1, bytes_.size() - i));
+      EXPECT_TRUE(view.covers_array(i, bytes_.size() - i, 1));
+    }
+    EXPECT_TRUE(view.covers_array(bytes_.size() - (bytes_.size() / i) * i, 1,
+                                  bytes_.size() / i));
+  }
+
+  EXPECT_TRUE(view.covers_array(0, 0, bytes_.size()));
+  EXPECT_TRUE(view.covers_array(bytes_.size() - 1, 0, bytes_.size()));
+  EXPECT_TRUE(view.covers_array(bytes_.size(), 0, bytes_.size()));
+  EXPECT_TRUE(view.covers_array(0, 0, 0x10000));
+  EXPECT_TRUE(view.covers_array(bytes_.size() - 1, 0, 0x10000));
+  EXPECT_TRUE(view.covers_array(bytes_.size(), 0, 0x10000));
+
+  EXPECT_FALSE(view.covers_array(0, 1, bytes_.size() + 1));
+  EXPECT_FALSE(view.covers_array(0, 2, bytes_.size()));
+  EXPECT_FALSE(view.covers_array(0, bytes_.size() + 11, 1));
+  EXPECT_FALSE(view.covers_array(0, bytes_.size(), 2));
+  EXPECT_FALSE(view.covers_array(1, bytes_.size(), 1));
+
+  EXPECT_FALSE(view.covers_array(bytes_.size(), 1, 1));
+  EXPECT_TRUE(view.covers_array(bytes_.size(), 0, 1));
+  EXPECT_FALSE(view.covers_array(0, 0x10000, 0x10000));
 }
 
 TEST_F(BufferViewTest, Equals) {

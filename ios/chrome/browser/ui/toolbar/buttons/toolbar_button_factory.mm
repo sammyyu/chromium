@@ -4,7 +4,6 @@
 
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_button_factory.h"
 
-#include "base/ios/ios_util.h"
 #include "components/strings/grit/components_strings.h"
 #import "ios/chrome/browser/ui/commands/application_commands.h"
 #import "ios/chrome/browser/ui/commands/browser_commands.h"
@@ -13,12 +12,14 @@
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_button_visibility_configuration.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_configuration.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_constants.h"
+#import "ios/chrome/browser/ui/toolbar/buttons/toolbar_search_button.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_tab_grid_button.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_tools_menu_button.h"
+#import "ios/chrome/browser/ui/toolbar/public/features.h"
 #import "ios/chrome/browser/ui/toolbar/public/omnibox_focuser.h"
-#import "ios/chrome/browser/ui/toolbar/public/toolbar_controller_base_feature.h"
 #include "ios/chrome/browser/ui/toolbar/toolbar_resource_macros.h"
 #import "ios/chrome/browser/ui/uikit_ui_util.h"
+#import "ios/chrome/common/ui_util/constraints_ui_util.h"
 #include "ios/chrome/grit/ios_strings.h"
 #include "ios/chrome/grit/ios_theme_resources.h"
 #import "ios/public/provider/chrome/browser/chrome_browser_provider.h"
@@ -220,9 +221,15 @@ const int styleCount = 2;
   } else {
     [self configureButton:toolsMenuButton width:kToolsMenuButtonWidth];
   }
-  [toolsMenuButton addTarget:self.dispatcher
-                      action:@selector(showToolsMenu)
-            forControlEvents:UIControlEventTouchUpInside];
+  if (IsUIRefreshPhase1Enabled()) {
+    [toolsMenuButton addTarget:self.dispatcher
+                        action:@selector(showToolsMenuPopup)
+              forControlEvents:UIControlEventTouchUpInside];
+  } else {
+    [toolsMenuButton addTarget:self.dispatcher
+                        action:@selector(showToolsMenu)
+              forControlEvents:UIControlEventTouchUpInside];
+  }
   toolsMenuButton.visibilityMask =
       self.visibilityConfiguration.toolsMenuButtonVisibility;
   return toolsMenuButton;
@@ -335,7 +342,7 @@ const int styleCount = 2;
     bookmarkButton = [ToolbarButton
         toolbarButtonWithImage:[UIImage imageNamed:@"toolbar_bookmark"]];
     [bookmarkButton setImage:[UIImage imageNamed:@"toolbar_bookmark_active"]
-                    forState:UIControlStateHighlighted];
+                    forState:ControlStateSpotlighted];
     [self configureButton:bookmarkButton width:kAdaptiveToolbarButtonWidth];
   } else {
     bookmarkButton = [ToolbarButton
@@ -386,6 +393,8 @@ const int styleCount = 2;
                                                imageNamed:collapsePressedName]
                      imageForDisabledState:nil];
   contractButton.accessibilityLabel = l10n_util::GetNSString(IDS_CANCEL);
+  contractButton.accessibilityIdentifier =
+      kToolbarCancelOmniboxEditButtonIdentifier;
   contractButton.alpha = 0;
   contractButton.hidden = YES;
   [self configureButton:contractButton width:kToolbarButtonWidth];
@@ -399,13 +408,15 @@ const int styleCount = 2;
 }
 
 - (ToolbarButton*)omniboxButton {
-  ToolbarButton* omniboxButton = [ToolbarButton
+  ToolbarSearchButton* omniboxButton = [ToolbarSearchButton
       toolbarButtonWithImage:[UIImage imageNamed:@"toolbar_search"]];
 
-  [self configureButton:omniboxButton width:kAdaptiveToolbarButtonWidth];
+  [self configureButton:omniboxButton width:kOmniboxButtonWidth];
   [omniboxButton addTarget:self.dispatcher
-                    action:@selector(focusOmnibox)
+                    action:@selector(focusOmniboxFromSearchButton)
           forControlEvents:UIControlEventTouchUpInside];
+  omniboxButton.accessibilityLabel =
+      l10n_util::GetNSString(IDS_IOS_TOOLBAR_SEARCH);
   omniboxButton.accessibilityIdentifier = kToolbarOmniboxButtonIdentifier;
 
   omniboxButton.visibilityMask =
@@ -436,6 +447,10 @@ const int styleCount = 2;
 
 - (UIButton*)cancelButton {
   UIButton* cancelButton = [UIButton buttonWithType:UIButtonTypeSystem];
+  cancelButton.titleLabel.font = [UIFont systemFontOfSize:kLocationBarFontSize];
+  cancelButton.tintColor = self.style == NORMAL
+                               ? UIColorFromRGB(kLocationBarTintBlue)
+                               : [UIColor whiteColor];
   [cancelButton setTitle:l10n_util::GetNSString(IDS_CANCEL)
                 forState:UIControlStateNormal];
   [cancelButton setContentHuggingPriority:UILayoutPriorityDefaultHigh
@@ -449,6 +464,8 @@ const int styleCount = 2;
   [cancelButton addTarget:self.dispatcher
                    action:@selector(cancelOmniboxEdit)
          forControlEvents:UIControlEventTouchUpInside];
+  cancelButton.accessibilityIdentifier =
+      kToolbarCancelOmniboxEditButtonIdentifier;
   return cancelButton;
 }
 
@@ -459,13 +476,13 @@ const int styleCount = 2;
 // there is a conflict when the buttons are hidden as the stack view is setting
 // their width to 0. Setting the priority to UILayoutPriorityDefaultHigh doesn't
 // work as they would have a lower priority than other elements.
-- (void)configureButton:(UIView*)button width:(CGFloat)width {
+- (void)configureButton:(ToolbarButton*)button width:(CGFloat)width {
   NSLayoutConstraint* constraint =
       [button.widthAnchor constraintEqualToConstant:width];
   constraint.priority = UILayoutPriorityRequired - 1;
   constraint.active = YES;
   if (IsUIRefreshPhase1Enabled()) {
-    button.tintColor = self.toolbarConfiguration.buttonsTintColor;
+    button.configuration = self.toolbarConfiguration;
   }
 }
 

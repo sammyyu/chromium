@@ -27,10 +27,12 @@
 #include "build/build_config.h"
 #include "net/base/auth.h"
 #include "net/base/proxy_delegate.h"
+#include "net/http/http_request_headers.h"
 #include "net/proxy_resolution/proxy_resolution_service.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/spawned_test_server/spawned_test_server.h"
 #include "net/test/test_data_directory.h"
+#include "net/test/test_with_scoped_task_environment.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/url_request_test_util.h"
 #include "net/websockets/websocket_channel.h"
@@ -73,35 +75,41 @@ class ConnectTestingEventInterface : public WebSocketEventInterface {
   // Implementation of WebSocketEventInterface.
   void OnCreateURLRequest(URLRequest* request) override {}
 
-  ChannelState OnAddChannelResponse(const std::string& selected_subprotocol,
-                                    const std::string& extensions) override;
+  void OnAddChannelResponse(const std::string& selected_subprotocol,
+                            const std::string& extensions) override;
 
-  ChannelState OnDataFrame(bool fin,
-                           WebSocketMessageType type,
-                           scoped_refptr<IOBuffer> data,
-                           size_t data_size) override;
+  void OnDataFrame(bool fin,
+                   WebSocketMessageType type,
+                   scoped_refptr<IOBuffer> data,
+                   size_t data_size) override;
 
-  ChannelState OnFlowControl(int64_t quota) override;
+  void OnFlowControl(int64_t quota) override;
 
-  ChannelState OnClosingHandshake() override;
+  void OnClosingHandshake() override;
 
-  ChannelState OnDropChannel(bool was_clean,
-                             uint16_t code,
-                             const std::string& reason) override;
+  void OnDropChannel(bool was_clean,
+                     uint16_t code,
+                     const std::string& reason) override;
 
-  ChannelState OnFailChannel(const std::string& message) override;
+  void OnFailChannel(const std::string& message) override;
 
-  ChannelState OnStartOpeningHandshake(
+  void OnStartOpeningHandshake(
       std::unique_ptr<WebSocketHandshakeRequestInfo> request) override;
 
-  ChannelState OnFinishOpeningHandshake(
+  void OnFinishOpeningHandshake(
       std::unique_ptr<WebSocketHandshakeResponseInfo> response) override;
 
-  ChannelState OnSSLCertificateError(
+  void OnSSLCertificateError(
       std::unique_ptr<SSLErrorCallbacks> ssl_error_callbacks,
       const GURL& url,
       const SSLInfo& ssl_info,
       bool fatal) override;
+
+  int OnAuthRequired(scoped_refptr<AuthChallengeInfo> auth_info,
+                     scoped_refptr<HttpResponseHeaders> response_headers,
+                     const HostPortPair& host_port_pair,
+                     base::OnceCallback<void(const AuthCredentials*)> callback,
+                     base::Optional<AuthCredentials>* credentials) override;
 
  private:
   void QuitNestedEventLoop();
@@ -135,60 +143,40 @@ std::string ConnectTestingEventInterface::extensions() const {
   return extensions_;
 }
 
-// Make the function definitions below less verbose.
-typedef ConnectTestingEventInterface::ChannelState ChannelState;
-
-ChannelState ConnectTestingEventInterface::OnAddChannelResponse(
+void ConnectTestingEventInterface::OnAddChannelResponse(
     const std::string& selected_subprotocol,
     const std::string& extensions) {
   selected_subprotocol_ = selected_subprotocol;
   extensions_ = extensions;
   QuitNestedEventLoop();
-  return CHANNEL_ALIVE;
 }
 
-ChannelState ConnectTestingEventInterface::OnDataFrame(
-    bool fin,
-    WebSocketMessageType type,
-    scoped_refptr<IOBuffer> data,
-    size_t data_size) {
-  return CHANNEL_ALIVE;
-}
+void ConnectTestingEventInterface::OnDataFrame(bool fin,
+                                               WebSocketMessageType type,
+                                               scoped_refptr<IOBuffer> data,
+                                               size_t data_size) {}
 
-ChannelState ConnectTestingEventInterface::OnFlowControl(int64_t quota) {
-  return CHANNEL_ALIVE;
-}
+void ConnectTestingEventInterface::OnFlowControl(int64_t quota) {}
 
-ChannelState ConnectTestingEventInterface::OnClosingHandshake() {
-  return CHANNEL_ALIVE;
-}
+void ConnectTestingEventInterface::OnClosingHandshake() {}
 
-ChannelState ConnectTestingEventInterface::OnDropChannel(
-    bool was_clean,
-    uint16_t code,
-    const std::string& reason) {
-  return CHANNEL_DELETED;
-}
+void ConnectTestingEventInterface::OnDropChannel(bool was_clean,
+                                                 uint16_t code,
+                                                 const std::string& reason) {}
 
-ChannelState ConnectTestingEventInterface::OnFailChannel(
-    const std::string& message) {
+void ConnectTestingEventInterface::OnFailChannel(const std::string& message) {
   failed_ = true;
   failure_message_ = message;
   QuitNestedEventLoop();
-  return CHANNEL_DELETED;
 }
 
-ChannelState ConnectTestingEventInterface::OnStartOpeningHandshake(
-    std::unique_ptr<WebSocketHandshakeRequestInfo> request) {
-  return CHANNEL_ALIVE;
-}
+void ConnectTestingEventInterface::OnStartOpeningHandshake(
+    std::unique_ptr<WebSocketHandshakeRequestInfo> request) {}
 
-ChannelState ConnectTestingEventInterface::OnFinishOpeningHandshake(
-    std::unique_ptr<WebSocketHandshakeResponseInfo> response) {
-  return CHANNEL_ALIVE;
-}
+void ConnectTestingEventInterface::OnFinishOpeningHandshake(
+    std::unique_ptr<WebSocketHandshakeResponseInfo> response) {}
 
-ChannelState ConnectTestingEventInterface::OnSSLCertificateError(
+void ConnectTestingEventInterface::OnSSLCertificateError(
     std::unique_ptr<SSLErrorCallbacks> ssl_error_callbacks,
     const GURL& url,
     const SSLInfo& ssl_info,
@@ -197,7 +185,16 @@ ChannelState ConnectTestingEventInterface::OnSSLCertificateError(
       FROM_HERE, base::Bind(&SSLErrorCallbacks::CancelSSLRequest,
                             base::Owned(ssl_error_callbacks.release()),
                             ERR_SSL_PROTOCOL_ERROR, &ssl_info));
-  return CHANNEL_ALIVE;
+}
+
+int ConnectTestingEventInterface::OnAuthRequired(
+    scoped_refptr<AuthChallengeInfo> auth_info,
+    scoped_refptr<HttpResponseHeaders> response_headers,
+    const HostPortPair& host_port_pair,
+    base::OnceCallback<void(const AuthCredentials*)> callback,
+    base::Optional<AuthCredentials>* credentials) {
+  *credentials = base::nullopt;
+  return OK;
 }
 
 void ConnectTestingEventInterface::QuitNestedEventLoop() {
@@ -236,7 +233,7 @@ class TestProxyDelegateWithProxyInfo : public ProxyDelegate {
   DISALLOW_COPY_AND_ASSIGN(TestProxyDelegateWithProxyInfo);
 };
 
-class WebSocketEndToEndTest : public ::testing::Test {
+class WebSocketEndToEndTest : public TestWithScopedTaskEnvironment {
  protected:
   WebSocketEndToEndTest()
       : event_interface_(),
@@ -266,7 +263,7 @@ class WebSocketEndToEndTest : public ::testing::Test {
     channel_ = std::make_unique<WebSocketChannel>(
         base::WrapUnique(event_interface_), &context_);
     channel_->SendAddChannelRequest(GURL(socket_url), sub_protocols_, origin,
-                                    site_for_cookies, "");
+                                    site_for_cookies, HttpRequestHeaders());
     event_interface_->WaitForResponse();
     return !event_interface_->failed();
   }
@@ -375,9 +372,7 @@ TEST_F(WebSocketEndToEndTest, MAYBE_HttpsProxyUsed) {
     std::unique_ptr<URLRequest> request(context_.CreateRequest(
         http_page, DEFAULT_PRIORITY, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS));
     request->Start();
-    // TestDelegate exits the message loop when the request completes by
-    // default.
-    base::RunLoop().Run();
+    delegate.RunUntilComplete();
     EXPECT_TRUE(delegate.auth_required_called());
   }
 
@@ -422,8 +417,7 @@ TEST_F(WebSocketEndToEndTest, HstsHttpsToWebSocket) {
   std::unique_ptr<URLRequest> request(context_.CreateRequest(
       https_page, DEFAULT_PRIORITY, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS));
   request->Start();
-  // TestDelegate exits the message loop when the request completes.
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_EQ(OK, delegate.request_status());
 
   // Check HSTS with ws:
@@ -456,8 +450,7 @@ TEST_F(WebSocketEndToEndTest, HstsWebSocketToHttps) {
   std::unique_ptr<URLRequest> request(context_.CreateRequest(
       http_page, DEFAULT_PRIORITY, &delegate, TRAFFIC_ANNOTATION_FOR_TESTS));
   request->Start();
-  // TestDelegate exits the message loop when the request completes.
-  base::RunLoop().Run();
+  delegate.RunUntilComplete();
   EXPECT_EQ(OK, delegate.request_status());
   EXPECT_TRUE(request->url().SchemeIs("https"));
 }

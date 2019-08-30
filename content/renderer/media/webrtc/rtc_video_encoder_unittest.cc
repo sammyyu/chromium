@@ -5,7 +5,6 @@
 #include <stdint.h>
 
 #include "base/bind.h"
-#include "base/memory/ptr_util.h"
 #include "base/single_thread_task_runner.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread.h"
@@ -181,7 +180,9 @@ class RTCVideoEncoderTest
 
   void ReturnFrameWithTimeStamp(const scoped_refptr<media::VideoFrame>& frame,
                                 bool force_keyframe) {
-    client_->BitstreamBufferReady(0, 0, force_keyframe, frame->timestamp());
+    client_->BitstreamBufferReady(
+        0,
+        media::BitstreamBufferMetadata(0, force_keyframe, frame->timestamp()));
   }
 
   void VerifyTimestamp(uint32_t rtp_timestamp,

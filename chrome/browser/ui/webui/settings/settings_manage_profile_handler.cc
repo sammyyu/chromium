@@ -24,7 +24,6 @@
 #include "chrome/browser/profiles/profile_shortcut_manager.h"
 #include "chrome/browser/profiles/profile_window.h"
 #include "chrome/browser/profiles/profiles_state.h"
-#include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/common/pref_names.h"
 #include "chrome/common/url_constants.h"
@@ -32,7 +31,6 @@
 #include "components/prefs/pref_service.h"
 #include "components/prefs/scoped_user_pref_update.h"
 #include "components/signin/core/browser/profile_management_switches.h"
-#include "components/signin/core/browser/signin_manager.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/web_ui.h"
@@ -58,31 +56,35 @@ ManageProfileHandler::~ManageProfileHandler() {}
 void ManageProfileHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
       "getAvailableIcons",
-      base::Bind(&ManageProfileHandler::HandleGetAvailableIcons,
-                 base::Unretained(this)));
+      base::BindRepeating(&ManageProfileHandler::HandleGetAvailableIcons,
+                          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "setProfileIconToGaiaAvatar",
-      base::Bind(&ManageProfileHandler::HandleSetProfileIconToGaiaAvatar,
-                 base::Unretained(this)));
+      base::BindRepeating(
+          &ManageProfileHandler::HandleSetProfileIconToGaiaAvatar,
+          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "setProfileIconToDefaultAvatar",
-      base::Bind(&ManageProfileHandler::HandleSetProfileIconToDefaultAvatar,
-                 base::Unretained(this)));
+      base::BindRepeating(
+          &ManageProfileHandler::HandleSetProfileIconToDefaultAvatar,
+          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
-      "setProfileName", base::Bind(&ManageProfileHandler::HandleSetProfileName,
-                                   base::Unretained(this)));
+      "setProfileName",
+      base::BindRepeating(&ManageProfileHandler::HandleSetProfileName,
+                          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "requestProfileShortcutStatus",
-      base::Bind(&ManageProfileHandler::HandleRequestProfileShortcutStatus,
-                 base::Unretained(this)));
+      base::BindRepeating(
+          &ManageProfileHandler::HandleRequestProfileShortcutStatus,
+          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "addProfileShortcut",
-      base::Bind(&ManageProfileHandler::HandleAddProfileShortcut,
-                 base::Unretained(this)));
+      base::BindRepeating(&ManageProfileHandler::HandleAddProfileShortcut,
+                          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "removeProfileShortcut",
-      base::Bind(&ManageProfileHandler::HandleRemoveProfileShortcut,
-                 base::Unretained(this)));
+      base::BindRepeating(&ManageProfileHandler::HandleRemoveProfileShortcut,
+                          base::Unretained(this)));
 }
 
 void ManageProfileHandler::OnJavascriptAllowed() {

@@ -56,14 +56,21 @@ class SafeBrowsingUIManager : public BaseUIManager {
   explicit SafeBrowsingUIManager(
       const scoped_refptr<SafeBrowsingService>& service);
 
-  // Called to stop or shutdown operations on the io_thread. This may be called
+  // Called to stop or shutdown operations on the UI thread. This may be called
   // multiple times during the life of the UIManager. Should be called
-  // on IO thread. If shutdown is true, the manager is disabled permanently.
-  void StopOnIOThread(bool shutdown) override;
+  // on UI thread. If shutdown is true, the manager is disabled permanently.
+  void Stop(bool shutdown);
 
   // Called on the IO thread by the ThreatDetails with the serialized
   // protocol buffer, so the service can send it over.
   void SendSerializedThreatDetails(const std::string& serialized) override;
+
+  // Calls |BaseUIManager::OnBlockingPageDone()| and triggers
+  // |OnSecurityInterstitialProceeded| event if |proceed| is true.
+  void OnBlockingPageDone(const std::vector<UnsafeResource>& resources,
+                          bool proceed,
+                          content::WebContents* web_contents,
+                          const GURL& main_frame_url) override;
 
   // Report hits to unsafe contents (malware, phishing, unsafe download URL)
   // to the server. Can only be called on UI thread.  The hit report will
@@ -89,10 +96,6 @@ class SafeBrowsingUIManager : public BaseUIManager {
 
  protected:
   ~SafeBrowsingUIManager() override;
-
-  // Call protocol manager on IO thread to report hits of unsafe contents.
-  void ReportSafeBrowsingHitOnIOThread(
-      const safe_browsing::HitReport& hit_report) override;
 
   // Creates a hit report for the given resource and calls
   // MaybeReportSafeBrowsingHit. This also notifies all observers in

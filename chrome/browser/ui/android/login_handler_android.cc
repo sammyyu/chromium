@@ -27,9 +27,10 @@ class LoginHandlerAndroid : public LoginHandler {
   LoginHandlerAndroid(
       net::AuthChallengeInfo* auth_info,
       content::ResourceRequestInfo::WebContentsGetter web_contents_getter,
-      const base::Callback<void(const base::Optional<net::AuthCredentials>&)>&
-          auth_required_callback)
-      : LoginHandler(auth_info, web_contents_getter, auth_required_callback) {}
+      LoginAuthRequiredCallback auth_required_callback)
+      : LoginHandler(auth_info,
+                     web_contents_getter,
+                     std::move(auth_required_callback)) {}
 
   // LoginHandler methods:
 
@@ -54,8 +55,8 @@ class LoginHandlerAndroid : public LoginHandler {
     ViewAndroidHelper* view_helper = ViewAndroidHelper::FromWebContents(
         web_contents);
 
-    if (vr::VrTabHelper::IsInVr(web_contents)) {
-      vr::VrTabHelper::UISuppressed(vr::UiSuppressedElement::kHttpAuth);
+    if (vr::VrTabHelper::IsUiSuppressedInVr(
+            web_contents, vr::UiSuppressedElement::kHttpAuth)) {
       CancelAuth();
       return;
     }
@@ -96,8 +97,7 @@ class LoginHandlerAndroid : public LoginHandler {
 scoped_refptr<LoginHandler> LoginHandler::Create(
     net::AuthChallengeInfo* auth_info,
     content::ResourceRequestInfo::WebContentsGetter web_contents_getter,
-    const base::Callback<void(const base::Optional<net::AuthCredentials>&)>&
-        auth_required_callback) {
+    LoginAuthRequiredCallback auth_required_callback) {
   return base::MakeRefCounted<LoginHandlerAndroid>(
-      auth_info, web_contents_getter, auth_required_callback);
+      auth_info, web_contents_getter, std::move(auth_required_callback));
 }

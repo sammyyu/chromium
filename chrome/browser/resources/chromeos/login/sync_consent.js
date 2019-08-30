@@ -10,10 +10,69 @@
 Polymer({
   is: 'sync-consent',
 
-  behaviors: [I18nBehavior],
+  behaviors: [I18nBehavior, OobeDialogHostBehavior],
+
+  /** @override */
+  ready: function() {
+    this.updateLocalizedContent();
+  },
 
   focus: function() {
-    this.$.syncConsentOverviewDialog.focus();
+    let activeScreen = this.getActiveScreen_();
+    if (activeScreen)
+      activeScreen.focus();
+  },
+
+  /**
+   * Hides all screens to help switching from one screen to another.
+   * @private
+   */
+  hideAllScreens_: function() {
+    var screens = Polymer.dom(this.root).querySelectorAll('oobe-dialog');
+    for (let screen of screens)
+      screen.hidden = true;
+  },
+
+  /**
+   * Returns active screen or null if none.
+   * @private
+   */
+  getActiveScreen_: function() {
+    var screens = Polymer.dom(this.root).querySelectorAll('oobe-dialog');
+    for (let screen of screens) {
+      if (!screen.hidden)
+        return screen;
+    }
+    return null;
+  },
+
+  /**
+   * Shows given screen.
+   * @param id String Screen ID.
+   * @private
+   */
+  showScreen_: function(id) {
+    this.hideAllScreens_();
+
+    var screen = this.$[id];
+    assert(screen);
+    screen.hidden = false;
+    screen.show();
+    screen.focus();
+  },
+
+  /**
+   * Reacts to changes in loadTimeData.
+   */
+  updateLocalizedContent: function() {
+    let useMakeBetterScreen = loadTimeData.getBoolean('syncConsentMakeBetter');
+    if (useMakeBetterScreen) {
+      if (this.$.syncConsentMakeChromeSyncOptionsDialog.hidden)
+        this.showScreen_('syncConsentNewDialog');
+    } else {
+      this.showScreen_('syncConsentOverviewDialog');
+    }
+    this.i18nUpdateLocale();
   },
 
   /**
@@ -26,6 +85,46 @@ Polymer({
     } else {
       chrome.send(
           'login.SyncConsentScreen.userActed', ['continue-with-defaults']);
+    }
+  },
+
+  /******************************************************
+   * Get Google smarts in Chrome dialog.
+   ******************************************************/
+
+  /**
+   * @private
+   */
+  onMoreOptionsButton_: function() {
+    this.showScreen_('syncConsentMakeChromeSyncOptionsDialog');
+  },
+
+  /**
+   * @private
+   */
+  onConfirm_: function() {
+    chrome.send(
+        'login.SyncConsentScreen.userActed',
+        ['continue-with-sync-and-personalization']);
+  },
+
+  /******************************************************
+   * Get Google smarts ... options dialog
+   ******************************************************/
+
+  /** @private */
+  onOptionsAcceptAndContinue_: function() {
+    const selected = this.$.optionsGroup.selected;
+    if (selected == 'justSync') {
+      chrome.send(
+          'login.SyncConsentScreen.userActed', ['continue-with-sync-only']);
+    } else if (selected == 'syncAndPersonalization') {
+      chrome.send(
+          'login.SyncConsentScreen.userActed',
+          ['continue-with-sync-and-personalization']);
+    } else {
+      // 'Continue and review' is default option.
+      chrome.send('login.SyncConsentScreen.userActed', ['continue-and-review']);
     }
   },
 });

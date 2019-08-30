@@ -11,7 +11,7 @@
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "chrome/browser/infobars/infobar_service.h"
+#include "chrome/browser/infobars/mock_infobar_service.h"
 #include "chrome/browser/loader/chrome_navigation_data.h"
 #include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_settings.h"
 #include "chrome/browser/net/spdyproxy/data_reduction_proxy_chrome_settings_factory.h"
@@ -34,6 +34,7 @@
 #include "content/public/common/previews_state.h"
 #include "content/public/test/web_contents_tester.h"
 #include "net/http/http_util.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
 #include "chrome/browser/offline_pages/offline_page_tab_helper.h"
@@ -52,7 +53,7 @@ class PreviewsInfoBarTabHelperUnitTest
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
     offline_pages::OfflinePageTabHelper::CreateForWebContents(web_contents());
 #endif  // BUILDFLAG(ENABLE_OFFLINE_PAGES)
-    InfoBarService::CreateForWebContents(web_contents());
+    MockInfoBarService::CreateForWebContents(web_contents());
     PreviewsInfoBarTabHelper::CreateForWebContents(web_contents());
     test_handle_ = content::NavigationHandle::CreateNavigationHandleForTesting(
         GURL(kTestUrl), main_rfh());
@@ -78,6 +79,7 @@ class PreviewsInfoBarTabHelperUnitTest
     data_reduction_proxy_settings->InitDataReductionProxySettings(
         drp_test_context_->io_data(), drp_test_context_->pref_service(),
         drp_test_context_->request_context_getter(),
+        nullptr /* url_loader_factory */,
         base::WrapUnique(new data_reduction_proxy::DataStore()),
         base::ThreadTaskRunnerHandle::Get(),
         base::ThreadTaskRunnerHandle::Get());
@@ -137,6 +139,10 @@ class PreviewsInfoBarTabHelperUnitTest
         ->SetNavigationData(test_handle_.get(), std::move(navigation_data));
   }
 
+  InfoBarService* infobar_service() {
+    return InfoBarService::FromWebContents(web_contents());
+  }
+
  protected:
   std::unique_ptr<data_reduction_proxy::DataReductionProxyTestContext>
       drp_test_context_;
@@ -155,9 +161,7 @@ TEST_F(PreviewsInfoBarTabHelperUnitTest,
   SimulateWillProcessResponse();
   CallDidFinishNavigation();
 
-  InfoBarService* infobar_service =
-      InfoBarService::FromWebContents(web_contents());
-  EXPECT_EQ(1U, infobar_service->infobar_count());
+  EXPECT_EQ(1U, infobar_service()->infobar_count());
   EXPECT_TRUE(infobar_tab_helper->displayed_preview_infobar());
 
   // Navigate to reset the displayed state.
@@ -177,9 +181,7 @@ TEST_F(PreviewsInfoBarTabHelperUnitTest,
   SimulateWillProcessResponse();
   CallDidFinishNavigation();
 
-  InfoBarService* infobar_service =
-      InfoBarService::FromWebContents(web_contents());
-  EXPECT_EQ(1U, infobar_service->infobar_count());
+  EXPECT_EQ(1U, infobar_service()->infobar_count());
   EXPECT_TRUE(infobar_tab_helper->displayed_preview_infobar());
 
   // Navigate to reset the displayed state.
@@ -199,9 +201,7 @@ TEST_F(PreviewsInfoBarTabHelperUnitTest,
   SimulateWillProcessResponse();
   CallDidFinishNavigation();
 
-  InfoBarService* infobar_service =
-      InfoBarService::FromWebContents(web_contents());
-  EXPECT_EQ(0U, infobar_service->infobar_count());
+  EXPECT_EQ(0U, infobar_service()->infobar_count());
   EXPECT_FALSE(infobar_tab_helper->displayed_preview_infobar());
 }
 
@@ -233,6 +233,9 @@ TEST_F(PreviewsInfoBarTabHelperUnitTest, CreateOfflineInfoBar) {
       PreviewsInfoBarTabHelper::FromWebContents(web_contents());
   EXPECT_FALSE(infobar_tab_helper->displayed_preview_infobar());
 
+  content::WebContentsTester::For(web_contents())
+      ->SetMainFrameMimeType("multipart/related");
+
   SimulateCommit();
   offline_pages::OfflinePageItem item;
   item.url = GURL(kTestUrl);
@@ -240,7 +243,10 @@ TEST_F(PreviewsInfoBarTabHelperUnitTest, CreateOfflineInfoBar) {
   int64_t expected_file_size = .55 * item.file_size;
   offline_pages::OfflinePageHeader header;
   offline_pages::OfflinePageTabHelper::FromWebContents(web_contents())
-      ->SetOfflinePage(item, header, true, true);
+      ->SetOfflinePage(
+          item, header,
+          offline_pages::OfflinePageTrustedState::TRUSTED_AS_IN_INTERNAL_DIR,
+          true);
 
   auto* data_reduction_proxy_settings =
       DataReductionProxyChromeSettingsFactory::GetForBrowserContext(
@@ -255,11 +261,11 @@ TEST_F(PreviewsInfoBarTabHelperUnitTest, CreateOfflineInfoBar) {
                                                 true);
   base::RunLoop().RunUntilIdle();
 
+  SetCommittedPreviewsType(previews::PreviewsType::OFFLINE);
+
   CallDidFinishNavigation();
 
-  InfoBarService* infobar_service =
-      InfoBarService::FromWebContents(web_contents());
-  EXPECT_EQ(1U, infobar_service->infobar_count());
+  EXPECT_EQ(1U, infobar_service()->infobar_count());
   EXPECT_TRUE(infobar_tab_helper->displayed_preview_infobar());
 
   // Navigate to reset the displayed state.

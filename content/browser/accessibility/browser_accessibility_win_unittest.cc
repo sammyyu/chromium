@@ -166,13 +166,10 @@ TEST_F(BrowserAccessibilityTest, TestChildrenChange) {
   text2.id = 2;
   text2.role = ax::mojom::Role::kStaticText;
   text2.SetName("new text");
-  AXEventNotificationDetails param;
-  param.event_type = ax::mojom::Event::kChildrenChanged;
-  param.update.nodes.push_back(text2);
-  param.id = text2.id;
-  std::vector<AXEventNotificationDetails> events;
-  events.push_back(param);
-  manager->OnAccessibilityEvents(events);
+  AXEventNotificationDetails event_bundle;
+  event_bundle.updates.resize(1);
+  event_bundle.updates[0].nodes.push_back(text2);
+  manager->OnAccessibilityEvents(event_bundle);
 
   // Query for the text IAccessible and verify that it now returns "new text"
   // as its value.
@@ -232,13 +229,10 @@ TEST_F(BrowserAccessibilityTest, TestChildrenChangeNoLeaks) {
   // Notify the BrowserAccessibilityManager that the div node and its children
   // were removed and ensure that only one BrowserAccessibility instance exists.
   root.child_ids.clear();
-  AXEventNotificationDetails param;
-  param.event_type = ax::mojom::Event::kChildrenChanged;
-  param.update.nodes.push_back(root);
-  param.id = root.id;
-  std::vector<AXEventNotificationDetails> events;
-  events.push_back(param);
-  manager->OnAccessibilityEvents(events);
+  AXEventNotificationDetails event_bundle;
+  event_bundle.updates.resize(1);
+  event_bundle.updates[0].nodes.push_back(root);
+  manager->OnAccessibilityEvents(event_bundle);
 
   // Delete the manager and test that all BrowserAccessibility instances are
   // deleted.
@@ -659,15 +653,12 @@ TEST_F(BrowserAccessibilityTest, TestCreateEmptyDocument) {
   tree1_2.role = ax::mojom::Role::kTextField;
 
   // Process a load complete.
-  std::vector<AXEventNotificationDetails> params;
-  params.push_back(AXEventNotificationDetails());
-  AXEventNotificationDetails* msg = &params[0];
-  msg->event_type = ax::mojom::Event::kLoadComplete;
-  msg->update.root_id = tree1_1.id;
-  msg->update.nodes.push_back(tree1_1);
-  msg->update.nodes.push_back(tree1_2);
-  msg->id = tree1_1.id;
-  manager->OnAccessibilityEvents(params);
+  AXEventNotificationDetails event_bundle;
+  event_bundle.updates.resize(1);
+  event_bundle.updates[0].root_id = tree1_1.id;
+  event_bundle.updates[0].nodes.push_back(tree1_1);
+  event_bundle.updates[0].nodes.push_back(tree1_2);
+  manager->OnAccessibilityEvents(event_bundle);
 
   // Save for later comparison.
   BrowserAccessibility* acc1_2 = manager->GetFromID(2);
@@ -689,13 +680,12 @@ TEST_F(BrowserAccessibilityTest, TestCreateEmptyDocument) {
   tree2_2.id = 3;
   tree2_2.role = ax::mojom::Role::kButton;
 
-  msg->update.nodes.clear();
-  msg->update.nodes.push_back(tree2_1);
-  msg->update.nodes.push_back(tree2_2);
-  msg->id = tree2_1.id;
+  event_bundle.updates[0].nodes.clear();
+  event_bundle.updates[0].nodes.push_back(tree2_1);
+  event_bundle.updates[0].nodes.push_back(tree2_2);
 
   // Fire another load complete.
-  manager->OnAccessibilityEvents(params);
+  manager->OnAccessibilityEvents(event_bundle);
 
   BrowserAccessibility* acc2_2 = manager->GetFromID(3);
 
@@ -1788,16 +1778,15 @@ TEST_F(BrowserAccessibilityTest, TestTextAttributesInContentEditables) {
   EXPECT_EQ(3, end_offset);
   EXPECT_NE(base::string16::npos,
             base::string16(text_attributes).find(L"font-family:Helvetica"));
-  EXPECT_NE(base::string16::npos,
-            base::string16(text_attributes).find(L"font-weight:normal"));
-  EXPECT_NE(base::string16::npos,
-            base::string16(text_attributes).find(L"font-style:normal"));
+  EXPECT_EQ(base::string16::npos,
+            base::string16(text_attributes).find(L"font-weight:"));
+  EXPECT_EQ(base::string16::npos,
+            base::string16(text_attributes).find(L"font-style:"));
   EXPECT_NE(
       base::string16::npos,
       base::string16(text_attributes).find(L"text-underline-style:solid"));
-  EXPECT_NE(
-      base::string16::npos,
-      base::string16(text_attributes).find(L"text-underline-type:single"));
+  EXPECT_EQ(base::string16::npos,
+            base::string16(text_attributes).find(L"text-underline-type:"));
   // For compatibility with Firefox, spelling attributes should also be
   // propagated to the parent of static text leaves.
   EXPECT_NE(base::string16::npos,
@@ -1811,16 +1800,15 @@ TEST_F(BrowserAccessibilityTest, TestTextAttributesInContentEditables) {
   EXPECT_EQ(3, end_offset);
   EXPECT_NE(base::string16::npos,
             base::string16(text_attributes).find(L"font-family:Helvetica"));
-  EXPECT_NE(base::string16::npos,
-            base::string16(text_attributes).find(L"font-weight:normal"));
-  EXPECT_NE(base::string16::npos,
-            base::string16(text_attributes).find(L"font-style:normal"));
+  EXPECT_EQ(base::string16::npos,
+            base::string16(text_attributes).find(L"font-weight:"));
+  EXPECT_EQ(base::string16::npos,
+            base::string16(text_attributes).find(L"font-style:"));
   EXPECT_NE(
       base::string16::npos,
       base::string16(text_attributes).find(L"text-underline-style:solid"));
-  EXPECT_NE(
-      base::string16::npos,
-      base::string16(text_attributes).find(L"text-underline-type:single"));
+  EXPECT_EQ(base::string16::npos,
+            base::string16(text_attributes).find(L"text-underline-type:"));
   EXPECT_NE(base::string16::npos,
             base::string16(text_attributes).find(L"invalid:spelling"));
   text_attributes.Reset();
@@ -1834,14 +1822,13 @@ TEST_F(BrowserAccessibilityTest, TestTextAttributesInContentEditables) {
     EXPECT_EQ(15, end_offset);
     base::string16 attributes(text_attributes);
     EXPECT_NE(base::string16::npos, attributes.find(L"font-family:Helvetica"));
-    EXPECT_NE(base::string16::npos, attributes.find(L"font-weight:normal"));
-    EXPECT_NE(base::string16::npos, attributes.find(L"font-style:normal"));
-    EXPECT_NE(
+    EXPECT_EQ(base::string16::npos, attributes.find(L"font-weight:"));
+    EXPECT_EQ(base::string16::npos, attributes.find(L"font-style:"));
+    EXPECT_EQ(
         base::string16::npos,
-        base::string16(text_attributes).find(L"text-underline-style:none"));
-    EXPECT_NE(
-        base::string16::npos,
-        base::string16(text_attributes).find(L"text-underline-type:none"));
+        base::string16(text_attributes).find(L"text-underline-style:solid"));
+    EXPECT_EQ(base::string16::npos,
+              base::string16(text_attributes).find(L"text-underline-type:"));
     EXPECT_EQ(base::string16::npos, attributes.find(L"invalid:spelling"));
     text_attributes.Reset();
   }
@@ -1869,14 +1856,14 @@ TEST_F(BrowserAccessibilityTest, TestTextAttributesInContentEditables) {
   EXPECT_EQ(7, end_offset);
   EXPECT_NE(base::string16::npos,
             base::string16(text_attributes).find(L"font-family:Helvetica"));
-  EXPECT_NE(base::string16::npos,
-            base::string16(text_attributes).find(L"font-weight:normal"));
-  EXPECT_NE(base::string16::npos,
-            base::string16(text_attributes).find(L"font-style:normal"));
-  EXPECT_NE(base::string16::npos,
-            base::string16(text_attributes).find(L"text-underline-style:none"));
-  EXPECT_NE(base::string16::npos,
-            base::string16(text_attributes).find(L"text-underline-type:none"));
+  EXPECT_EQ(base::string16::npos,
+            base::string16(text_attributes).find(L"font-weight:"));
+  EXPECT_EQ(base::string16::npos,
+            base::string16(text_attributes).find(L"font-style:"));
+  EXPECT_EQ(base::string16::npos,
+            base::string16(text_attributes).find(L"text-underline-style:"));
+  EXPECT_EQ(base::string16::npos,
+            base::string16(text_attributes).find(L"text-underline-type:"));
   EXPECT_EQ(base::string16::npos,
             base::string16(text_attributes).find(L"invalid:spelling"));
   text_attributes.Reset();
@@ -1965,11 +1952,9 @@ TEST_F(BrowserAccessibilityTest, TestExistingMisspellingsInSimpleTextFields) {
   for (LONG offset = 0; offset < value1_length; ++offset) {
     hr = ax_combo_box->GetCOM()->get_attributes(
         offset, &start_offset, &end_offset, text_attributes.Receive());
-    EXPECT_EQ(S_OK, hr);
+    EXPECT_EQ(S_FALSE, hr);
     EXPECT_EQ(0, start_offset);
     EXPECT_EQ(value1_length, end_offset);
-    EXPECT_EQ(base::string16::npos,
-              base::string16(text_attributes).find(L"invalid:spelling"));
     text_attributes.Reset();
   }
 
@@ -1990,11 +1975,9 @@ TEST_F(BrowserAccessibilityTest, TestExistingMisspellingsInSimpleTextFields) {
        ++offset) {
     hr = ax_combo_box->GetCOM()->get_attributes(
         offset, &start_offset, &end_offset, text_attributes.Receive());
-    EXPECT_EQ(S_OK, hr);
+    EXPECT_EQ(S_FALSE, hr);
     EXPECT_EQ(value1_length + 4, start_offset);
     EXPECT_EQ(combo_box_value_length, end_offset);
-    EXPECT_EQ(base::string16::npos,
-              base::string16(text_attributes).find(L"invalid:spelling"));
     text_attributes.Reset();
   }
 
@@ -2068,11 +2051,9 @@ TEST_F(BrowserAccessibilityTest, TestNewMisspellingsInSimpleTextFields) {
   for (LONG offset = 0; offset < combo_box_value_length; ++offset) {
     hr = ax_combo_box->GetCOM()->get_attributes(
         offset, &start_offset, &end_offset, text_attributes.Receive());
-    EXPECT_EQ(S_OK, hr);
+    EXPECT_EQ(S_FALSE, hr);
     EXPECT_EQ(0, start_offset);
     EXPECT_EQ(combo_box_value_length, end_offset);
-    EXPECT_EQ(base::string16::npos,
-              base::string16(text_attributes).find(L"invalid:spelling"));
     text_attributes.Reset();
   }
 
@@ -2095,11 +2076,9 @@ TEST_F(BrowserAccessibilityTest, TestNewMisspellingsInSimpleTextFields) {
   for (LONG offset = 0; offset < value1_length; ++offset) {
     hr = ax_combo_box->GetCOM()->get_attributes(
         offset, &start_offset, &end_offset, text_attributes.Receive());
-    EXPECT_EQ(S_OK, hr);
+    EXPECT_EQ(S_FALSE, hr);
     EXPECT_EQ(0, start_offset);
     EXPECT_EQ(value1_length, end_offset);
-    EXPECT_EQ(base::string16::npos,
-              base::string16(text_attributes).find(L"invalid:spelling"));
     text_attributes.Reset();
   }
 
@@ -2120,11 +2099,9 @@ TEST_F(BrowserAccessibilityTest, TestNewMisspellingsInSimpleTextFields) {
        ++offset) {
     hr = ax_combo_box->GetCOM()->get_attributes(
         offset, &start_offset, &end_offset, text_attributes.Receive());
-    EXPECT_EQ(S_OK, hr);
+    EXPECT_EQ(S_FALSE, hr);
     EXPECT_EQ(value1_length + 4, start_offset);
     EXPECT_EQ(combo_box_value_length, end_offset);
-    EXPECT_EQ(base::string16::npos,
-              base::string16(text_attributes).find(L"invalid:spelling"));
     text_attributes.Reset();
   }
 
@@ -2504,12 +2481,10 @@ TEST_F(BrowserAccessibilityTest, TestIAccessible2Relations) {
   std::vector<int32_t> labelledby_ids = {3};
   child1.AddIntListAttribute(ax::mojom::IntListAttribute::kLabelledbyIds,
                              labelledby_ids);
-  AXEventNotificationDetails event;
-  event.event_type = ax::mojom::Event::kAriaAttributeChanged;
-  event.update.nodes.push_back(child1);
-  event.id = child1.id;
-  std::vector<AXEventNotificationDetails> events = {event};
-  manager->OnAccessibilityEvents(events);
+  AXEventNotificationDetails event_bundle;
+  event_bundle.updates.resize(1);
+  event_bundle.updates[0].nodes.push_back(child1);
+  manager->OnAccessibilityEvents(event_bundle);
 
   EXPECT_HRESULT_SUCCEEDED(ax_child1->GetCOM()->get_nRelations(&n_relations));
   EXPECT_EQ(2, n_relations);

@@ -54,6 +54,7 @@ class ReportingNetworkChangeObserverTest : public ReportingTestBase {
   const GURL kUrl_ = GURL("https://origin/path");
   const url::Origin kOrigin_ = url::Origin::Create(kUrl_);
   const GURL kEndpoint_ = GURL("https://endpoint/");
+  const std::string kUserAgent_ = "Mozilla/1.0";
   const std::string kGroup_ = "group";
   const std::string kType_ = "default";
 };
@@ -64,8 +65,8 @@ TEST_F(ReportingNetworkChangeObserverTest, ClearNothing) {
   new_policy.persist_clients_across_network_changes = true;
   UsePolicy(new_policy);
 
-  cache()->AddReport(kUrl_, kGroup_, kType_,
-                     std::make_unique<base::DictionaryValue>(),
+  cache()->AddReport(kUrl_, kUserAgent_, kGroup_, kType_,
+                     std::make_unique<base::DictionaryValue>(), 0,
                      tick_clock()->NowTicks(), 0);
   SetClient();
   ASSERT_EQ(1u, report_count());
@@ -83,8 +84,8 @@ TEST_F(ReportingNetworkChangeObserverTest, ClearReports) {
   new_policy.persist_clients_across_network_changes = true;
   UsePolicy(new_policy);
 
-  cache()->AddReport(kUrl_, kGroup_, kType_,
-                     std::make_unique<base::DictionaryValue>(),
+  cache()->AddReport(kUrl_, kUserAgent_, kGroup_, kType_,
+                     std::make_unique<base::DictionaryValue>(), 0,
                      tick_clock()->NowTicks(), 0);
   SetClient();
   ASSERT_EQ(1u, report_count());
@@ -102,8 +103,8 @@ TEST_F(ReportingNetworkChangeObserverTest, ClearClients) {
   new_policy.persist_clients_across_network_changes = false;
   UsePolicy(new_policy);
 
-  cache()->AddReport(kUrl_, kGroup_, kType_,
-                     std::make_unique<base::DictionaryValue>(),
+  cache()->AddReport(kUrl_, kUserAgent_, kGroup_, kType_,
+                     std::make_unique<base::DictionaryValue>(), 0,
                      tick_clock()->NowTicks(), 0);
   SetClient();
   ASSERT_EQ(1u, report_count());
@@ -121,8 +122,8 @@ TEST_F(ReportingNetworkChangeObserverTest, ClearReportsAndClients) {
   new_policy.persist_clients_across_network_changes = false;
   UsePolicy(new_policy);
 
-  cache()->AddReport(kUrl_, kGroup_, kType_,
-                     std::make_unique<base::DictionaryValue>(),
+  cache()->AddReport(kUrl_, kUserAgent_, kGroup_, kType_,
+                     std::make_unique<base::DictionaryValue>(), 0,
                      tick_clock()->NowTicks(), 0);
   SetClient();
   ASSERT_EQ(1u, report_count());

@@ -9,15 +9,19 @@
 #include <utility>
 
 #include "base/bind.h"
+#include "base/feature_list.h"
 #include "base/location.h"
 #include "base/memory/scoped_refptr.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/sequenced_task_runner.h"
 #include "base/strings/pattern.h"
 #include "base/strings/string16.h"
+#include "base/synchronization/lock.h"
 #include "base/threading/sequenced_task_runner_handle.h"
 #include "base/win/scoped_variant.h"
 #include "chrome/browser/win/automation_controller.h"
 #include "chrome/browser/win/ui_automation_util.h"
+#include "chrome/common/chrome_features.h"
 
 namespace {
 
@@ -42,6 +46,7 @@ void ConfigureCacheRequest(IUIAutomationCacheRequest* cache_request) {
   cache_request->AddProperty(UIA_AutomationIdPropertyId);
   cache_request->AddProperty(UIA_NamePropertyId);
   cache_request->AddProperty(UIA_ClassNamePropertyId);
+  cache_request->AddPattern(UIA_InvokePatternId);
 }
 
 // Helper function to get the parent element with class name "Flyout". Used to
@@ -122,15 +127,27 @@ class SettingsAppMonitor::AutomationControllerDelegate
                            IUIAutomationElement* sender) const override;
 
  private:
+  // Invokes the |browser_button| if the Win10AcceleratedDefaultBrowserFlow
+  // feature is enabled.
+  void MaybeInvokeChooser(IUIAutomationElement* browser_button) const;
+
   // The task runner on which the SettingsAppMonitor lives.
   const scoped_refptr<base::SequencedTaskRunner> monitor_runner_;
 
   // Only used to post callbacks to |monitor_runner_|;
   const base::WeakPtr<SettingsAppMonitor> monitor_;
 
+  // Protect against concurrent accesses to |last_focused_element_|.
+  mutable base::Lock last_focused_element_lock_;
+
   // State to suppress duplicate "focus changed" events.
-  // Only accessed by OnFocusChangedEvent().
   mutable ElementType last_focused_element_;
+
+  // Protect against concurrent accesses to |browser_chooser_invoked_|.
+  mutable base::Lock browser_chooser_invoked_lock_;
+
+  // The browser chooser must only be invoked once.
+  mutable bool browser_chooser_invoked_;
 
   DISALLOW_COPY_AND_ASSIGN(AutomationControllerDelegate);
 };
@@ -140,7 +157,8 @@ SettingsAppMonitor::AutomationControllerDelegate::AutomationControllerDelegate(
     base::WeakPtr<SettingsAppMonitor> monitor)
     : monitor_runner_(monitor_runner),
       monitor_(std::move(monitor)),
-      last_focused_element_(ElementType::UNKNOWN) {}
+      last_focused_element_(ElementType::UNKNOWN),
+      browser_chooser_invoked_(false) {}
 
 SettingsAppMonitor::AutomationControllerDelegate::
     ~AutomationControllerDelegate() = default;
@@ -195,13 +213,17 @@ void SettingsAppMonitor::AutomationControllerDelegate::OnAutomationEvent(
 void SettingsAppMonitor::AutomationControllerDelegate::OnFocusChangedEvent(
     IUIAutomation* automation,
     IUIAutomationElement* sender) const {
-  // Duplicate focus changed events are suppressed.
   ElementType element_type = DetectElementType(automation, sender);
-  if (last_focused_element_ == element_type)
-    return;
-  last_focused_element_ = element_type;
+  {
+    // Duplicate focus changed events are suppressed.
+    base::AutoLock auto_lock(last_focused_element_lock_);
+    if (last_focused_element_ == element_type)
+      return;
+    last_focused_element_ = element_type;
+  }
 
   if (element_type == ElementType::DEFAULT_BROWSER) {
+    MaybeInvokeChooser(sender);
     monitor_runner_->PostTask(
         FROM_HERE, base::BindOnce(&SettingsAppMonitor::OnAppFocused, monitor_));
   } else if (element_type == ElementType::CHECK_IT_OUT) {
@@ -209,6 +231,30 @@ void SettingsAppMonitor::AutomationControllerDelegate::OnFocusChangedEvent(
         FROM_HERE,
         base::BindOnce(&SettingsAppMonitor::OnPromoFocused, monitor_));
   }
+}
+
+void SettingsAppMonitor::AutomationControllerDelegate::MaybeInvokeChooser(
+    IUIAutomationElement* browser_button) const {
+  if (!base::FeatureList::IsEnabled(
+          features::kWin10AcceleratedDefaultBrowserFlow)) {
+    return;
+  }
+
+  {
+    // Only invoke the browser chooser once.
+    base::AutoLock auto_lock(browser_chooser_invoked_lock_);
+    if (browser_chooser_invoked_)
+      return;
+    browser_chooser_invoked_ = true;
+  }
+
+  // Invoke the dialog and record whether it was successful.
+  Microsoft::WRL::ComPtr<IUIAutomationInvokePattern> invoke_pattern;
+  bool succeeded = SUCCEEDED(browser_button->GetCachedPatternAs(
+                       UIA_InvokePatternId, IID_PPV_ARGS(&invoke_pattern))) &&
+                   invoke_pattern && SUCCEEDED(invoke_pattern->Invoke());
+
+  UMA_HISTOGRAM_BOOLEAN("DefaultBrowser.Win10ChooserInvoked", succeeded);
 }
 
 SettingsAppMonitor::SettingsAppMonitor(Delegate* delegate)

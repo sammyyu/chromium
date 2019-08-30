@@ -14,11 +14,12 @@
 
 import("../build/crashpad_buildconfig.gni")
 
+if (crashpad_is_in_chromium) {
+  import("//build/config/sanitizers/sanitizers.gni")
+}
+
 declare_args() {
-  if (crashpad_is_linux) {
-    # Whether the libcurl-based HTTPTransport implementation should be built.
-    enable_http_transport_libcurl = true
-  }
+  use_boringssl_for_http_transport_socket = crashpad_is_fuchsia
 }
 
 if (crashpad_is_mac) {
@@ -107,6 +108,8 @@ static_library("util") {
     "misc/pdb_structures.h",
     "misc/random_string.cc",
     "misc/random_string.h",
+    "misc/range_set.cc",
+    "misc/range_set.h",
     "misc/reinterpret_bytes.cc",
     "misc/reinterpret_bytes.h",
     "misc/scoped_forbid_return.cc",
@@ -160,7 +163,7 @@ static_library("util") {
     "thread/worker_thread.h",
   ]
 
-  if (crashpad_is_posix) {
+  if (crashpad_is_posix || crashpad_is_fuchsia) {
     sources += [
       "file/directory_reader_posix.cc",
       "file/file_io_posix.cc",
@@ -251,15 +254,28 @@ static_library("util") {
     sources += get_target_outputs(":mig")
   }
 
-  if (crashpad_is_linux) {
-    if (enable_http_transport_libcurl) {
-      sources += [ "net/http_transport_libcurl.cc" ]
-    } else {
-      sources += [ "net/http_transport_none.cc" ]
+  deps = []
+
+  if (crashpad_is_linux || crashpad_is_fuchsia) {
+    sources += [ "net/http_transport_socket.cc" ]
+    if (use_boringssl_for_http_transport_socket) {
+      defines = [ "CRASHPAD_USE_BORINGSSL" ]
+
+      if (crashpad_is_in_fuchsia) {
+        deps += [ "//third_party/boringssl" ]
+      } else {
+        libs = [
+          "crypto",
+          "ssl",
+        ]
+      }
     }
+  } else if (crashpad_is_android) {
+    sources += [ "net/http_transport_none.cc" ]
   }
 
   if (crashpad_is_linux || crashpad_is_android) {
+    set_sources_assignment_filter([])
     sources += [
       "linux/address_types.h",
       "linux/auxiliary_vector.cc",
@@ -269,6 +285,7 @@ static_library("util") {
       "linux/direct_ptrace_connection.h",
       "linux/exception_handler_client.cc",
       "linux/exception_handler_client.h",
+      "linux/exception_handler_protocol.cc",
       "linux/exception_handler_protocol.h",
       "linux/exception_information.h",
       "linux/memory_map.cc",
@@ -387,8 +404,13 @@ static_library("util") {
 
   if (crashpad_is_fuchsia) {
     sources += [
+      "fuchsia/koid_utilities.cc",
+      "fuchsia/koid_utilities.h",
+      "fuchsia/scoped_task_suspend.cc",
+      "fuchsia/scoped_task_suspend.h",
+      "fuchsia/system_exception_port_key.h",
+      "misc/capture_context_fuchsia.S",
       "misc/paths_fuchsia.cc",
-      "net/http_transport_none.cc",
       "process/process_memory_fuchsia.cc",
       "process/process_memory_fuchsia.h",
     ]
@@ -403,7 +425,7 @@ static_library("util") {
     "../compat",
   ]
 
-  deps = [
+  deps += [
     "../third_party/mini_chromium:base",
     "../third_party/zlib",
   ]
@@ -417,10 +439,6 @@ static_library("util") {
     ]
     deps += [ ":mig" ]
     include_dirs += [ "$root_build_dir/gen" ]
-  }
-
-  if (crashpad_is_linux && enable_http_transport_libcurl) {
-    libs = [ "curl" ]
   }
 
   if (crashpad_is_win) {
@@ -442,6 +460,58 @@ static_library("util") {
   }
 }
 
+if (use_boringssl_for_http_transport_socket) {
+  action("generate_test_server_key") {
+    script = "net/generate_test_server_key.py"
+    outputs = [
+      "$root_out_dir/crashpad_util_test_cert.pem",
+      "$root_out_dir/crashpad_util_test_key.pem",
+    ]
+    data = outputs
+  }
+}
+
+if (!crashpad_is_android) {
+  crashpad_executable("http_transport_test_server") {
+    testonly = true
+    sources = [
+      "net/http_transport_test_server.cc",
+    ]
+
+    deps = [
+      ":util",
+      "../third_party/cpp-httplib",
+      "../third_party/mini_chromium:base",
+      "../third_party/zlib",
+      "../tools:tool_support",
+    ]
+
+    if (crashpad_is_standalone) {
+      remove_configs = [ "//third_party/mini_chromium/mini_chromium/build:Wexit_time_destructors" ]
+    }
+
+    if (crashpad_is_win) {
+      libs = [ "ws2_32.lib" ]
+    }
+
+    if (use_boringssl_for_http_transport_socket) {
+      data_deps = [
+        ":generate_test_server_key",
+      ]
+      defines = [ "CRASHPAD_USE_BORINGSSL" ]
+
+      if (crashpad_is_in_fuchsia) {
+        deps += [ "//third_party/boringssl" ]
+      } else {
+        libs = [
+          "crypto",
+          "ssl",
+        ]
+      }
+    }
+  }
+}
+
 source_set("util_test") {
   testonly = true
 
@@ -453,6 +523,7 @@ source_set("util_test") {
     "file/filesystem_test.cc",
     "file/string_file_test.cc",
     "misc/arraysize_unsafe_test.cc",
+    "misc/capture_context_test.cc",
     "misc/capture_context_test_util.h",
     "misc/clock_test.cc",
     "misc/from_pointer_cast_test.cc",
@@ -460,6 +531,7 @@ source_set("util_test") {
     "misc/initialization_state_test.cc",
     "misc/paths_test.cc",
     "misc/random_string_test.cc",
+    "misc/range_set_test.cc",
     "misc/reinterpret_bytes_test.cc",
     "misc/scoped_forbid_return_test.cc",
     "misc/time_test.cc",
@@ -487,31 +559,12 @@ source_set("util_test") {
     "thread/worker_thread_test.cc",
   ]
 
-  if (!crashpad_is_fuchsia) {
-    sources += [
-      # No NativeCPUContext defined for Fuchsia yet.
-      # https://crashpad.chromium.org/bug/196.
-      "misc/capture_context_test.cc",
-    ]
-  }
-
-  if (!crashpad_is_android && !crashpad_is_fuchsia &&
-      (!crashpad_is_linux || enable_http_transport_libcurl)) {
-    # Android and Fuchsia will each require an HTTPTransport implementation
-    # (libcurl isn’t in either’s SDK) and a solution to
-    # http_transport_test_server.py, because Python isn’t available on either.
-    # The latter could be ported to non-Python, or the test server could run on
-    # the build host with a method to forward requests from the device to the
-    # host.
-    #
-    # Linux optionally compiles in a libcurl-based HTTPTransport, but since curl
-    # isn't in a base Debian sysroot (which is what Chromium builds against),
-    # maintain an option to exclude that, for now.
-    # https://crashpad.chromium.org/bug/220.
+  if (!crashpad_is_android) {
+    # Android requires an HTTPTransport implementation.
     sources += [ "net/http_transport_test.cc" ]
   }
 
-  if (crashpad_is_posix) {
+  if (crashpad_is_posix || crashpad_is_fuchsia) {
     if (!crashpad_is_fuchsia) {
       sources += [
         "posix/process_info_test.cc",
@@ -548,6 +601,7 @@ source_set("util_test") {
   }
 
   if (crashpad_is_linux || crashpad_is_android) {
+    set_sources_assignment_filter([])
     sources += [
       "linux/auxiliary_vector_test.cc",
       "linux/memory_map_test.cc",
@@ -557,6 +611,10 @@ source_set("util_test") {
       "linux/scoped_ptrace_attach_test.cc",
       "misc/capture_context_test_util_linux.cc",
     ]
+  }
+
+  if (crashpad_is_fuchsia) {
+    sources += [ "misc/capture_context_test_util_fuchsia.cc" ]
   }
 
   if (crashpad_is_linux || crashpad_is_android || crashpad_is_fuchsia) {
@@ -582,10 +640,16 @@ source_set("util_test") {
       "win/scoped_process_suspend_test.cc",
       "win/session_end_watcher_test.cc",
     ]
+
+    if (crashpad_is_in_chromium) {
+      if (is_asan && is_component_build) {
+        # TODO(crbug.com/856174): Re-enable these once Windows ASan is fixed.
+        sources -= [ "stdlib/string_number_conversion_test.cc" ]
+      }
+    }
   }
 
   data = [
-    "net/http_transport_test_server.py",
     "net/testdata/",
   ]
 
@@ -600,6 +664,16 @@ source_set("util_test") {
     "../third_party/zlib",
   ]
 
+  if (!crashpad_is_android) {
+    data_deps = [
+      ":http_transport_test_server",
+    ]
+
+    if (use_boringssl_for_http_transport_socket) {
+      defines = [ "CRASHPAD_USE_BORINGSSL" ]
+    }
+  }
+
   if (crashpad_is_mac) {
     libs = [ "Foundation.framework" ]
   }
@@ -609,7 +683,7 @@ source_set("util_test") {
       "rpcrt4.lib",
       "dbghelp.lib",
     ]
-    data_deps = [
+    data_deps += [
       ":crashpad_util_test_process_info_test_child",
       ":crashpad_util_test_safe_terminate_process_test_child",
     ]
@@ -617,14 +691,14 @@ source_set("util_test") {
 }
 
 if (crashpad_is_win) {
-  executable("crashpad_util_test_process_info_test_child") {
+  crashpad_executable("crashpad_util_test_process_info_test_child") {
     testonly = true
     sources = [
       "win/process_info_test_child.cc",
     ]
   }
 
-  executable("crashpad_util_test_safe_terminate_process_test_child") {
+  crashpad_executable("crashpad_util_test_safe_terminate_process_test_child") {
     testonly = true
     sources = [
       "win/safe_terminate_process_test_child.cc",

@@ -30,18 +30,6 @@ using GetProcessMitigationPolicyFunction =
     decltype(&GetProcessMitigationPolicy);
 using SetThreadInformationFunction = decltype(&SetThreadInformation);
 
-// Defines that will eventually be in winbase.h.
-// TODO(pennymac): Remove these once the toolchain updates sufficiently.  Values
-// confirmed by MS via email.
-#define TEMP_PROCESS_CREATION_MITIGATION_POLICY2_RESTRICT_INDIRECT_BRANCH_PREDICTION_ALWAYS_ON \
-  (0x00000001ui64 << 16)
-
-#if defined( \
-    PROCESS_CREATION_MITIGATION_POLICY2_RESTRICT_INDIRECT_BRANCH_PREDICTION_ALWAYS_ON)
-#error Remove local definition of \
-         TEMP_PROCESS_CREATION_MITIGATION_POLICY2_RESTRICT_INDIRECT_BRANCH_PREDICTION_ALWAYS_ON.
-#endif  // PROCESS_CREATION_MITIGATION_POLICY2_RESTRICT_INDIRECT_BRANCH_PREDICTION_ALWAYS_ON
-
 // Returns a two-element array of mitigation flags supported on this machine.
 // - This function is only useful on >= base::win::VERSION_WIN8.
 const ULONG64* GetSupportedMitigations() {
@@ -460,7 +448,7 @@ void ConvertProcessMitigationsToPolicy(MitigationFlags flags,
     //       Windows just does its best under the hood for the given hardware.
     if (flags & MITIGATION_RESTRICT_INDIRECT_BRANCH_PREDICTION) {
       *policy_value_2 |=
-          TEMP_PROCESS_CREATION_MITIGATION_POLICY2_RESTRICT_INDIRECT_BRANCH_PREDICTION_ALWAYS_ON;
+          PROCESS_CREATION_MITIGATION_POLICY2_RESTRICT_INDIRECT_BRANCH_PREDICTION_ALWAYS_ON;
     }
   }
 

@@ -6,15 +6,16 @@
 
 #import <Cocoa/Cocoa.h>
 
-#include "base/memory/ptr_util.h"
 #include "ui/base/cocoa/text_services_context_menu.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/models/simple_menu_model.h"
+#include "ui/base/resource/resource_bundle.h"
 #include "ui/gfx/decorated_text.h"
 #import "ui/gfx/decorated_text_mac.h"
+#include "ui/resources/grit/ui_resources.h"
 #include "ui/strings/grit/ui_strings.h"
 #include "ui/views/controls/textfield/textfield.h"
-#include "ui/views/view.h"
+#include "ui/views/controls/views_text_services_context_menu_base.h"
 #include "ui/views/widget/widget.h"
 
 namespace views {
@@ -25,21 +26,21 @@ namespace {
 // text service items in the context menu. The items include Speech, Look Up
 // and BiDi.
 class ViewsTextServicesContextMenuMac
-    : public ViewsTextServicesContextMenu,
+    : public ViewsTextServicesContextMenuBase,
       public ui::TextServicesContextMenu::Delegate {
  public:
   ViewsTextServicesContextMenuMac(ui::SimpleMenuModel* menu, Textfield* client)
-      : text_services_menu_(this), client_(client) {
-    // The menu index for "Look Up".
-    constexpr int kLookupMenuIndex = 0;
-
+      : ViewsTextServicesContextMenuBase(menu, client),
+        text_services_menu_(this) {
+    // Insert the "Look up" item in the first position.
     base::string16 text = GetSelectedText();
     if (!text.empty()) {
+      menu->InsertSeparatorAt(0, ui::NORMAL_SEPARATOR);
       menu->InsertItemAt(
-          kLookupMenuIndex, IDS_CONTENT_CONTEXT_LOOK_UP,
+          0, IDS_CONTENT_CONTEXT_LOOK_UP,
           l10n_util::GetStringFUTF16(IDS_CONTENT_CONTEXT_LOOK_UP, text));
-      menu->InsertSeparatorAt(kLookupMenuIndex + 1, ui::NORMAL_SEPARATOR);
     }
+
     text_services_menu_.AppendToContextMenu(menu);
     text_services_menu_.AppendEditableItems(menu);
   }
@@ -48,27 +49,42 @@ class ViewsTextServicesContextMenuMac
 
   // ViewsTextServicesContextMenu:
   bool SupportsCommand(int command_id) const override {
-    return command_id == IDS_CONTENT_CONTEXT_LOOK_UP;
-  }
-
-  bool IsCommandIdChecked(int command_id) const override {
-    DCHECK_EQ(IDS_CONTENT_CONTEXT_LOOK_UP, command_id);
-    return false;
+    return text_services_menu_.SupportsCommand(command_id) ||
+           command_id == IDS_CONTENT_CONTEXT_LOOK_UP ||
+           ViewsTextServicesContextMenuBase::SupportsCommand(command_id);
   }
 
   bool IsCommandIdEnabled(int command_id) const override {
-    DCHECK_EQ(IDS_CONTENT_CONTEXT_LOOK_UP, command_id);
-    return true;
+    if (text_services_menu_.SupportsCommand(command_id))
+      return text_services_menu_.IsCommandIdEnabled(command_id);
+
+    switch (command_id) {
+      case IDS_CONTENT_CONTEXT_LOOK_UP:
+        return true;
+
+      default:
+        return ViewsTextServicesContextMenuBase::IsCommandIdEnabled(command_id);
+    }
   }
 
   void ExecuteCommand(int command_id) override {
-    DCHECK_EQ(IDS_CONTENT_CONTEXT_LOOK_UP, command_id);
-    LookUpInDictionary();
+    switch (command_id) {
+      case IDS_CONTENT_CONTEXT_LOOK_UP:
+        LookUpInDictionary();
+        break;
+
+      default:
+        ViewsTextServicesContextMenuBase::ExecuteCommand(command_id);
+        break;
+    }
   }
 
   // TextServicesContextMenu::Delegate:
   base::string16 GetSelectedText() const override {
-    return client_->GetSelectedText();
+    if (client()->GetTextInputType() == ui::TEXT_INPUT_TYPE_PASSWORD)
+      return base::string16();
+
+    return client()->GetSelectedText();
   }
 
   bool IsTextDirectionEnabled(
@@ -79,7 +95,7 @@ class ViewsTextServicesContextMenuMac
   bool IsTextDirectionChecked(
       base::i18n::TextDirection direction) const override {
     return direction != base::i18n::UNKNOWN_DIRECTION &&
-           client_->GetTextDirection() == direction;
+           client()->GetTextDirection() == direction;
   }
 
   void UpdateTextDirection(base::i18n::TextDirection direction) override {
@@ -88,7 +104,7 @@ class ViewsTextServicesContextMenuMac
     base::i18n::TextDirection text_direction =
         direction == base::i18n::LEFT_TO_RIGHT ? base::i18n::LEFT_TO_RIGHT
                                                : base::i18n::RIGHT_TO_LEFT;
-    client_->ChangeTextDirectionAndLayoutAlignment(text_direction);
+    client()->ChangeTextDirectionAndLayoutAlignment(text_direction);
   }
 
  private:
@@ -96,10 +112,10 @@ class ViewsTextServicesContextMenuMac
   void LookUpInDictionary() {
     gfx::Point baseline_point;
     gfx::DecoratedText text;
-    if (client_->GetWordLookupDataFromSelection(&text, &baseline_point)) {
-      Widget* widget = client_->GetWidget();
+    if (client()->GetWordLookupDataFromSelection(&text, &baseline_point)) {
+      Widget* widget = client()->GetWidget();
       gfx::NativeView view = widget->GetNativeView();
-      views::View::ConvertPointToTarget(client_, widget->GetRootView(),
+      views::View::ConvertPointToTarget(client(), widget->GetRootView(),
                                         &baseline_point);
 
       NSPoint lookup_point = NSMakePoint(
@@ -112,9 +128,6 @@ class ViewsTextServicesContextMenuMac
 
   // Appends and handles the text service menu.
   ui::TextServicesContextMenu text_services_menu_;
-
-  // The view associated with the menu. Weak. Owns |this|.
-  Textfield* client_;
 
   DISALLOW_COPY_AND_ASSIGN(ViewsTextServicesContextMenuMac);
 };

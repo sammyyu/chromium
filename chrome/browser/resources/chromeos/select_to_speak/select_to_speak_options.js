@@ -37,13 +37,6 @@ SelectToSpeakOptionsPage.prototype = {
             select.disabled = true;
           }
         });
-    this.syncCheckboxControlToPref_('readAfterClose', 'readAfterClose');
-    chrome.commandLinePrivate.hasSwitch(
-        'enable-experimental-accessibility-features',
-        (experimentalFeaturesEnabled) => {
-          let behaviorSection = document.getElementById('behavior');
-          behaviorSection.hidden = !experimentalFeaturesEnabled;
-        });
     this.setUpHighlightListener_();
     chrome.metricsPrivate.recordUserAction(
         'Accessibility.CrosSelectToSpeak.LoadSettings');
@@ -96,6 +89,13 @@ SelectToSpeakOptionsPage.prototype = {
       voices.forEach(function(voice) {
         if (!voice.voiceName)
           return;
+        if (!voice.eventTypes.includes('start') ||
+            !voice.eventTypes.includes('end') ||
+            !voice.eventTypes.includes('word') ||
+            !voice.eventTypes.includes('cancelled')) {
+          // Required event types for Select-to-Speak.
+          return;
+        }
         var option = document.createElement('option');
         option.voiceName = voice.voiceName;
         option.innerText = option.voiceName;

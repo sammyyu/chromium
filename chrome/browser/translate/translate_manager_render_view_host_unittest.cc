@@ -13,11 +13,11 @@
 #include "base/command_line.h"
 #include "base/macros.h"
 #include "base/run_loop.h"
+#include "base/scoped_observer.h"
 #include "base/stl_util.h"
 #include "base/strings/stringprintf.h"
 #include "build/build_config.h"
 #include "chrome/app/chrome_command_ids.h"
-#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/extensions/test_extension_system.h"
 #include "chrome/browser/infobars/infobar_service.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu_test_util.h"
@@ -34,6 +34,7 @@
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/infobars/core/infobar.h"
+#include "components/infobars/core/infobar_manager.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_service.h"
 #include "components/translate/content/browser/content_translate_driver.h"
@@ -52,6 +53,7 @@
 #include "content/public/browser/navigation_entry.h"
 #include "content/public/browser/notification_details.h"
 #include "content/public/browser/notification_registrar.h"
+#include "content/public/browser/notification_types.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/url_constants.h"
@@ -63,8 +65,10 @@
 #include "net/url_request/url_fetcher_delegate.h"
 #include "net/url_request/url_request_status.h"
 #include "net/url_request/url_request_test_util.h"
+#include "services/network/public/cpp/weak_wrapper_shared_url_loader_factory.h"
+#include "services/network/test/test_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/WebKit/public/web/WebContextMenuData.h"
+#include "third_party/blink/public/web/web_context_menu_data.h"
 #include "url/gurl.h"
 
 namespace {
@@ -207,12 +211,16 @@ class NavEntryCommittedObserver : public content::NotificationObserver {
 
 class TranslateManagerRenderViewHostTest
     : public ChromeRenderViewHostTestHarness,
-      public content::NotificationObserver {
+      public infobars::InfoBarManager::Observer {
  public:
   TranslateManagerRenderViewHostTest()
       : pref_callback_(
             base::Bind(&TranslateManagerRenderViewHostTest::OnPreferenceChanged,
-                       base::Unretained(this))) {}
+                       base::Unretained(this))),
+        test_shared_loader_factory_(
+            base::MakeRefCounted<network::WeakWrapperSharedURLLoaderFactory>(
+                &test_url_loader_factory_)),
+        infobar_observer_(this) {}
 
 #if !defined(USE_AURA)
   // Ensure that we are testing under the bubble UI.
@@ -301,8 +309,7 @@ class TranslateManagerRenderViewHostTest
     details.adopted_language = lang;
     ChromeTranslateClient::FromWebContents(web_contents())
         ->translate_driver()
-        .RegisterPage(fake_page_.BindToNewPagePtr(), details,
-                      page_translatable);
+        .OnPageReady(fake_page_.BindToNewPagePtr(), details, page_translatable);
   }
 
   void SimulateOnPageTranslated(const std::string& source_lang,
@@ -434,7 +441,7 @@ class TranslateManagerRenderViewHostTest
     params.spellcheck_enabled = false;
     params.is_editable = false;
     params.page_url =
-        web_contents()->GetController().GetActiveEntry()->GetURL();
+        web_contents()->GetController().GetLastCommittedEntry()->GetURL();
 #if defined(OS_MACOSX)
     params.writing_direction_default = 0;
     params.writing_direction_left_to_right = 0;
@@ -445,19 +452,18 @@ class TranslateManagerRenderViewHostTest
                                          params);
   }
 
-  virtual void Observe(int type,
-                       const content::NotificationSource& source,
-                       const content::NotificationDetails& details) {
-    DCHECK_EQ(chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REMOVED, type);
-    removed_infobars_.insert(
-        content::Details<infobars::InfoBar::RemovedDetails>(
-            details)->first->delegate());
+  void OnInfoBarRemoved(infobars::InfoBar* infobar, bool animate) override {
+    removed_infobars_.insert(infobar->delegate());
+  }
+
+  void OnManagerShuttingDown(infobars::InfoBarManager* manager) override {
+    infobar_observer_.Remove(manager);
   }
 
   MOCK_METHOD1(OnPreferenceChanged, void(const std::string&));
 
  protected:
-  virtual void SetUp() {
+  void SetUp() override {
     // Setup the test environment, including the threads and message loops. This
     // must be done before base::ThreadTaskRunnerHandle::Get() is called when
     // setting up the net::TestURLRequestContextGetter below.
@@ -471,8 +477,7 @@ class TranslateManagerRenderViewHostTest
         translate::TranslateDownloadManager::GetInstance();
     download_manager->ClearTranslateScriptForTesting();
     download_manager->SetTranslateScriptExpirationDelay(60 * 60 * 1000);
-    download_manager->set_request_context(new net::TestURLRequestContextGetter(
-        base::ThreadTaskRunnerHandle::Get()));
+    download_manager->set_url_loader_factory(test_shared_loader_factory_);
 
     InfoBarService::CreateForWebContents(web_contents());
     ChromeTranslateClient::CreateForWebContents(web_contents());
@@ -480,38 +485,31 @@ class TranslateManagerRenderViewHostTest
         ->translate_driver()
         .set_translate_max_reload_attempts(0);
 
-    notification_registrar_.Add(
-        this,
-        chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REMOVED,
-        content::Source<InfoBarService>(infobar_service()));
+    infobar_observer_.Add(infobar_service());
   }
 
-  virtual void TearDown() {
-    notification_registrar_.Remove(
-        this,
-        chrome::NOTIFICATION_TAB_CONTENTS_INFOBAR_REMOVED,
-        content::Source<InfoBarService>(infobar_service()));
+  void TearDown() override {
+    infobar_observer_.Remove(infobar_service());
 
     ChromeRenderViewHostTestHarness::TearDown();
     TranslateService::ShutdownForTesting();
   }
 
   void SimulateTranslateScriptURLFetch(bool success) {
-    net::TestURLFetcher* fetcher = url_fetcher_factory_.GetFetcherByID(
-        translate::TranslateScript::kFetcherId);
-    ASSERT_TRUE(fetcher);
-    net::Error error = success ? net::OK : net::ERR_FAILED;
-    fetcher->set_url(fetcher->GetOriginalURL());
-    fetcher->set_status(net::URLRequestStatus::FromError(error));
-    fetcher->set_response_code(success ? 200 : 500);
-    fetcher->delegate()->OnURLFetchComplete(fetcher);
+    GURL url = translate::TranslateDownloadManager::GetInstance()
+                   ->script()
+                   ->GetTranslateScriptURL();
+    test_url_loader_factory_.AddResponse(
+        url.spec(), std::string(),
+        success ? net::HTTP_OK : net::HTTP_INTERNAL_SERVER_ERROR);
+    base::RunLoop().RunUntilIdle();
+
+    test_url_loader_factory_.ClearResponses();
   }
 
   void SimulateSupportedLanguagesURLFetch(
       bool success,
       const std::vector<std::string>& languages) {
-    net::Error error = success ? net::OK : net::ERR_FAILED;
-
     std::string data;
     if (success) {
       data = base::StringPrintf(
@@ -526,14 +524,17 @@ class TranslateManagerRenderViewHostTest
       }
       data += "}}";
     }
-    net::TestURLFetcher* fetcher = url_fetcher_factory_.GetFetcherByID(
-        translate::TranslateLanguageList::kFetcherId);
-    ASSERT_TRUE(fetcher != NULL);
-    fetcher->set_url(fetcher->GetOriginalURL());
-    fetcher->set_status(net::URLRequestStatus::FromError(error));
-    fetcher->set_response_code(success ? 200 : 500);
-    fetcher->SetResponseString(data);
-    fetcher->delegate()->OnURLFetchComplete(fetcher);
+    GURL url = translate::TranslateDownloadManager::GetInstance()
+                   ->language_list()
+                   ->LanguageFetchURLForTesting();
+    EXPECT_TRUE(test_url_loader_factory_.IsPending(url.spec()));
+    test_url_loader_factory_.AddResponse(
+        url.spec(), data,
+        success ? net::HTTP_OK : net::HTTP_INTERNAL_SERVER_ERROR);
+    EXPECT_FALSE(test_url_loader_factory_.IsPending(url.spec()));
+    base::RunLoop().RunUntilIdle();
+
+    test_url_loader_factory_.ClearResponses();
   }
 
   void SetPrefObserverExpectation(const char* path) {
@@ -543,8 +544,8 @@ class TranslateManagerRenderViewHostTest
   PrefChangeRegistrar::NamedChangeCallback pref_callback_;
 
  private:
-  content::NotificationRegistrar notification_registrar_;
-  net::TestURLFetcherFactory url_fetcher_factory_;
+  network::TestURLLoaderFactory test_url_loader_factory_;
+  scoped_refptr<network::SharedURLLoaderFactory> test_shared_loader_factory_;
 
   // The infobars that have been removed.
   // WARNING: the pointers point to deleted objects, use only for comparison.
@@ -552,6 +553,9 @@ class TranslateManagerRenderViewHostTest
 
   std::unique_ptr<MockTranslateBubbleFactory> bubble_factory_;
   FakePageImpl fake_page_;
+
+  ScopedObserver<infobars::InfoBarManager, infobars::InfoBarManager::Observer>
+      infobar_observer_;
 
   DISALLOW_COPY_AND_ASSIGN(TranslateManagerRenderViewHostTest);
 };
@@ -1698,8 +1702,8 @@ TEST_F(TranslateManagerRenderViewHostTest, BubbleNormalTranslate) {
   EXPECT_EQ(TranslateBubbleModel::VIEW_STATE_TRANSLATING,
             bubble->GetViewState());
 
-  // Simulate the translate script being retrieved (it only needs to be done
-  // once in the test as it is cached).
+  // Set up a simulation of the translate script being retrieved (it only
+  // needs to be done once in the test as it is cached).
   SimulateTranslateScriptURLFetch(true);
 
   // Simulate the render notifying the translation has been done.

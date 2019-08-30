@@ -10,7 +10,6 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/logging.h"
-#include "base/memory/ptr_util.h"
 #include "base/numerics/safe_conversions.h"
 #include "skia/ext/image_operations.h"
 #include "ui/gfx/geometry/rect.h"
@@ -284,11 +283,11 @@ CursorRendererUndoer::CursorRendererUndoer() = default;
 
 CursorRendererUndoer::~CursorRendererUndoer() = default;
 
-CursorRendererUndoer::CursorRendererUndoer(CursorRendererUndoer&& other) =
-    default;
+CursorRendererUndoer::CursorRendererUndoer(
+    CursorRendererUndoer&& other) noexcept = default;
 
 CursorRendererUndoer& CursorRendererUndoer::operator=(
-    CursorRendererUndoer&& other) = default;
+    CursorRendererUndoer&& other) noexcept = default;
 
 namespace {
 

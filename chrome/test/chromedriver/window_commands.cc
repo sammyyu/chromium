@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "base/callback.h"
-#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -556,6 +555,28 @@ Status ExecuteRefresh(Session* session,
   if (status.IsError())
     return status;
   session->SwitchToTopFrame();
+  return Status(kOk);
+}
+
+Status ExecuteFreeze(Session* session,
+                     WebView* web_view,
+                     const base::DictionaryValue& params,
+                     std::unique_ptr<base::Value>* value,
+                     Timeout* timeout) {
+  timeout->SetDuration(session->page_load_timeout);
+  Status status = web_view->Freeze(timeout);
+  return status;
+}
+
+Status ExecuteResume(Session* session,
+                     WebView* web_view,
+                     const base::DictionaryValue& params,
+                     std::unique_ptr<base::Value>* value,
+                     Timeout* timeout) {
+  timeout->SetDuration(session->page_load_timeout);
+  Status status = web_view->Resume(timeout);
+  if (status.IsError())
+    return status;
   return Status(kOk);
 }
 

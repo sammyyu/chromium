@@ -5,6 +5,7 @@
 package org.chromium.chrome.browser.omnibox.geo;
 
 import static org.junit.Assert.assertEquals;
+import static org.junit.Assert.assertNotNull;
 import static org.junit.Assert.assertNull;
 import static org.mockito.Mockito.when;
 
@@ -106,7 +107,7 @@ public class GeolocationHeaderUnitTest {
         MockitoAnnotations.initMocks(this);
         GeolocationTracker.setLocationAgeForTesting(null);
         GeolocationHeader.setLocationSourceForTesting(
-                GeolocationHeader.LOCATION_SOURCE_HIGH_ACCURACY);
+                GeolocationHeader.LocationSource.HIGH_ACCURACY);
         GeolocationHeader.setAppPermissionGrantedForTesting(true);
         when(mTab.isIncognito()).thenReturn(false);
         sRefreshVisibleNetworksRequests = 0;
@@ -157,10 +158,13 @@ public class GeolocationHeaderUnitTest {
 
     @Test
     public void testEncodeProtoVisibleNetworksEmptyOrNull() {
-        VisibleNetworks visibleNetworks =
-                VisibleNetworks.create(null, null, new HashSet<>(), new HashSet<>());
-        assertNull(GeolocationHeader.encodeProtoVisibleNetworks(visibleNetworks));
         assertNull(GeolocationHeader.encodeProtoVisibleNetworks(null));
+        assertNull(GeolocationHeader.encodeProtoVisibleNetworks(
+                VisibleNetworks.create(null, null, null, null)));
+        assertNull(GeolocationHeader.encodeProtoVisibleNetworks(
+                VisibleNetworks.create(null, null, new HashSet<>(), new HashSet<>())));
+        assertNotNull(GeolocationHeader.encodeProtoVisibleNetworks(VisibleNetworks.create(
+                null, null, null, new HashSet<>(Arrays.asList(VISIBLE_CELL2)))));
     }
 
     @Test
@@ -199,7 +203,7 @@ public class GeolocationHeaderUnitTest {
     @Test
     public void testGetGeoHeaderOldLocationHighAccuracy() throws ProcessInitException {
         GeolocationHeader.setLocationSourceForTesting(
-                GeolocationHeader.LOCATION_SOURCE_HIGH_ACCURACY);
+                GeolocationHeader.LocationSource.HIGH_ACCURACY);
         // Visible networks should be included
         checkOldLocation(
                 "X-Geo: w " + ENCODED_PROTO_LOCATION + " w " + ENCODED_PROTO_VISIBLE_NETWORKS);
@@ -208,21 +212,21 @@ public class GeolocationHeaderUnitTest {
     @Test
     public void testGetGeoHeaderOldLocationBatterySaving() throws ProcessInitException {
         GeolocationHeader.setLocationSourceForTesting(
-                GeolocationHeader.LOCATION_SOURCE_BATTERY_SAVING);
+                GeolocationHeader.LocationSource.BATTERY_SAVING);
         checkOldLocation(
                 "X-Geo: w " + ENCODED_PROTO_LOCATION + " w " + ENCODED_PROTO_VISIBLE_NETWORKS);
     }
 
     @Test
     public void testGetGeoHeaderOldLocationGpsOnly() throws ProcessInitException {
-        GeolocationHeader.setLocationSourceForTesting(GeolocationHeader.LOCATION_SOURCE_GPS_ONLY);
+        GeolocationHeader.setLocationSourceForTesting(GeolocationHeader.LocationSource.GPS_ONLY);
         // In GPS only mode, networks should never be included.
         checkOldLocation("X-Geo: w " + ENCODED_PROTO_LOCATION);
     }
 
     @Test
     public void testGetGeoHeaderOldLocationLocationOff() throws ProcessInitException {
-        GeolocationHeader.setLocationSourceForTesting(GeolocationHeader.LOCATION_SOURCE_MASTER_OFF);
+        GeolocationHeader.setLocationSourceForTesting(GeolocationHeader.LocationSource.MASTER_OFF);
         // If the master switch is off, networks should never be included (old location might).
         checkOldLocation("X-Geo: w " + ENCODED_PROTO_LOCATION);
     }
@@ -230,7 +234,7 @@ public class GeolocationHeaderUnitTest {
     @Test
     public void testGetGeoHeaderOldLocationAppPermissionDenied() throws ProcessInitException {
         GeolocationHeader.setLocationSourceForTesting(
-                GeolocationHeader.LOCATION_SOURCE_HIGH_ACCURACY);
+                GeolocationHeader.LocationSource.HIGH_ACCURACY);
         GeolocationHeader.setAppPermissionGrantedForTesting(false);
         // Nothing should be included when app permission is missing.
         checkOldLocation(null);

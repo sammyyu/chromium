@@ -109,8 +109,12 @@ class InputMethodManagerImpl : public InputMethodManager,
     bool ReplaceEnabledInputMethods(
         const std::vector<std::string>& new_active_input_method_ids) override;
     bool SetAllowedInputMethods(
-        const std::vector<std::string>& new_allowed_input_method_ids) override;
+        const std::vector<std::string>& new_allowed_input_method_ids,
+        bool enable_allowed_input_methods) override;
     const std::vector<std::string>& GetAllowedInputMethods() override;
+    void EnableInputView() override;
+    void DisableInputView() override;
+    const GURL& GetInputViewUrl() const override;
 
     // ------------------------- Data members.
     Profile* const profile;
@@ -140,16 +144,24 @@ class InputMethodManagerImpl : public InputMethodManager,
     // True if the opt-in IME menu is activated.
     bool menu_activated;
 
+    // The URL of the input view of the active ime with parameters (e.g. layout,
+    // keyset).
+    GURL input_view_url;
+
    protected:
     friend base::RefCounted<chromeos::input_method::InputMethodManager::State>;
     ~StateImpl() override;
 
    private:
-    // Retruns true if the passed input method is allowed. By default, all input
+    // Returns true if the passed input method is allowed. By default, all input
     // methods are allowed. After SetAllowedKeyboardLayoutInputMethods was
     // called, the passed keyboard layout input methods are allowed and all
     // non-keyboard input methods remain to be allowed.
     bool IsInputMethodAllowed(const std::string& input_method_id) const;
+
+    // Returns the first hardware input method that is allowed or the first
+    // allowed input method, if no hardware input method is allowed.
+    std::string GetAllowedFallBackKeyboardLayout() const;
   };
 
   // Constructs an InputMethodManager instance. The client is responsible for
@@ -183,10 +195,12 @@ class InputMethodManagerImpl : public InputMethodManager,
       const std::string& engine_id,
       const std::vector<InputMethodManager::MenuItem>& items) override;
   void MaybeNotifyImeMenuActivationChanged() override;
-  void OverrideKeyboardUrlRef(const std::string& keyset) override;
+  void OverrideKeyboardKeyset(mojom::ImeKeyset keyset) override;
   void SetImeMenuFeatureEnabled(ImeMenuFeature feature, bool enabled) override;
   bool GetImeMenuFeatureEnabled(ImeMenuFeature feature) const override;
   void NotifyObserversImeExtraInputStateChange() override;
+  ui::InputMethodKeyboardController* GetInputMethodKeyboardController()
+      override;
 
   // chromeos::UserAddingScreen:
   void OnUserAddingStarted() override;

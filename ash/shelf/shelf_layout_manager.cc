@@ -11,7 +11,9 @@
 #include "ash/animation/animation_change_type.h"
 #include "ash/app_list/app_list_controller_impl.h"
 #include "ash/app_list/model/app_list_view_state.h"
-#include "ash/keyboard/keyboard_observer_register.h"
+#include "ash/app_list/views/app_list_view.h"
+#include "ash/public/cpp/app_list/app_list_constants.h"
+#include "ash/public/cpp/app_list/app_list_features.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/root_window_controller.h"
 #include "ash/screen_util.h"
@@ -26,15 +28,13 @@
 #include "ash/system/status_area_widget.h"
 #include "ash/wm/fullscreen_window_finder.h"
 #include "ash/wm/mru_window_tracker.h"
+#include "ash/wm/overview/window_selector_controller.h"
 #include "ash/wm/screen_pinning_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/window_state.h"
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/i18n/rtl.h"
-#include "ui/app_list/app_list_constants.h"
-#include "ui/app_list/app_list_features.h"
-#include "ui/app_list/views/app_list_view.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animation_observer.h"
@@ -141,6 +141,10 @@ bool ShelfLayoutManager::State::IsScreenLocked() const {
   return session_state == session_manager::SessionState::LOCKED;
 }
 
+bool ShelfLayoutManager::State::IsActiveSessionState() const {
+  return session_state == session_manager::SessionState::ACTIVE;
+}
+
 bool ShelfLayoutManager::State::Equals(const State& other) const {
   return other.visibility_state == visibility_state &&
          (visibility_state != SHELF_AUTO_HIDE ||
@@ -159,7 +163,6 @@ ShelfLayoutManager::ShelfLayoutManager(ShelfWidget* shelf_widget, Shelf* shelf)
       shelf_(shelf),
       is_background_blur_enabled_(
           app_list::features::IsBackgroundBlurEnabled()),
-      keyboard_observer_(this),
       scoped_session_observer_(this) {
   DCHECK(shelf_widget_);
   DCHECK(shelf_);
@@ -167,6 +170,7 @@ ShelfLayoutManager::ShelfLayoutManager(ShelfWidget* shelf_widget, Shelf* shelf)
   ShellPort::Get()->AddLockStateObserver(this);
   Shell::Get()->activation_client()->AddObserver(this);
   state_.session_state = Shell::Get()->session_controller()->GetSessionState();
+  keyboard::KeyboardController::Get()->AddObserver(this);
 }
 
 ShelfLayoutManager::~ShelfLayoutManager() {
@@ -175,6 +179,7 @@ ShelfLayoutManager::~ShelfLayoutManager() {
 
   for (auto& observer : observers_)
     observer.WillDeleteShelfLayoutManager();
+  keyboard::KeyboardController::Get()->RemoveObserver(this);
   Shell::Get()->RemoveShellObserver(this);
   ShellPort::Get()->RemoveLockStateObserver(this);
 }
@@ -242,12 +247,6 @@ ShelfVisibilityState ShelfLayoutManager::CalculateShelfVisibility() {
 }
 
 void ShelfLayoutManager::UpdateVisibilityState() {
-  // Shelf is not available before login.
-  // TODO(crbug.com/701157): Remove this when the login webui fake-shelf is
-  // replaced with views.
-  if (!Shell::Get()->session_controller()->IsActiveUserSessionStarted())
-    return;
-
   // Bail out early after shelf is destroyed.
   aura::Window* shelf_window = shelf_widget_->GetNativeWindow();
   if (in_shutdown_ || !shelf_window)
@@ -256,8 +255,8 @@ void ShelfLayoutManager::UpdateVisibilityState() {
   if (shelf_->ShouldHideOnSecondaryDisplay(state_.session_state)) {
     // Needed to hide system tray on secondary display.
     SetState(SHELF_HIDDEN);
-  } else if ((state_.IsScreenLocked() || state_.IsAddingSecondaryUser())) {
-    // Needed to show system tray on web UI lock screen.
+  } else if (!state_.IsActiveSessionState()) {
+    // Needed to show system tray in non active session state.
     SetState(SHELF_VISIBLE);
   } else if (Shell::Get()->screen_pinning_controller()->IsPinned()) {
     SetState(SHELF_HIDDEN);
@@ -441,14 +440,6 @@ void ShelfLayoutManager::OnPinnedStateChanged(aura::Window* pinned_window) {
   UpdateVisibilityState();
 }
 
-void ShelfLayoutManager::OnVirtualKeyboardStateChanged(
-    bool activated,
-    aura::Window* root_window) {
-  UpdateKeyboardObserverFromStateChanged(
-      activated, root_window, shelf_widget_->GetNativeWindow()->GetRootWindow(),
-      &keyboard_observer_);
-}
-
 void ShelfLayoutManager::OnAppListVisibilityChanged(bool shown,
                                                     aura::Window* root_window) {
   // Shell may be under destruction.
@@ -484,20 +475,16 @@ void ShelfLayoutManager::OnKeyboardAppearanceChanged(
   LayoutShelfAndUpdateBounds(change_work_area);
 }
 
-void ShelfLayoutManager::OnKeyboardAvailabilityChanged(
-    const bool is_available) {
+void ShelfLayoutManager::OnKeyboardVisibilityStateChanged(
+    const bool is_visible) {
   // On login screen if keyboard has been just hidden, update bounds just once
   // but ignore target_bounds.work_area_insets since shelf overlaps with login
   // window.
   if (Shell::Get()->session_controller()->IsUserSessionBlocked() &&
-      !is_available) {
+      !is_visible) {
     Shell::Get()->SetDisplayWorkAreaInsets(shelf_widget_->GetNativeWindow(),
                                            gfx::Insets());
   }
-}
-
-void ShelfLayoutManager::OnKeyboardClosed() {
-  keyboard_observer_.RemoveAll();
 }
 
 ShelfBackgroundType ShelfLayoutManager::GetShelfBackgroundType() const {
@@ -680,10 +667,18 @@ void ShelfLayoutManager::UpdateBoundsAndOpacity(
                               &status_bounds);
     status_widget->SetBounds(status_bounds);
 
-    // For crbug.com/622431, when the shelf alignment is BOTTOM_LOCKED, we
-    // don't set display work area, as it is not real user-set alignment.
-    if (!state_.IsScreenLocked() && change_work_area &&
-        shelf_->alignment() != SHELF_ALIGNMENT_BOTTOM_LOCKED) {
+    // Do not update the work area when the alignment changes to BOTTOM_LOCKED
+    // to prevent window movement when the screen is locked: crbug.com/622431
+    // The work area is initialized with BOTTOM_LOCKED insets to prevent window
+    // movement on async preference initialization in tests: crbug.com/834369
+    const display::Display display =
+        display::Screen::GetScreen()->GetDisplayNearestWindow(
+            shelf_widget_->GetNativeWindow());
+    bool in_overview =
+        Shell::Get()->window_selector_controller()->IsSelecting();
+    if (!in_overview && !state_.IsScreenLocked() && change_work_area &&
+        (shelf_->alignment() != SHELF_ALIGNMENT_BOTTOM_LOCKED ||
+         display.work_area() == display.bounds())) {
       gfx::Insets insets;
       // If user session is blocked (login to new user session or add user to
       // the existing session - multi-profile) then give 100% of work area only
@@ -915,8 +910,8 @@ gfx::Rect ShelfLayoutManager::GetAutoHideShowShelfRegionInScreen() const {
   else
     show_shelf_region_in_screen.set_width(kMaxAutoHideShowShelfRegionSize);
 
-  // TODO: Figure out if we need any special handling when the keyboard is
-  // visible.
+  // TODO(pkotwicz): Figure out if we need any special handling when the
+  // keyboard is visible.
   return show_shelf_region_in_screen;
 }
 
@@ -1131,7 +1126,7 @@ void ShelfLayoutManager::StartGestureDrag(
         display::Screen::GetScreen()
             ->GetDisplayNearestWindow(shelf_widget_->GetNativeWindow())
             .id(),
-        app_list::kSwipeFromShelf);
+        app_list::kSwipeFromShelf, gesture_in_screen.time_stamp());
     Shell::Get()->app_list_controller()->UpdateYPositionAndOpacity(
         shelf_bounds.y(), GetAppListBackgroundOpacityOnShelfOpacity());
     launcher_above_shelf_bottom_amount_ =
@@ -1299,6 +1294,15 @@ bool ShelfLayoutManager::CanStartFullscreenAppListDrag(
   // Swipes down on shelf should hide the shelf.
   if (scroll_y_hint >= 0)
     return false;
+
+  // In overview mode, app list for tablet mode is hidden temporarily and will
+  // be shown automatically after overview mode ends. So prevent opening it
+  // here.
+  if (Shell::Get()
+          ->app_list_controller()
+          ->IsHomeLauncherEnabledInTabletMode()) {
+    return false;
+  }
 
   return true;
 }

@@ -8,6 +8,7 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/no_destructor.h"
 #include "base/single_thread_task_runner.h"
+#include "base/task_scheduler/lazy_task_runner.h"
 #include "base/task_scheduler/post_task.h"
 #include "base/task_scheduler/single_thread_task_runner_thread_mode.h"
 #include "base/task_scheduler/task_traits.h"
@@ -15,7 +16,7 @@
 #include "content/public/browser/child_process_launcher_utils.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/sandboxed_process_launcher_delegate.h"
-#include "mojo/edk/embedder/platform_channel_pair.h"
+#include "mojo/public/cpp/platform/platform_channel.h"
 
 #if defined(OS_ANDROID)
 #include "content/browser/android/launcher_thread.h"
@@ -68,32 +69,27 @@ ChildProcessLauncherHelper::ChildProcessLauncherHelper(
     std::unique_ptr<SandboxedProcessLauncherDelegate> delegate,
     const base::WeakPtr<ChildProcessLauncher>& child_process_launcher,
     bool terminate_on_shutdown,
-    std::unique_ptr<mojo::edk::OutgoingBrokerClientInvitation>
-        broker_client_invitation,
-    const mojo::edk::ProcessErrorCallback& process_error_callback)
+    mojo::OutgoingInvitation mojo_invitation,
+    const mojo::ProcessErrorCallback& process_error_callback)
     : child_process_id_(child_process_id),
       client_thread_id_(client_thread_id),
       command_line_(std::move(command_line)),
       delegate_(std::move(delegate)),
       child_process_launcher_(child_process_launcher),
       terminate_on_shutdown_(terminate_on_shutdown),
-      broker_client_invitation_(std::move(broker_client_invitation)),
+      mojo_invitation_(std::move(mojo_invitation)),
       process_error_callback_(process_error_callback) {}
 
-ChildProcessLauncherHelper::~ChildProcessLauncherHelper() {
-}
+ChildProcessLauncherHelper::~ChildProcessLauncherHelper() = default;
 
 void ChildProcessLauncherHelper::StartLaunchOnClientThread() {
   DCHECK_CURRENTLY_ON(client_thread_id_);
 
   BeforeLaunchOnClientThread();
 
-  mojo_server_handle_ = PrepareMojoPipeHandlesOnClientThread();
-  if (!mojo_server_handle_.is_valid()) {
-    mojo::edk::PlatformChannelPair channel_pair;
-    mojo_server_handle_ = channel_pair.PassServerHandle();
-    mojo_client_handle_ = channel_pair.PassClientHandle();
-  }
+  mojo_named_channel_ = CreateNamedPlatformChannelOnClientThread();
+  if (!mojo_named_channel_)
+    mojo_channel_.emplace();
 
   GetProcessLauncherTaskRunner()->PostTask(
       FROM_HERE,
@@ -129,10 +125,8 @@ void ChildProcessLauncherHelper::LaunchOnLauncherThread() {
 void ChildProcessLauncherHelper::PostLaunchOnLauncherThread(
     ChildProcessLauncherHelper::Process process,
     int launch_result) {
-  // Release the client handle now that the process has been started (the pipe
-  // may not signal when the process dies otherwise and we would not detect the
-  // child process died).
-  mojo_client_handle_.reset();
+  if (mojo_channel_)
+    mojo_channel_->RemoteProcessLaunchAttempted();
 
   if (process.process.IsValid()) {
     RecordHistogramsOnLauncherThread(base::TimeTicks::Now() -
@@ -141,16 +135,20 @@ void ChildProcessLauncherHelper::PostLaunchOnLauncherThread(
 
   // Take ownership of the broker client invitation here so it's destroyed when
   // we go out of scope regardless of the outcome below.
-  std::unique_ptr<mojo::edk::OutgoingBrokerClientInvitation> invitation =
-      std::move(broker_client_invitation_);
+  mojo::OutgoingInvitation invitation = std::move(mojo_invitation_);
   if (process.process.IsValid()) {
     // Set up Mojo IPC to the new process.
-    DCHECK(invitation);
-    invitation->Send(
-        process.process.Handle(),
-        mojo::edk::ConnectionParams(mojo::edk::TransportProtocol::kLegacy,
-                                    std::move(mojo_server_handle_)),
-        process_error_callback_);
+    if (mojo_channel_) {
+      DCHECK(mojo_channel_->local_endpoint().is_valid());
+      mojo::OutgoingInvitation::Send(
+          std::move(invitation), process.process.Handle(),
+          mojo_channel_->TakeLocalEndpoint(), process_error_callback_);
+    } else {
+      DCHECK(mojo_named_channel_);
+      mojo::OutgoingInvitation::Send(
+          std::move(invitation), process.process.Handle(),
+          mojo_named_channel_->TakeServerEndpoint(), process_error_callback_);
+    }
   }
 
   BrowserThread::PostTask(
@@ -206,17 +204,17 @@ base::SingleThreadTaskRunner* GetProcessLauncherTaskRunner() {
   static base::NoDestructor<scoped_refptr<base::SingleThreadTaskRunner>>
       launcher_task_runner(
           android::LauncherThread::GetMessageLoop()->task_runner());
-#else   // defined(OS_ANDROID)
-  constexpr base::TaskTraits task_traits = {
-      base::MayBlock(), base::TaskPriority::USER_BLOCKING,
-      base::TaskShutdownBehavior::BLOCK_SHUTDOWN};
-  // TODO(wez): Investigates whether we could use SequencedTaskRunner on
-  // platforms other than Windows. http://crbug.com/820200.
-  static base::NoDestructor<scoped_refptr<base::SingleThreadTaskRunner>>
-      launcher_task_runner(base::CreateSingleThreadTaskRunnerWithTraits(
-          task_traits, base::SingleThreadTaskRunnerThreadMode::DEDICATED));
-#endif  // defined(OS_ANDROID)
   return (*launcher_task_runner).get();
+#else   // defined(OS_ANDROID)
+  // TODO(http://crbug.com/820200): Investigate whether we could use
+  // SequencedTaskRunner on platforms other than Windows.
+  static base::LazySingleThreadTaskRunner launcher_task_runner =
+      LAZY_SINGLE_THREAD_TASK_RUNNER_INITIALIZER(
+          base::TaskTraits({base::MayBlock(), base::TaskPriority::USER_BLOCKING,
+                            base::TaskShutdownBehavior::BLOCK_SHUTDOWN}),
+          base::SingleThreadTaskRunnerThreadMode::DEDICATED);
+  return launcher_task_runner.Get().get();
+#endif  // defined(OS_ANDROID)
 }
 
 // static

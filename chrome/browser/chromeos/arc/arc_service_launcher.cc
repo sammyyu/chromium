@@ -21,11 +21,13 @@
 #include "chrome/browser/chromeos/arc/enterprise/arc_enterprise_reporting_service.h"
 #include "chrome/browser/chromeos/arc/fileapi/arc_file_system_bridge.h"
 #include "chrome/browser/chromeos/arc/fileapi/arc_file_system_mounter.h"
+#include "chrome/browser/chromeos/arc/input_method_manager/arc_input_method_manager_service.h"
 #include "chrome/browser/chromeos/arc/intent_helper/arc_settings_service.h"
 #include "chrome/browser/chromeos/arc/kiosk/arc_kiosk_bridge.h"
 #include "chrome/browser/chromeos/arc/notification/arc_boot_error_notification.h"
 #include "chrome/browser/chromeos/arc/notification/arc_provision_notification_service.h"
 #include "chrome/browser/chromeos/arc/oemcrypto/arc_oemcrypto_bridge.h"
+#include "chrome/browser/chromeos/arc/pip/arc_pip_bridge.h"
 #include "chrome/browser/chromeos/arc/policy/arc_policy_bridge.h"
 #include "chrome/browser/chromeos/arc/policy/arc_policy_util.h"
 #include "chrome/browser/chromeos/arc/print/arc_print_service.h"
@@ -39,13 +41,16 @@
 #include "chrome/browser/chromeos/arc/voice_interaction/arc_voice_interaction_framework_service.h"
 #include "chrome/browser/chromeos/arc/wallpaper/arc_wallpaper_service.h"
 #include "chrome/browser/profiles/profile.h"
+#include "chrome/browser/ui/app_list/arc/arc_usb_host_permission_manager.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
+#include "components/arc/appfuse/arc_appfuse_bridge.h"
 #include "components/arc/arc_service_manager.h"
 #include "components/arc/arc_session.h"
 #include "components/arc/arc_session_runner.h"
 #include "components/arc/audio/arc_audio_bridge.h"
 #include "components/arc/clipboard/arc_clipboard_bridge.h"
 #include "components/arc/crash_collector/arc_crash_collector_bridge.h"
+#include "components/arc/disk_quota/arc_disk_quota_bridge.h"
 #include "components/arc/ime/arc_ime_service.h"
 #include "components/arc/intent_helper/arc_intent_helper_bridge.h"
 #include "components/arc/lock_screen/arc_lock_screen_bridge.h"
@@ -61,7 +66,6 @@
 #include "components/arc/volume_mounter/arc_volume_mounter_bridge.h"
 #include "components/arc/wake_lock/arc_wake_lock_bridge.h"
 #include "components/prefs/pref_member.h"
-#include "ui/arc/notification/arc_notification_manager.h"
 
 namespace arc {
 namespace {
@@ -135,6 +139,7 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   // Those services will be initialized lazily.
   // List in lexicographical order.
   ArcAccessibilityHelperBridge::GetForBrowserContext(profile);
+  ArcAppfuseBridge::GetForBrowserContext(profile);
   ArcAudioBridge::GetForBrowserContext(profile);
   ArcAuthService::GetForBrowserContext(profile);
   ArcBluetoothBridge::GetForBrowserContext(profile);
@@ -144,23 +149,22 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ArcCertStoreBridge::GetForBrowserContext(profile);
   ArcClipboardBridge::GetForBrowserContext(profile);
   ArcCrashCollectorBridge::GetForBrowserContext(profile);
+  ArcDiskQuotaBridge::GetForBrowserContext(profile);
   ArcDownloadsWatcherService::GetForBrowserContext(profile);
   ArcEnterpriseReportingService::GetForBrowserContext(profile);
   ArcFileSystemBridge::GetForBrowserContext(profile);
   ArcFileSystemMounter::GetForBrowserContext(profile);
   ArcImeService::GetForBrowserContext(profile);
+  ArcInputMethodManagerService::GetForBrowserContext(profile);
   ArcIntentHelperBridge::GetForBrowserContext(profile);
   ArcKioskBridge::GetForBrowserContext(profile);
   ArcLockScreenBridge::GetForBrowserContext(profile);
   ArcMetricsService::GetForBrowserContext(profile);
   ArcMidisBridge::GetForBrowserContext(profile);
   ArcNetHostImpl::GetForBrowserContext(profile);
-  // TODO(https://crbug.com/816441): Remove the callback workaround.
-  ArcNotificationManager::GetForBrowserContext(profile)
-      ->set_get_app_id_callback(
-          ArcAppListPrefs::Get(profile)->GetAppIdByPackageNameCallback());
   ArcObbMounterBridge::GetForBrowserContext(profile);
   ArcOemCryptoBridge::GetForBrowserContext(profile);
+  ArcPipBridge::GetForBrowserContext(profile);
   ArcPolicyBridge::GetForBrowserContext(profile);
   ArcPowerBridge::GetForBrowserContext(profile);
   ArcPrintService::GetForBrowserContext(profile);
@@ -173,6 +177,7 @@ void ArcServiceLauncher::OnPrimaryUserProfilePrepared(Profile* profile) {
   ArcTracingBridge::GetForBrowserContext(profile);
   ArcTtsService::GetForBrowserContext(profile);
   ArcUsbHostBridge::GetForBrowserContext(profile);
+  ArcUsbHostPermissionManager::GetForBrowserContext(profile);
   ArcUserSessionService::GetForBrowserContext(profile);
   ArcVoiceInteractionArcHomeService::GetForBrowserContext(profile);
   ArcVoiceInteractionFrameworkService::GetForBrowserContext(profile);

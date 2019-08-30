@@ -18,6 +18,16 @@ namespace remoting {
 // chromoting_extensions.proto.
 class ChromotingEvent {
  public:
+  enum class AuthMethod {
+    // Note that NOT_SET is only defined locally and should not be sent to the
+    // server.
+    NOT_SET = 0,
+    PIN = 1,
+    ACCESS_CODE = 2,
+    PINLESS = 3,
+    THIRD_PARTY = 4,
+  };
+
   enum class ConnectionError {
     NONE = 1,
     HOST_OFFLINE = 2,
@@ -78,6 +88,13 @@ class ChromotingEvent {
     CREATING_PLUGIN = 17,
   };
 
+  enum SessionEntryPoint {
+    CONNECT_BUTTON = 1,
+    RECONNECT_BUTTON = 2,
+    AUTO_RECONNECT_ON_CONNECTION_DROPPED = 3,
+    AUTO_RECONNECT_ON_HOST_OFFLINE = 4,
+  };
+
   enum class Type {
     SESSION_STATE = 1,
     CONNECTION_STATISTICS = 2,
@@ -90,6 +107,7 @@ class ChromotingEvent {
     SIGNAL_STRATEGY_PROGRESS = 9
   };
 
+  static const char kAuthMethodKey[];
   static const char kCaptureLatencyKey[];
   static const char kConnectionErrorKey[];
   static const char kConnectionTypeKey[];
@@ -112,6 +130,7 @@ class ChromotingEvent {
   static const char kRoleKey[];
   static const char kRoundtripLatencyKey[];
   static const char kSessionDurationKey[];
+  static const char kSessionEntryPointKey[];
   static const char kSessionIdKey[];
   static const char kSessionStateKey[];
   static const char kTypeKey[];
@@ -137,6 +156,10 @@ class ChromotingEvent {
   void SetEnum(const std::string& key, EnumType value) {
     SetInteger(key, static_cast<int>(value));
   }
+
+  // Returns true if the format of ChromotingEvent can be accepted by the
+  // telemetry server.
+  bool IsDataValid();
 
   // Adds fields of CPU type, OS type and OS version.
   void AddSystemInfo();

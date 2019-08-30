@@ -27,10 +27,8 @@ import org.chromium.chrome.browser.offlinepages.OfflinePageUtils;
 import org.chromium.chrome.browser.preferences.PrefServiceBridge;
 import org.chromium.chrome.browser.profiles.Profile;
 import org.chromium.chrome.browser.tab.Tab;
-import org.chromium.chrome.browser.tabmodel.TabModel;
 import org.chromium.chrome.browser.tabmodel.TabModel.TabLaunchType;
 import org.chromium.chrome.browser.tabmodel.TabModelSelector;
-import org.chromium.chrome.browser.tabmodel.TabModelUtils;
 import org.chromium.chrome.browser.tabmodel.document.TabDelegate;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.content_public.common.Referrer;
@@ -44,6 +42,8 @@ import org.chromium.ui.widget.Toast;
 public class SuggestionsNavigationDelegateImpl implements SuggestionsNavigationDelegate {
     private static final String CHROME_CONTENT_SUGGESTIONS_REFERRER =
             "https://www.googleapis.com/auth/chrome-content-suggestions";
+    private static final String CHROME_CONTEXTUAL_SUGGESTIONS_REFERRER =
+            "https://goto.google.com/explore-on-content-viewer";
     private static final String NEW_TAB_URL_HELP =
             "https://support.google.com/chrome/?p=new_tab";
 
@@ -113,14 +113,7 @@ public class SuggestionsNavigationDelegateImpl implements SuggestionsNavigationD
                     || windowOpenDisposition == WindowOpenDisposition.NEW_BACKGROUND_TAB;
             DownloadUtils.openFile(article.getAssetDownloadFile(),
                     article.getAssetDownloadMimeType(), article.getAssetDownloadGuid(), false, null,
-                    null, DownloadMetrics.NEW_TAP_PAGE);
-            return;
-        }
-
-        if (article.isRecentTab()) {
-            assert windowOpenDisposition == WindowOpenDisposition.CURRENT_TAB;
-            boolean success = openRecentTabSnippet(article);
-            assert success;
+                    null, DownloadMetrics.DownloadOpenSource.NEW_TAP_PAGE);
             return;
         }
 
@@ -154,6 +147,13 @@ public class SuggestionsNavigationDelegateImpl implements SuggestionsNavigationD
         if (article.mCategory == KnownCategories.ARTICLES) {
             loadUrlParams.setReferrer(new Referrer(CHROME_CONTENT_SUGGESTIONS_REFERRER,
                     WebReferrerPolicy.ALWAYS));
+        }
+
+        // Set appropriate referrer for contextual suggestions to distinguish them from navigation
+        // from a page.
+        if (article.mCategory == KnownCategories.CONTEXTUAL) {
+            loadUrlParams.setReferrer(
+                    new Referrer(CHROME_CONTEXTUAL_SUGGESTIONS_REFERRER, WebReferrerPolicy.ALWAYS));
         }
 
         Tab loadingTab = openUrl(windowOpenDisposition, loadUrlParams);
@@ -193,15 +193,6 @@ public class SuggestionsNavigationDelegateImpl implements SuggestionsNavigationD
         }
 
         return loadingTab;
-    }
-
-    private boolean openRecentTabSnippet(SnippetArticle article) {
-        TabModel tabModel = mTabModelSelector.getModel(false);
-        int tabId = article.getRecentTabId();
-        int tabIndex = TabModelUtils.getTabIndexById(tabModel, tabId);
-        if (tabIndex == TabModel.INVALID_TAB_INDEX) return false;
-        TabModelUtils.setIndex(tabModel, tabIndex);
-        return true;
     }
 
     private void openUrlInNewWindow(LoadUrlParams loadUrlParams) {

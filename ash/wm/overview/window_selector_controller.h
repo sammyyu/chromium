@@ -26,6 +26,10 @@ class ASH_EXPORT WindowSelectorController : public WindowSelectorDelegate {
   WindowSelectorController();
   ~WindowSelectorController() override;
 
+  // Amount of blur to apply on the wallpaper when we enter or exit overview
+  // mode.
+  static constexpr double kWallpaperBlurSigma = 10.f;
+
   // Returns true if selecting windows in an overview is enabled. This is false
   // at certain times, such as when the lock screen is visible.
   static bool CanSelect();
@@ -70,7 +74,13 @@ class ASH_EXPORT WindowSelectorController : public WindowSelectorDelegate {
   WindowSelector* window_selector() { return window_selector_.get(); }
 
  private:
+  class OverviewBlurController;
   friend class WindowSelectorTest;
+  FRIEND_TEST_ALL_PREFIXES(TabletModeControllerTest,
+                           DisplayDisconnectionDuringOverview);
+
+  // There is no need to blur or unblur the wallpaper for tests.
+  static void SetDoNotChangeWallpaperBlurForTests();
 
   // Dispatched when window selection begins.
   void OnSelectionStarted();
@@ -85,6 +95,10 @@ class ASH_EXPORT WindowSelectorController : public WindowSelectorDelegate {
 
   // If we are in middle of ending overview mode.
   bool is_shutting_down_ = false;
+
+  // Handles blurring of the wallpaper when entering or exiting overview mode.
+  // Animates the blurring if necessary.
+  std::unique_ptr<OverviewBlurController> overview_blur_controller_;
 
   DISALLOW_COPY_AND_ASSIGN(WindowSelectorController);
 };

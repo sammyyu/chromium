@@ -15,9 +15,9 @@
 #include "content/renderer/media/stream/media_stream_registry_interface.h"
 #include "media/base/bind_to_current_loop.h"
 #include "media/capture/video_capture_types.h"
-#include "third_party/WebKit/public/platform/WebMediaStream.h"
-#include "third_party/WebKit/public/platform/WebURL.h"
-#include "third_party/WebKit/public/web/WebMediaStreamRegistry.h"
+#include "third_party/blink/public/platform/web_media_stream.h"
+#include "third_party/blink/public/platform/web_url.h"
+#include "third_party/blink/public/web/web_media_stream_registry.h"
 #include "url/gurl.h"
 
 namespace content {
@@ -106,8 +106,8 @@ blink::WebMediaStreamTrack VideoTrackToPepperAdapter::GetFirstVideoTrack(
   }
 
   // Get the first video track from the stream.
-  blink::WebVector<blink::WebMediaStreamTrack> video_tracks;
-  stream.VideoTracks(video_tracks);
+  blink::WebVector<blink::WebMediaStreamTrack> video_tracks =
+      stream.VideoTracks();
   if (video_tracks.IsEmpty()) {
     LOG(ERROR) << "GetFirstVideoSource - no video tracks. url: " << url;
     return blink::WebMediaStreamTrack();

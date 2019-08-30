@@ -77,8 +77,8 @@ void WebDialogUIBase::HandleRenderFrameCreated(
   // Hook up the javascript function calls, also known as chrome.send("foo")
   // calls in the HTML, to the actual C++ functions.
   web_ui_->RegisterMessageCallback(
-      "dialogClose",
-      base::Bind(&WebDialogUIBase::OnDialogClosed, base::Unretained(this)));
+      "dialogClose", base::BindRepeating(&WebDialogUIBase::OnDialogClosed,
+                                         base::Unretained(this)));
 
   // Pass the arguments to the renderer supplied by the delegate.
   std::string dialog_args;
@@ -117,6 +117,17 @@ WebDialogUI::WebDialogUI(content::WebUI* web_ui)
 WebDialogUI::~WebDialogUI() = default;
 
 void WebDialogUI::RenderFrameCreated(RenderFrameHost* render_frame_host) {
+  HandleRenderFrameCreated(render_frame_host);
+}
+
+MojoWebDialogUI::MojoWebDialogUI(content::WebUI* web_ui)
+    : WebDialogUIBase(web_ui), MojoWebUIController(web_ui) {}
+
+MojoWebDialogUI::~MojoWebDialogUI() = default;
+
+void MojoWebDialogUI::RenderFrameCreated(
+    content::RenderFrameHost* render_frame_host) {
+  content::WebUIController::RenderFrameCreated(render_frame_host);
   HandleRenderFrameCreated(render_frame_host);
 }
 

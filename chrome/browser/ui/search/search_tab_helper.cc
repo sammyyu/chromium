@@ -14,10 +14,11 @@
 #include "chrome/browser/search/instant_service.h"
 #include "chrome/browser/search/instant_service_factory.h"
 #include "chrome/browser/search/search.h"
-#include "chrome/browser/signin/signin_manager_factory.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/sync/profile_sync_service_factory.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_window.h"
+#include "chrome/browser/ui/chrome_select_file_policy.h"
 #include "chrome/browser/ui/location_bar/location_bar.h"
 #include "chrome/browser/ui/omnibox/clipboard_utils.h"
 #include "chrome/browser/ui/search/ntp_user_data_logger.h"
@@ -31,7 +32,6 @@
 #include "components/omnibox/browser/omnibox_popup_model.h"
 #include "components/omnibox/browser/omnibox_view.h"
 #include "components/search/search.h"
-#include "components/signin/core/browser/signin_manager.h"
 #include "components/strings/grit/components_strings.h"
 #include "content/public/browser/navigation_details.h"
 #include "content/public/browser/navigation_entry.h"
@@ -42,6 +42,7 @@
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "google_apis/gaia/gaia_auth_util.h"
+#include "services/identity/public/cpp/identity_manager.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "url/gurl.h"
 
@@ -270,7 +271,7 @@ void SearchTabHelper::FocusOmnibox(OmniboxFocusState state) {
       // visual cue to users who really understand selection state about what
       // will happen if they start typing.
       omnibox_view->SelectAll(false);
-      omnibox_view->ShowImeIfNeeded();
+      omnibox_view->ShowVirtualKeyboardIfEnabled();
       break;
     case OMNIBOX_FOCUS_NONE:
       // Remove focus only if the popup is closed. This will prevent someone
@@ -342,14 +343,67 @@ void SearchTabHelper::PasteIntoOmnibox(const base::string16& text) {
 }
 
 bool SearchTabHelper::ChromeIdentityCheck(const base::string16& identity) {
-  SigninManagerBase* manager = SigninManagerFactory::GetForProfile(profile());
-  return manager &&
+  identity::IdentityManager* identity_manager =
+      IdentityManagerFactory::GetForProfile(profile());
+  return identity_manager &&
          gaia::AreEmailsSame(base::UTF16ToUTF8(identity),
-                             manager->GetAuthenticatedAccountInfo().email);
+                             identity_manager->GetPrimaryAccountInfo().email);
 }
 
 bool SearchTabHelper::HistorySyncCheck() {
   return IsHistorySyncEnabled(profile());
+}
+
+void SearchTabHelper::OnSetCustomBackgroundURL(const GURL& url) {
+  if (instant_service_)
+    instant_service_->SetCustomBackgroundURL(url);
+}
+
+void SearchTabHelper::OnSetCustomBackgroundURLWithAttributions(
+    const GURL& background_url,
+    const std::string& attribution_line_1,
+    const std::string& attribution_line_2,
+    const GURL& action_url) {
+  if (instant_service_) {
+    instant_service_->SetCustomBackgroundURLWithAttributions(
+        background_url, attribution_line_1, attribution_line_2, action_url);
+  }
+}
+
+void SearchTabHelper::FileSelected(const base::FilePath& path,
+                                   int index,
+                                   void* params) {
+  if (instant_service_)
+    instant_service_->SelectLocalBackgroundImage(path);
+
+  select_file_dialog_ = nullptr;
+}
+
+void SearchTabHelper::FileSelectionCanceled(void* params) {
+  select_file_dialog_ = nullptr;
+}
+
+void SearchTabHelper::OnSelectLocalBackgroundImage() {
+  if (select_file_dialog_)
+    return;
+
+  select_file_dialog_ = ui::SelectFileDialog::Create(
+      this, std::make_unique<ChromeSelectFilePolicy>(web_contents_));
+
+  const base::FilePath directory = profile()->last_selected_directory();
+
+  gfx::NativeWindow parent_window = web_contents_->GetTopLevelNativeWindow();
+
+  ui::SelectFileDialog::FileTypeInfo file_types;
+  file_types.allowed_paths = ui::SelectFileDialog::FileTypeInfo::NATIVE_PATH;
+  file_types.extensions.resize(2);
+  file_types.extensions[0].push_back(FILE_PATH_LITERAL("jpg"));
+  file_types.extensions[0].push_back(FILE_PATH_LITERAL("jpeg"));
+  file_types.extensions[1].push_back(FILE_PATH_LITERAL("png"));
+
+  select_file_dialog_->SelectFile(
+      ui::SelectFileDialog::SELECT_OPEN_FILE, base::string16(), directory,
+      &file_types, 0, base::FilePath::StringType(), parent_window, nullptr);
 }
 
 const OmniboxView* SearchTabHelper::GetOmniboxView() const {

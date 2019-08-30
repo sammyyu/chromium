@@ -24,6 +24,8 @@ namespace network {
 namespace mojom {
 class URLLoaderFactory;
 }
+class SharedURLLoaderFactory;
+class WeakWrapperSharedURLLoaderFactory;
 }  // namespace network
 
 namespace service_manager {
@@ -32,6 +34,7 @@ class Connector;
 
 namespace web {
 class CertificatePolicyCache;
+class NetworkContextOwner;
 class ServiceManagerConnection;
 class URLDataManagerIOS;
 class URLDataManagerIOSBackend;
@@ -62,6 +65,9 @@ class BrowserState : public base::SupportsUserData {
 
   // Returns a URLLoaderFactory that is backed by GetRequestContext.
   network::mojom::URLLoaderFactory* GetURLLoaderFactory();
+
+  // Like URLLoaderFactory, but wrapped inside SharedURLLoaderFactory
+  scoped_refptr<network::SharedURLLoaderFactory> GetSharedURLLoaderFactory();
 
   // Safely cast a base::SupportsUserData to a BrowserState. Returns nullptr
   // if |supports_user_data| is not a BrowserState.
@@ -100,7 +106,6 @@ class BrowserState : public base::SupportsUserData {
                          const base::FilePath& path);
 
  private:
-  class NetworkContextOwner;
   friend class URLDataManagerIOS;
   friend class URLRequestChromeJob;
 
@@ -111,6 +116,8 @@ class BrowserState : public base::SupportsUserData {
   URLDataManagerIOSBackend* GetURLDataManagerIOSBackendOnIOThread();
 
   network::mojom::URLLoaderFactoryPtr url_loader_factory_;
+  scoped_refptr<network::WeakWrapperSharedURLLoaderFactory>
+      shared_url_loader_factory_;
   network::mojom::NetworkContextPtr network_context_;
 
   // Owns the network::NetworkContext that backs |url_loader_factory_|. Created

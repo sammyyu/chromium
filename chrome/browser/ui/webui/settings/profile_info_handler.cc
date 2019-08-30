@@ -17,7 +17,7 @@
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/chromeos/profiles/profile_helper.h"
 #include "chrome/browser/ui/webui/chromeos/user_image_source.h"
-#include "components/signin/core/account_id/account_id.h"
+#include "components/account_id/account_id.h"
 #include "components/user_manager/user_manager.h"
 #include "content/public/browser/notification_service.h"
 #else
@@ -52,13 +52,14 @@ ProfileInfoHandler::~ProfileInfoHandler() {}
 
 void ProfileInfoHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
-      "getProfileInfo", base::Bind(&ProfileInfoHandler::HandleGetProfileInfo,
-                                   base::Unretained(this)));
+      "getProfileInfo",
+      base::BindRepeating(&ProfileInfoHandler::HandleGetProfileInfo,
+                          base::Unretained(this)));
 #if !defined(OS_CHROMEOS)
   web_ui()->RegisterMessageCallback(
       "getProfileStatsCount",
-      base::Bind(&ProfileInfoHandler::HandleGetProfileStats,
-                 base::Unretained(this)));
+      base::BindRepeating(&ProfileInfoHandler::HandleGetProfileStats,
+                          base::Unretained(this)));
 #endif
 }
 

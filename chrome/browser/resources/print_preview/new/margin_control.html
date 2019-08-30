@@ -1,8 +1,10 @@
 <link rel="import" href="chrome://resources/html/polymer.html">
 
+<link rel="import" href="../print_preview_utils.html">
 <link rel="import" href="../data/coordinate2d.html">
 <link rel="import" href="../data/margins.html">
 <link rel="import" href="../data/size.html">
+<link rel="import" href="input_behavior.html">
 
 <dom-module id="print-preview-margin-control">
   <template>
@@ -32,29 +34,21 @@
         padding: 0 8px;
       }
 
-      :host(.disabled) {
-        cursor: default;
-      }
-
-      .line {
+      #line {
         border: 1px dashed rgb(64, 128, 250);
       }
 
-      .disabled .line  {
-        border-color: gray;
-      }
-
-      :host([side=top]) .line,
-      :host([side=bottom]) .line {
+      :host([side=top]) #line,
+      :host([side=bottom]) #line {
         width: 100%;
       }
 
-      :host([side=left]) .line,
-      :host([side=right]) .line {
+      :host([side=left]) #line,
+      :host([side=right]) #line {
         height: 100%;
       }
 
-      .textbox {
+      #textbox {
         background-color: #2a2a2a;
         border: 1px solid #888;
         box-sizing: border-box;
@@ -68,32 +62,33 @@
         width: 60px;
       }
 
-      .textbox.invalid {
+      :host([invalid]) #textbox {
         background-color: rgb(193, 27, 23);
       }
 
-      :host([side=top]) .textbox {
+      :host([side=top]) #textbox {
         left: 50%;
         top: 8px;
       }
 
-      :host([side=right]) .textbox {
+      :host([side=right]) #textbox {
         right: 8px;
         top: 50%;
       }
 
-      :host([side=bottom]) .textbox {
+      :host([side=bottom]) #textbox {
         bottom: 8px;
         right: 50%;
       }
 
-      :host([side=left]) .textbox {
+      :host([side=left]) #textbox {
         bottom: 50%;
         left: 8px;
       }
     </style>
-    <div class="line"></div>
-    <input class="textbox" aria-hidden$="[[invisible]]" type="text">
+    <div id="line"></div>
+    <input id="textbox" aria-hidden$="[[getAriaHidden_(invisible)]]" type="text"
+        disabled="[[invisible]]" on-blur="onBlur_" data-timeout-delay="1000">
   </template>
   <script src="margin_control.js"></script>
 </dom-module>

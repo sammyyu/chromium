@@ -324,27 +324,29 @@ public class PaymentRequestPaymentAppAndBasicCardWithModifiersTest {
                 new ServiceWorkerPaymentApp.Capabilities(alicepayNetworks, alicepayTypes)};
 
         PaymentAppFactory.getInstance().addAdditionalFactory((webContents, methodNames,
-                                                                     callback) -> {
+                                                                     mayCrawlUnused, callback) -> {
             ChromeActivity activity = ChromeActivity.fromWebContents(webContents);
             BitmapDrawable icon = new BitmapDrawable(activity.getResources(),
                     Bitmap.createBitmap(new int[] {Color.RED}, 1 /* width */, 1 /* height */,
                             Bitmap.Config.ARGB_8888));
 
             ServiceWorkerPaymentAppBridge.setCanMakePaymentForTesting(true);
-            callback.onPaymentAppCreated(new ServiceWorkerPaymentApp(webContents,
-                    0 /* registrationId */,
-                    UriUtils.parseUriFromString("https://bobpay.com") /* scope */,
-                    "BobPay" /* label */, "https://bobpay.com" /* sublabel*/,
-                    "https://bobpay.com" /* tertiarylabel */, icon /* icon */,
-                    bobpayMethodNames /* methodNames */, bobpayCapabilities /* capabilities */,
-                    new String[0] /* preferredRelatedApplicationIds */));
-            callback.onPaymentAppCreated(new ServiceWorkerPaymentApp(webContents,
-                    0 /* registrationId */,
-                    UriUtils.parseUriFromString("https://alicepay.com") /* scope */,
-                    "AlicePay" /* label */, "https://bobpay.com" /* sublabel*/,
-                    "https://alicepay.com" /* tertiarylabel */, icon /* icon */,
-                    alicepayMethodNames /* methodNames */, alicepayCapabilities /* capabilities */,
-                    new String[0] /* preferredRelatedApplicationIds */));
+            callback.onPaymentAppCreated(
+                    new ServiceWorkerPaymentApp(webContents, 0 /* registrationId */,
+                            UriUtils.parseUriFromString("https://bobpay.com") /* scope */,
+                            "BobPay" /* label */, "https://bobpay.com" /* sublabel*/,
+                            "https://bobpay.com" /* tertiarylabel */, icon /* icon */,
+                            bobpayMethodNames /* methodNames */, true /* explicitlyVerified */,
+                            bobpayCapabilities /* capabilities */,
+                            new String[0] /* preferredRelatedApplicationIds */));
+            callback.onPaymentAppCreated(
+                    new ServiceWorkerPaymentApp(webContents, 0 /* registrationId */,
+                            UriUtils.parseUriFromString("https://alicepay.com") /* scope */,
+                            "AlicePay" /* label */, "https://bobpay.com" /* sublabel*/,
+                            "https://alicepay.com" /* tertiarylabel */, icon /* icon */,
+                            alicepayMethodNames /* methodNames */, true /* explicitlyVerified */,
+                            alicepayCapabilities /* capabilities */,
+                            new String[0] /* preferredRelatedApplicationIds */));
             callback.onAllPaymentAppsCreated();
         });
         mPaymentRequestTestRule.triggerUIAndWait(

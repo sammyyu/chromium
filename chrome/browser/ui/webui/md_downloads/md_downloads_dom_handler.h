@@ -31,8 +31,6 @@ namespace download {
 class DownloadItem;
 }
 
-class Profile;
-
 // The handler for Javascript messages related to the "downloads" view,
 // also observes changes to the download manager.
 class MdDownloadsDOMHandler : public content::WebContentsObserver,
@@ -61,6 +59,10 @@ class MdDownloadsDOMHandler : public content::WebContentsObserver,
   // Callback for the "saveDangerous" message - specifies that the user
   // wishes to save a dangerous file.
   void HandleSaveDangerous(const base::ListValue* args);
+
+  // Callback for the "retryDownload" message - specifies that the user wishes
+  // to download an item again.
+  void HandleRetryDownload(const base::ListValue* args);
 
   // Callback for the "discardDangerous" message - specifies that the user
   // wishes to discard (remove) a dangerous file.
@@ -107,9 +109,6 @@ class MdDownloadsDOMHandler : public content::WebContentsObserver,
   // dangerous ones are immediately removed. Protected for testing.
   void RemoveDownloads(const DownloadVector& to_remove);
 
-  // Helper function to handle save download event.
-  void SaveDownload(download::DownloadItem* download);
-
  private:
   using IdSet = std::set<uint32_t>;
 
@@ -131,8 +130,7 @@ class MdDownloadsDOMHandler : public content::WebContentsObserver,
 
   // Conveys danger acceptance from the DownloadDangerPrompt to the
   // DownloadItem.
-  virtual void DangerPromptDone(int download_id,
-                                DownloadDangerPrompt::Action action);
+  void DangerPromptDone(int download_id, DownloadDangerPrompt::Action action);
 
   // Returns true if the records of any downloaded items are allowed (and able)
   // to be deleted.
@@ -147,6 +145,9 @@ class MdDownloadsDOMHandler : public content::WebContentsObserver,
   // Removes the download specified by an ID from JavaScript in |args|.
   void RemoveDownloadInArgs(const base::ListValue* args);
 
+  // Retry the download specified by an ID from JavaScript in |args|.
+  void RetryDownload(const base::ListValue* args);
+
   // Checks whether a download's file was removed from its original location.
   void CheckForRemovedFiles();
 
@@ -154,9 +155,6 @@ class MdDownloadsDOMHandler : public content::WebContentsObserver,
 
   // IDs of downloads to remove when this handler gets deleted.
   std::vector<IdSet> removals_;
-
-  // User profile that corresponds to this handler.
-  Profile* profile_ = nullptr;
 
   // Whether the render process has gone.
   bool render_process_gone_ = false;

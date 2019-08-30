@@ -11,10 +11,10 @@
 #include "content/renderer/media/stream/media_stream_video_track.h"
 #include "content/renderer/media/stream/mock_media_stream_video_source.h"
 #include "content/renderer/media/stream/video_track_adapter.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamSource.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
-#include "third_party/WebKit/public/platform/WebString.h"
-#include "third_party/WebKit/public/platform/WebVector.h"
+#include "third_party/blink/public/platform/web_media_stream_source.h"
+#include "third_party/blink/public/platform/web_media_stream_track.h"
+#include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/public/platform/web_vector.h"
 
 namespace content {
 
@@ -28,7 +28,7 @@ class MockCDQualityAudioSource : public MediaStreamAudioSource {
     SetFormat(media::AudioParameters(
         media::AudioParameters::AUDIO_PCM_LOW_LATENCY,
         media::CHANNEL_LAYOUT_STEREO,
-        media::AudioParameters::kAudioCDSampleRate, 16,
+        media::AudioParameters::kAudioCDSampleRate,
         media::AudioParameters::kAudioCDSampleRate / 100));
     SetDevice(MediaStreamDevice(
         MEDIA_DEVICE_AUDIO_CAPTURE, "mock_audio_device_id", "Mock audio device",

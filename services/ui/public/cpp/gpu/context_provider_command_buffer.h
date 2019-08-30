@@ -37,11 +37,11 @@ class TransferBuffer;
 namespace gles2 {
 class GLES2Implementation;
 class GLES2TraceImplementation;
-}
+}  // namespace gles2
 namespace raster {
 class RasterInterface;
-}
-}
+}  // namespace raster
+}  // namespace gpu
 
 namespace skia_bindings {
 class GrContextForGLES2Interface;
@@ -66,9 +66,9 @@ class ContextProviderCommandBuffer
       const GURL& active_url,
       bool automatic_flushes,
       bool support_locking,
+      bool support_grcontext,
       const gpu::SharedMemoryLimits& memory_limits,
       const gpu::ContextCreationAttribs& attributes,
-      ContextProviderCommandBuffer* shared_context_provider,
       command_buffer_metrics::ContextType type);
 
   gpu::CommandBufferProxyImpl* GetCommandBufferProxy();
@@ -85,7 +85,6 @@ class ContextProviderCommandBuffer
   gpu::ContextSupport* ContextSupport() override;
   class GrContext* GrContext() override;
   viz::ContextCacheController* CacheController() override;
-  void InvalidateGrContext(uint32_t state) override;
   base::Lock* GetLock() override;
   const gpu::Capabilities& ContextCapabilities() const override;
   const gpu::GpuFeatureInfo& GetGpuFeatureInfo() const override;
@@ -109,16 +108,6 @@ class ContextProviderCommandBuffer
   void OnLostContext();
 
  private:
-  struct SharedProviders : public base::RefCountedThreadSafe<SharedProviders> {
-    base::Lock lock;
-    std::vector<ContextProviderCommandBuffer*> list;
-
-    SharedProviders();
-
-   private:
-    friend class base::RefCountedThreadSafe<SharedProviders>;
-    ~SharedProviders();
-  };
   void CheckValidThreadOrLockAcquired() const {
 #if DCHECK_IS_ON()
     if (support_locking_) {
@@ -141,11 +130,11 @@ class ContextProviderCommandBuffer
   const GURL active_url_;
   const bool automatic_flushes_;
   const bool support_locking_;
+  const bool support_grcontext_;
   const gpu::SharedMemoryLimits memory_limits_;
   const gpu::ContextCreationAttribs attributes_;
   const command_buffer_metrics::ContextType context_type_;
 
-  scoped_refptr<SharedProviders> shared_providers_;
   scoped_refptr<gpu::GpuChannelHost> channel_;
   gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager_;
   scoped_refptr<base::SingleThreadTaskRunner> default_task_runner_;

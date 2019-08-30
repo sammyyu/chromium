@@ -5,7 +5,6 @@
 #include "services/video_capture/test/mock_device_test.h"
 
 #include "base/bind_helpers.h"
-#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "media/capture/video/video_capture_jpeg_decoder.h"
@@ -14,14 +13,6 @@
 using testing::_;
 using testing::Invoke;
 using testing::InvokeWithoutArgs;
-
-namespace {
-
-std::unique_ptr<media::VideoCaptureJpegDecoder> CreateJpegDecoder() {
-  return nullptr;
-}
-
-}  // anonymous namespace
 
 namespace video_capture {
 
@@ -41,7 +32,7 @@ void MockDeviceTest::SetUp() {
   mock_device_factory_adapter_ =
       std::make_unique<DeviceFactoryMediaToMojoAdapter>(
           ref_factory_.CreateRef(), std::move(video_capture_system),
-          base::Bind(CreateJpegDecoder));
+          base::DoNothing(), base::ThreadTaskRunnerHandle::Get());
 
   mock_factory_binding_ = std::make_unique<mojo::Binding<mojom::DeviceFactory>>(
       mock_device_factory_adapter_.get(), mojo::MakeRequest(&factory_));

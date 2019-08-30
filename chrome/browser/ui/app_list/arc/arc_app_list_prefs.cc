@@ -20,7 +20,6 @@
 #include "chrome/browser/chromeos/arc/policy/arc_policy_util.h"
 #include "chrome/browser/chromeos/login/session/user_session_manager.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/ui/app_list/app_list_service.h"
 #include "chrome/browser/ui/app_list/arc/arc_app_list_prefs_factory.h"
 #include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
 #include "chrome/browser/ui/app_list/arc/arc_package_syncable_service.h"
@@ -50,7 +49,6 @@ constexpr char kLastLaunchTime[] = "lastlaunchtime";
 constexpr char kLaunchable[] = "launchable";
 constexpr char kName[] = "name";
 constexpr char kNotificationsEnabled[] = "notifications_enabled";
-constexpr char kOrientationLock[] = "orientation_lock";
 constexpr char kPackageName[] = "package_name";
 constexpr char kPackageVersion[] = "package_version";
 constexpr char kSticky[] = "sticky";
@@ -214,24 +212,6 @@ base::FilePath ToIconPath(const base::FilePath& app_path,
   }
 }
 
-// Play Store app id was changed in the app launcher and now is unified with
-// shelf id. This renames legacy app info entry to the new id. This entry is in
-// local prefs and renaming won't affect other user's devices.
-// TODO(khmel): Remove this after few releases http://crbug.com/722675.
-void UpdatePlayStoreDictionary(PrefService* service) {
-  DictionaryPrefUpdate update(service, arc::prefs::kArcApps);
-  base::DictionaryValue* dict = update.Get();
-  std::unique_ptr<base::Value> play_store_dictionary;
-  if (!dict->Remove(arc::kLegacyPlayStoreAppId, &play_store_dictionary))
-    return;
-  if (!dict->HasKey(arc::kPlayStoreAppId)) {
-    DCHECK_EQ(play_store_dictionary->type(), base::Value::Type::DICTIONARY);
-    dict->SetWithoutPathExpansion(arc::kPlayStoreAppId,
-                                  std::move(play_store_dictionary));
-    VLOG(1) << "Play Store dictionary was updated from the legacy entry";
-  }
-}
-
 }  // namespace
 
 // static
@@ -265,7 +245,6 @@ std::string ArcAppListPrefs::GetAppId(const std::string& package_name,
   }
   const std::string input = package_name + "#" + activity;
   const std::string app_id = crx_file::id_util::GenerateId(input);
-  DCHECK_NE(app_id, arc::kLegacyPlayStoreAppId);
   return app_id;
 }
 
@@ -316,11 +295,16 @@ ArcAppListPrefs::ArcAppListPrefs(
     return;
 
   DCHECK(arc::IsArcAllowedForProfile(profile));
-  UpdatePlayStoreDictionary(prefs_);
 
   const std::vector<std::string> existing_app_ids = GetAppIds();
   tracked_apps_.insert(existing_app_ids.begin(), existing_app_ids.end());
   // Once default apps are ready OnDefaultAppsReady is called.
+
+  // Not always set in unit_tests
+  arc::ArcPolicyBridge* policy_bridge =
+      arc::ArcPolicyBridge::GetForBrowserContext(profile_);
+  if (policy_bridge)
+    policy_bridge->AddObserver(this);
 }
 
 ArcAppListPrefs::~ArcAppListPrefs() {
@@ -583,7 +567,6 @@ std::vector<std::string> ArcAppListPrefs::GetAppIdsNoArcEnabledCheck() const {
 
 std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetApp(
     const std::string& app_id) const {
-  DCHECK_NE(app_id, arc::kLegacyPlayStoreAppId);
   // Information for default app is available before ARC enabled.
   if ((!IsArcAlive() || !IsArcAndroidEnabledForProfile(profile_)) &&
       !default_apps_.HasApp(app_id))
@@ -604,7 +587,6 @@ std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetApp(
   bool notifications_enabled = true;
   bool shortcut = false;
   bool launchable = true;
-  int orientation_lock_value = 0;
   app->GetString(kName, &name);
   app->GetString(kPackageName, &package_name);
   app->GetString(kActivity, &activity);
@@ -614,7 +596,6 @@ std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetApp(
   app->GetBoolean(kNotificationsEnabled, &notifications_enabled);
   app->GetBoolean(kShortcut, &shortcut);
   app->GetBoolean(kLaunchable, &launchable);
-  app->GetInteger(kOrientationLock, &orientation_lock_value);
 
   DCHECK(!name.empty());
   DCHECK(!shortcut || activity.empty());
@@ -630,19 +611,14 @@ std::unique_ptr<ArcAppListPrefs::AppInfo> ArcAppListPrefs::GetApp(
   if (SetNotificationsEnabledDeferred(prefs_).Get(app_id, &deferred))
     notifications_enabled = deferred;
 
-  arc::mojom::OrientationLock orientation_lock =
-      static_cast<arc::mojom::OrientationLock>(orientation_lock_value);
-
   return std::make_unique<AppInfo>(
       name, package_name, activity, intent_uri, icon_resource_id,
       last_launch_time, GetInstallTime(app_id), sticky, notifications_enabled,
       ready_apps_.count(app_id) > 0,
-      launchable && arc::ShouldShowInLauncher(app_id), shortcut, launchable,
-      orientation_lock);
+      launchable && arc::ShouldShowInLauncher(app_id), shortcut, launchable);
 }
 
 bool ArcAppListPrefs::IsRegistered(const std::string& app_id) const {
-  DCHECK_NE(app_id, arc::kLegacyPlayStoreAppId);
   if ((!IsArcAlive() || !IsArcAndroidEnabledForProfile(profile_)) &&
       !default_apps_.HasApp(app_id))
     return false;
@@ -792,7 +768,6 @@ void ArcAppListPrefs::SetDefaultAppsFilterLevel() {
 
 void ArcAppListPrefs::OnDefaultAppsReady() {
   // Apply uninstalled packages now.
-
   const std::vector<std::string> uninstalled_package_names =
       GetPackagesFromPrefs(false /* check_arc_alive */, false /* installed */);
   for (const auto& uninstalled_package_name : uninstalled_package_names)
@@ -807,6 +782,19 @@ void ArcAppListPrefs::OnDefaultAppsReady() {
   StartPrefs();
 }
 
+void ArcAppListPrefs::OnPolicySent(const std::string& policy) {
+  // Update set of packages installed by policy.
+  packages_by_policy_ =
+      arc::policy_util::GetRequestedPackagesFromArcPolicy(policy);
+}
+
+void ArcAppListPrefs::Shutdown() {
+  arc::ArcPolicyBridge* policy_bridge =
+      arc::ArcPolicyBridge::GetForBrowserContext(profile_);
+  if (policy_bridge)
+    policy_bridge->RemoveObserver(this);
+}
+
 void ArcAppListPrefs::RegisterDefaultApps() {
   // Report default apps first, note, app_map includes uninstalled and filtered
   // out apps as well.
@@ -815,20 +803,26 @@ void ArcAppListPrefs::RegisterDefaultApps() {
     if (!default_apps_.HasApp(app_id))
       continue;
     // Skip already tracked app.
-    if (tracked_apps_.count(app_id))
+    if (tracked_apps_.count(app_id)) {
+      // Icon should be already taken from the cache. Play Store icon is loaded
+      // from internal resources.
+      if (ready_apps_.count(app_id) || app_id == arc::kPlayStoreAppId)
+        continue;
+      // Notify that icon is ready for default app.
+      for (auto& observer : observer_list_) {
+        for (ui::ScaleFactor scale_factor : ui::GetSupportedScaleFactors())
+          observer.OnAppIconUpdated(app_id, scale_factor);
+      }
       continue;
+    }
+
     const ArcDefaultAppList::AppInfo& app_info = *default_app.second.get();
-    AddAppAndShortcut(false /* app_ready */,
-                      app_info.name,
-                      app_info.package_name,
-                      app_info.activity,
+    AddAppAndShortcut(false /* app_ready */, app_info.name,
+                      app_info.package_name, app_info.activity,
                       std::string() /* intent_uri */,
-                      std::string() /* icon_resource_id */,
-                      false /* sticky */,
-                      false /* notifications_enabled */,
-                      false /* shortcut */,
-                      true /* launchable */,
-                      arc::mojom::OrientationLock::NONE);
+                      std::string() /* icon_resource_id */, false /* sticky */,
+                      false /* notifications_enabled */, false /* shortcut */,
+                      true /* launchable */);
   }
 }
 
@@ -909,28 +903,25 @@ void ArcAppListPrefs::HandleTaskCreated(const base::Optional<std::string>& name,
                       package_name, activity, std::string() /* intent_uri */,
                       std::string() /* icon_resource_id */, false /* sticky */,
                       false /* notifications_enabled */, false /* shortcut */,
-                      false /* launchable */,
-                      arc::mojom::OrientationLock::NONE);
+                      false /* launchable */);
   }
 }
 
-void ArcAppListPrefs::AddAppAndShortcut(
-    bool app_ready,
-    const std::string& name,
-    const std::string& package_name,
-    const std::string& activity,
-    const std::string& intent_uri,
-    const std::string& icon_resource_id,
-    const bool sticky,
-    const bool notifications_enabled,
-    const bool shortcut,
-    const bool launchable,
-    const arc::mojom::OrientationLock orientation_lock) {
+void ArcAppListPrefs::AddAppAndShortcut(bool app_ready,
+                                        const std::string& name,
+                                        const std::string& package_name,
+                                        const std::string& activity,
+                                        const std::string& intent_uri,
+                                        const std::string& icon_resource_id,
+                                        const bool sticky,
+                                        const bool notifications_enabled,
+                                        const bool shortcut,
+                                        const bool launchable) {
   const std::string app_id = shortcut ? GetAppId(package_name, intent_uri)
                                       : GetAppId(package_name, activity);
 
   // Do not add Play Store app for Public Session and Kiosk modes.
-  if (app_id == arc::kPlayStoreAppId && arc::IsRobotAccountMode())
+  if (app_id == arc::kPlayStoreAppId && arc::IsRobotOrOfflineDemoAccountMode())
     return;
 
   std::string updated_name = name;
@@ -960,11 +951,10 @@ void ArcAppListPrefs::AddAppAndShortcut(
   app_dict->SetBoolean(kNotificationsEnabled, notifications_enabled);
   app_dict->SetBoolean(kShortcut, shortcut);
   app_dict->SetBoolean(kLaunchable, launchable);
-  app_dict->SetInteger(kOrientationLock, static_cast<int>(orientation_lock));
 
   // Note the install time is the first time the Chrome OS sees the app, not the
   // actual install time in Android side.
-  if (GetInstallTime(app_id).is_null()) {
+  if (GetInstallTime(app_id).is_null() && NeedSetInstallTime(package_name)) {
     std::string install_time_str =
         base::Int64ToString(base::Time::Now().ToInternalValue());
     app_dict->SetString(kInstallTime, install_time_str);
@@ -983,7 +973,7 @@ void ArcAppListPrefs::AddAppAndShortcut(
                      icon_resource_id, base::Time(), GetInstallTime(app_id),
                      sticky, notifications_enabled, app_ready,
                      launchable && arc::ShouldShowInLauncher(app_id), shortcut,
-                     launchable, orientation_lock);
+                     launchable);
     for (auto& observer : observer_list_)
       observer.OnAppRegistered(app_id, app_info);
     tracked_apps_.insert(app_id);
@@ -1111,19 +1101,11 @@ void ArcAppListPrefs::OnAppListRefreshed(
 
   ready_apps_.clear();
   for (const auto& app : apps) {
-    // TODO(oshima): Do we have to update orientation?
-    AddAppAndShortcut(
-        true /* app_ready */,
-        app->name,
-        app->package_name,
-        app->activity,
-        std::string() /* intent_uri */,
-        std::string() /* icon_resource_id */,
-        app->sticky,
-        app->notifications_enabled,
-        false /* shortcut */,
-        true /* launchable */,
-        app->orientation_lock);
+    AddAppAndShortcut(true /* app_ready */, app->name, app->package_name,
+                      app->activity, std::string() /* intent_uri */,
+                      std::string() /* icon_resource_id */, app->sticky,
+                      app->notifications_enabled, false /* shortcut */,
+                      true /* launchable */);
   }
 
   // Detect removed ARC apps after current refresh.
@@ -1187,17 +1169,11 @@ void ArcAppListPrefs::AddApp(const arc::mojom::AppInfo& app_info) {
     return;
   }
 
-  AddAppAndShortcut(true /* app_ready */,
-                    app_info.name,
-                    app_info.package_name,
-                    app_info.activity,
-                    std::string() /* intent_uri */,
-                    std::string() /* icon_resource_id */,
-                    app_info.sticky,
-                    app_info.notifications_enabled,
-                    false /* shortcut */,
-                    true /* launchable */,
-                    app_info.orientation_lock);
+  AddAppAndShortcut(true /* app_ready */, app_info.name, app_info.package_name,
+                    app_info.activity, std::string() /* intent_uri */,
+                    std::string() /* icon_resource_id */, app_info.sticky,
+                    app_info.notifications_enabled, false /* shortcut */,
+                    true /* launchable */);
 }
 
 void ArcAppListPrefs::OnAppAddedDeprecated(arc::mojom::AppInfoPtr app) {
@@ -1226,6 +1202,24 @@ void ArcAppListPrefs::InvalidateAppIcons(const std::string& app_id) {
 void ArcAppListPrefs::InvalidatePackageIcons(const std::string& package_name) {
   for (const std::string& app_id : GetAppsForPackage(package_name))
     InvalidateAppIcons(app_id);
+}
+
+bool ArcAppListPrefs::NeedSetInstallTime(
+    const std::string& package_name) const {
+  // If checked package is in active default list that means it is installed by
+  // PAI and install time should not be recorded. Once package is not in active
+  // default list then this package was removed from default and user installs
+  // it manually. In last case we have to record install time.
+  if (default_apps_.GetActivePackages().count(package_name))
+    return false;
+
+  // Check if package is installed by policy. In this case don't set install
+  // time.
+  if (packages_by_policy_.count(package_name))
+    return false;
+
+  // TODO(b/34248841) - Handle apps, installed by sync.
+  return true;
 }
 
 void ArcAppListPrefs::OnPackageAppListRefreshed(
@@ -1257,17 +1251,11 @@ void ArcAppListPrefs::OnInstallShortcut(arc::mojom::ShortcutInfoPtr shortcut) {
     return;
   }
 
-  AddAppAndShortcut(true /* app_ready */,
-                    shortcut->name,
-                    shortcut->package_name,
-                    std::string() /* activity */,
-                    shortcut->intent_uri,
-                    shortcut->icon_resource_id,
-                    false /* sticky */,
-                    false /* notifications_enabled */,
-                    true /* shortcut */,
-                    true /* launchable */,
-                    arc::mojom::OrientationLock::NONE);
+  AddAppAndShortcut(true /* app_ready */, shortcut->name,
+                    shortcut->package_name, std::string() /* activity */,
+                    shortcut->intent_uri, shortcut->icon_resource_id,
+                    false /* sticky */, false /* notifications_enabled */,
+                    true /* shortcut */, true /* launchable */);
 }
 
 void ArcAppListPrefs::OnUninstallShortcut(const std::string& package_name,
@@ -1420,13 +1408,6 @@ void ArcAppListPrefs::OnTaskDestroyed(int32_t task_id) {
     observer.OnTaskDestroyed(task_id);
 }
 
-void ArcAppListPrefs::OnTaskOrientationLockRequested(
-    int32_t task_id,
-    const arc::mojom::OrientationLock orientation_lock) {
-  for (auto& observer : observer_list_)
-    observer.OnTaskOrientationLockRequested(task_id, orientation_lock);
-}
-
 void ArcAppListPrefs::OnTaskSetActive(int32_t task_id) {
   for (auto& observer : observer_list_)
     observer.OnTaskSetActive(task_id);
@@ -1457,32 +1438,6 @@ void ArcAppListPrefs::OnNotificationsEnabledChanged(
     observer.OnNotificationsEnabledChanged(package_name, enabled);
 }
 
-void ArcAppListPrefs::MaybeShowPackageInAppLauncher(
-    const arc::mojom::ArcPackageInfo& package_info) {
-  // Ignore system packages and auxiliary packages.
-  if (!package_info.sync || package_info.system)
-    return;
-
-  std::unordered_set<std::string> app_ids =
-      GetAppsForPackage(package_info.package_name);
-  for (const auto& app_id : app_ids) {
-    std::unique_ptr<ArcAppListPrefs::AppInfo> app_info = GetApp(app_id);
-    if (!app_info) {
-      NOTREACHED();
-      continue;
-    }
-    if (!app_info->showInLauncher)
-      continue;
-
-    AppListService* service = AppListService::Get();
-    CHECK(service);
-    service->ShowForAppInstall(profile_, app_id, false);
-    last_shown_batch_installation_revision_ =
-        current_batch_installation_revision_;
-    break;
-  }
-}
-
 bool ArcAppListPrefs::IsUnknownPackage(const std::string& package_name) const {
   return !GetPackage(package_name) && sync_service_ &&
          !sync_service_->IsPackageSyncing(package_name);
@@ -1492,18 +1447,9 @@ void ArcAppListPrefs::OnPackageAdded(
     arc::mojom::ArcPackageInfoPtr package_info) {
   DCHECK(IsArcAndroidEnabledForProfile(profile_));
 
-  // Ignore packages installed by internal sync.
-  const bool unknown_package = IsUnknownPackage(package_info->package_name);
-
   AddOrUpdatePackagePrefs(prefs_, *package_info);
   for (auto& observer : observer_list_)
     observer.OnPackageInstalled(*package_info);
-
-  if (unknown_package &&
-      current_batch_installation_revision_ !=
-          last_shown_batch_installation_revision_) {
-    MaybeShowPackageInAppLauncher(*package_info);
-  }
 }
 
 void ArcAppListPrefs::OnPackageModified(
@@ -1618,13 +1564,16 @@ void ArcAppListPrefs::OnIconInstalled(const std::string& app_id,
 
 void ArcAppListPrefs::OnInstallationStarted(
     const base::Optional<std::string>& package_name) {
-  // Start new batch installation group if this is first installation.
-  if (!installing_packages_count_)
-    ++current_batch_installation_revision_;
   ++installing_packages_count_;
 
-  if (package_name.has_value() && default_apps_.HasPackage(*package_name))
+  if (!package_name.has_value())
+    return;
+
+  if (default_apps_.HasPackage(*package_name))
     default_apps_installations_.insert(*package_name);
+
+  for (auto& observer : observer_list_)
+    observer.OnInstallationStarted(*package_name);
 }
 
 void ArcAppListPrefs::OnInstallationFinished(
@@ -1634,6 +1583,11 @@ void ArcAppListPrefs::OnInstallationFinished(
 
     if (!result->success && !GetPackage(result->package_name))
       HandlePackageRemoved(result->package_name);
+  }
+
+  if (result) {
+    for (auto& observer : observer_list_)
+      observer.OnInstallationFinished(result->package_name, result->success);
   }
 
   if (!installing_packages_count_) {
@@ -1661,8 +1615,7 @@ ArcAppListPrefs::AppInfo::AppInfo(const std::string& name,
                                   bool ready,
                                   bool showInLauncher,
                                   bool shortcut,
-                                  bool launchable,
-                                  arc::mojom::OrientationLock orientation_lock)
+                                  bool launchable)
     : name(name),
       package_name(package_name),
       activity(activity),
@@ -1675,8 +1628,7 @@ ArcAppListPrefs::AppInfo::AppInfo(const std::string& name,
       ready(ready),
       showInLauncher(showInLauncher),
       shortcut(shortcut),
-      launchable(launchable),
-      orientation_lock(orientation_lock) {}
+      launchable(launchable) {}
 
 // Need to add explicit destructor for chromium style checker error:
 // Complex class/struct needs an explicit out-of-line destructor

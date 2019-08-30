@@ -28,7 +28,7 @@
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "services/network/public/cpp/resource_request.h"
 #include "services/network/public/cpp/simple_url_loader.h"
-#include "third_party/WebKit/public/public_features.h"
+#include "third_party/blink/public/public_buildflags.h"
 
 using content::BrowserThread;
 using content::WebContents;
@@ -271,9 +271,9 @@ void DevToolsDataSource::StartRemoteDataRequest(
           cookies_store: "user"
           setting: "This feature cannot be disabled by settings."
           chrome_policy {
-            DeveloperToolsDisabled {
+            DeveloperToolsAvailability {
               policy_options {mode: MANDATORY}
-              DeveloperToolsDisabled: true
+              DeveloperToolsAvailability: 2
             }
           }
         })");
@@ -310,9 +310,9 @@ void DevToolsDataSource::StartCustomDataRequest(
           cookies_store: "user"
           setting: "This feature cannot be disabled by settings."
           chrome_policy {
-            DeveloperToolsDisabled {
+            DeveloperToolsAvailability {
               policy_options {mode: MANDATORY}
-              DeveloperToolsDisabled: true
+              DeveloperToolsAvailability: 2
             }
           }
         })");

@@ -17,8 +17,12 @@
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/resource_type.h"
 #include "net/base/host_port_pair.h"
-#include "third_party/WebKit/public/platform/WebInputEvent.h"
+#include "third_party/blink/public/platform/web_input_event.h"
 #include "url/gurl.h"
+
+namespace content {
+class RenderFrameHost;
+}  // namespace content
 
 namespace page_load_metrics {
 
@@ -360,7 +364,9 @@ class PageLoadMetricsObserver {
   // implement one of the On* callbacks, such as OnFirstContentfulPaint or
   // OnDomContentLoadedEventStart. Please email loading-dev@chromium.org if you
   // intend to override this method.
-  virtual void OnTimingUpdate(bool is_subframe,
+  //
+  // If |subframe_rfh| is nullptr, the update took place in the main frame.
+  virtual void OnTimingUpdate(content::RenderFrameHost* subframe_rfh,
                               const mojom::PageLoadTiming& timing,
                               const PageLoadExtraInfo& extra_info) {}
 
@@ -413,6 +419,14 @@ class PageLoadMetricsObserver {
   // Invoked when new use counter features are observed across all frames.
   virtual void OnFeaturesUsageObserved(const mojom::PageLoadFeatures& features,
                                        const PageLoadExtraInfo& extra_info) {}
+
+  // Invoked when data use is observed for the page load across all frames.
+  // These bytes are the additional bytes reported since the last call to
+  // OnDataUseObserved. |received_data_length| is the received network bytes.
+  // |data_reduction_proxy_bytes_saved| is the bytes saved by the data reduction
+  // proxy, which could be negative if the proxy had inflated the resource.
+  virtual void OnDataUseObserved(int64_t received_data_length,
+                                 int64_t data_reduction_proxy_bytes_saved) {}
 
   // Invoked when a media element starts playing.
   virtual void MediaStartedPlaying(

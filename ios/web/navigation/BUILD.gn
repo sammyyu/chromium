@@ -53,6 +53,8 @@ source_set("core") {
   ]
 
   sources = [
+    "error_retry_state_machine.h",
+    "error_retry_state_machine.mm",
     "navigation_item_impl.h",
     "navigation_item_impl.mm",
     "navigation_manager_delegate.h",
@@ -60,10 +62,8 @@ source_set("core") {
     "navigation_manager_impl.mm",
     "navigation_manager_util.h",
     "navigation_manager_util.mm",
-    "placeholder_navigation_util.h",
-    "placeholder_navigation_util.mm",
-    "wk_based_restore_session_util.h",
-    "wk_based_restore_session_util.mm",
+    "wk_navigation_util.h",
+    "wk_navigation_util.mm",
   ]
 
   configs += [ "//build/config/compiler:enable_arc" ]

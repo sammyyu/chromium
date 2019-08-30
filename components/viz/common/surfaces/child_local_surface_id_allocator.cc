@@ -7,39 +7,53 @@
 #include <stdint.h>
 
 #include "base/rand_util.h"
+#include "base/trace_event/trace_event.h"
 
 namespace viz {
 
 ChildLocalSurfaceIdAllocator::ChildLocalSurfaceIdAllocator()
-    : last_known_local_surface_id_(kInvalidParentSequenceNumber,
-                                   kInitialChildSequenceNumber,
-                                   base::UnguessableToken()) {}
+    : current_local_surface_id_(kInvalidParentSequenceNumber,
+                                kInitialChildSequenceNumber,
+                                base::UnguessableToken()) {}
 
-const LocalSurfaceId& ChildLocalSurfaceIdAllocator::UpdateFromParent(
+bool ChildLocalSurfaceIdAllocator::UpdateFromParent(
     const LocalSurfaceId& parent_allocated_local_surface_id) {
-  DCHECK_GE(parent_allocated_local_surface_id.parent_sequence_number(),
-            last_known_local_surface_id_.parent_sequence_number());
-  // Thie verifies that we only update the nonce if the parent sequence number
-  // has changed.
-  DCHECK(parent_allocated_local_surface_id.parent_sequence_number() >
-             last_known_local_surface_id_.parent_sequence_number() ||
-         parent_allocated_local_surface_id.nonce() ==
-             last_known_local_surface_id_.nonce());
-
-  last_known_local_surface_id_.parent_sequence_number_ =
-      parent_allocated_local_surface_id.parent_sequence_number_;
-  last_known_local_surface_id_.nonce_ =
-      parent_allocated_local_surface_id.nonce_;
-  return last_known_local_surface_id_;
+  if ((parent_allocated_local_surface_id.parent_sequence_number() >
+       current_local_surface_id_.parent_sequence_number()) ||
+      parent_allocated_local_surface_id.embed_token() !=
+          current_local_surface_id_.embed_token()) {
+    current_local_surface_id_.parent_sequence_number_ =
+        parent_allocated_local_surface_id.parent_sequence_number_;
+    current_local_surface_id_.embed_token_ =
+        parent_allocated_local_surface_id.embed_token_;
+    return true;
+  }
+  return false;
 }
 
 const LocalSurfaceId& ChildLocalSurfaceIdAllocator::GenerateId() {
   // UpdateFromParent must be called before we can generate a valid ID.
-  DCHECK_NE(last_known_local_surface_id_.parent_sequence_number(),
+  DCHECK_NE(current_local_surface_id_.parent_sequence_number(),
             kInvalidParentSequenceNumber);
 
-  ++last_known_local_surface_id_.child_sequence_number_;
-  return last_known_local_surface_id_;
+  ++current_local_surface_id_.child_sequence_number_;
+
+  TRACE_EVENT_WITH_FLOW2(
+      TRACE_DISABLED_BY_DEFAULT("viz.surface_id_flow"),
+      "LocalSurfaceId.Embed.Flow",
+      TRACE_ID_GLOBAL(current_local_surface_id_.embed_trace_id()),
+      TRACE_EVENT_FLAG_FLOW_OUT, "step",
+      "ChildLocalSurfaceIdAllocator::GenerateId", "local_surface_id",
+      current_local_surface_id_.ToString());
+  TRACE_EVENT_WITH_FLOW2(
+      TRACE_DISABLED_BY_DEFAULT("viz.surface_id_flow"),
+      "LocalSurfaceId.Submission.Flow",
+      TRACE_ID_GLOBAL(current_local_surface_id_.submission_trace_id()),
+      TRACE_EVENT_FLAG_FLOW_OUT, "step",
+      "ChildLocalSurfaceIdAllocator::GenerateId", "local_surface_id",
+      current_local_surface_id_.ToString());
+
+  return current_local_surface_id_;
 }
 
 }  // namespace viz

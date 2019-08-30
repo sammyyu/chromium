@@ -58,7 +58,7 @@ Options::~Options() = default;
 Options& Options::operator=(Options&& options) = default;
 
 bool Options::DevtoolsServerEnabled() {
-  return (!devtools_endpoint.IsEmpty() || devtools_socket_fd != 0);
+  return (devtools_pipe_enabled || !devtools_endpoint.IsEmpty());
 }
 
 Builder::Builder(int argc, const char** argv) : options_(argc, argv) {}
@@ -93,8 +93,8 @@ Builder& Builder::EnableDevToolsServer(const net::HostPortPair& endpoint) {
   return *this;
 }
 
-Builder& Builder::EnableDevToolsServer(const size_t socket_fd) {
-  options_.devtools_socket_fd = socket_fd;
+Builder& Builder::EnableDevToolsPipe() {
+  options_.devtools_pipe_enabled = true;
   return *this;
 }
 
@@ -131,11 +131,6 @@ Builder& Builder::SetEnableResourceScheduler(bool enable_resource_scheduler) {
 
 Builder& Builder::SetGLImplementation(const std::string& gl_implementation) {
   options_.gl_implementation = gl_implementation;
-  return *this;
-}
-
-Builder& Builder::AddMojoServiceName(const std::string& mojo_service_name) {
-  options_.mojo_service_names.insert(mojo_service_name);
   return *this;
 }
 
@@ -179,11 +174,6 @@ Builder& Builder::SetSitePerProcess(bool site_per_process) {
 
 Builder& Builder::SetBlockNewWebContents(bool block_new_web_contents) {
   options_.block_new_web_contents = block_new_web_contents;
-  return *this;
-}
-
-Builder& Builder::SetInitialVirtualTime(base::Time initial_virtual_time) {
-  options_.initial_virtual_time = initial_virtual_time;
   return *this;
 }
 

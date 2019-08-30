@@ -12,7 +12,6 @@
 #include "components/zucchini/equivalence_map.h"
 #include "components/zucchini/image_index.h"
 #include "components/zucchini/image_utils.h"
-#include "components/zucchini/label_manager.h"
 #include "components/zucchini/test_disassembler.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -34,6 +33,11 @@ std::vector<int32_t> GenerateReferencesDeltaTest(
     std::vector<offset_t>&& exp_old_targets,
     std::vector<offset_t>&& exp_projected_old_targets,
     EquivalenceMap&& equivalence_map) {
+  // OffsetMapper needs image sizes for forward-projection overflow check. These
+  // are tested elsewhere, so just use arbitrary large value.
+  constexpr size_t kOldImageSize = 1000000;
+  constexpr size_t kNewImageSize = 1001000;
+
   ReferenceDeltaSink reference_delta_sink;
 
   TargetPool old_targets;
@@ -47,7 +51,7 @@ std::vector<int32_t> GenerateReferencesDeltaTest(
   ReferenceSet new_refs({1, TypeTag(0), PoolTag(0)}, new_targets);
   new_refs.InitReferences(new_references);
 
-  OffsetMapper offset_mapper(equivalence_map);
+  OffsetMapper offset_mapper(equivalence_map, kOldImageSize, kNewImageSize);
   TargetPool projected_old_targets = old_targets;
   projected_old_targets.FilterAndProject(offset_mapper);
 

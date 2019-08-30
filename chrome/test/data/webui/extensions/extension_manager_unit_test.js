@@ -18,7 +18,7 @@ cr.define('extension_manager_tests', function() {
     KioskMode: 'kiosk mode',
   };
 
-  var suiteName = 'ExtensionManagerUnitTest';
+  const suiteName = 'ExtensionManagerUnitTest';
 
   suite(suiteName, function() {
     /** @type {extensions.Manager} */
@@ -115,12 +115,12 @@ cr.define('extension_manager_tests', function() {
       const oldDescription = 'old description';
       const newDescription = 'new description';
 
-      const extension = extension_test_util.createExtensionInfo({
-        description: oldDescription
-      });
+      const extension = extension_test_util.createExtensionInfo(
+          {description: oldDescription});
       simulateExtensionInstall(extension);
       const secondExtension = extension_test_util.createExtensionInfo({
-        description: 'irrelevant', id: 'b'.repeat(32),
+        description: 'irrelevant',
+        id: 'b'.repeat(32),
       });
       simulateExtensionInstall(secondExtension);
 

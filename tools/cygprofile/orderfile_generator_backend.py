@@ -1,4 +1,4 @@
-#!/usr/bin/env python
+#!/usr/bin/env vpython
 # Copyright (c) 2013 The Chromium Authors. All rights reserved.
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
@@ -26,6 +26,7 @@ import sys
 import tempfile
 import time
 
+import cyglog_to_orderfile
 import cygprofile_utils
 import patch_orderfile
 import process_profiles
@@ -139,31 +140,6 @@ def _UnstashOutputDirectory(buildpath):
   if os.path.exists(buildpath):
     shutil.rmtree(buildpath, ignore_errors=True)
   shutil.move(stashpath, buildpath)
-
-
-def _EnsureOrderfileStartsWithAnchorSection(filename):
-  """Ensures that the orderfile starts with the right anchor symbol.
-
-  This changes the orderfile, if required.
-
-  Args:
-    filename: (str) Path to the orderfile.
-  """
-  anchor_section = '.text.dummy_function_to_anchor_text'
-  with open(filename, 'r') as f:
-    if f.readline().strip() == anchor_section:
-      return
-  try:
-    f = tempfile.NamedTemporaryFile(dir=os.path.dirname(filename), delete=False)
-    f.write(anchor_section + '\n')
-    with open(filename, 'r') as orderfile_file:
-      for line in orderfile_file:
-        f.write(line + '\n')
-    f.close()
-    os.rename(f.name, filename)
-  finally:
-    if os.path.exists(f.name):
-      os.remove(f.name)
 
 
 class StepRecorder(object):
@@ -454,7 +430,7 @@ class OrderfileGenerator(object):
 
     if options.profile:
       output_directory = os.path.join(self._instrumented_out_dir, 'Release')
-      host_cyglog_dir = os.path.join(output_directory, 'cyglog_data')
+      host_profile_dir = os.path.join(output_directory, 'profile_data')
       urls = [profile_android_startup.AndroidProfileTool.TEST_URL]
       use_wpr = True
       simulate_user = False
@@ -462,7 +438,8 @@ class OrderfileGenerator(object):
       use_wpr = not options.no_wpr
       simulate_user = options.simulate_user
       self._profiler = profile_android_startup.AndroidProfileTool(
-          output_directory, host_cyglog_dir, use_wpr, urls, simulate_user)
+          output_directory, host_profile_dir, use_wpr, urls, simulate_user,
+          device=options.device)
 
     self._output_data = {}
     self._step_recorder = StepRecorder(options.buildbot)
@@ -504,7 +481,7 @@ class OrderfileGenerator(object):
       files = self._profiler.CollectProfile(
           self._compiler.chrome_apk,
           constants.PACKAGE_INFO['chrome'])
-      self._step_recorder.BeginStep('Process cyglog')
+      self._step_recorder.BeginStep('Process profile')
       assert os.path.exists(self._compiler.lib_chrome_so)
       offsets = process_profiles.GetReachedOffsetsFromDumpFiles(
           files, self._compiler.lib_chrome_so)
@@ -640,6 +617,9 @@ class OrderfileGenerator(object):
     profile_uploaded = False
     orderfile_uploaded = False
 
+    assert (bool(self._options.profile) ^
+            bool(self._options.manual_symbol_offsets))
+
     if self._options.profile:
       try:
         _UnstashOutputDirectory(self._instrumented_out_dir)
@@ -648,7 +628,6 @@ class OrderfileGenerator(object):
             self._step_recorder, self._options.arch, self._options.jobs,
             self._options.max_load, self._options.use_goma,
             self._options.goma_dir)
-        _EnsureOrderfileStartsWithAnchorSection(self._GetPathToOrderfile())
         self._compiler.CompileChromeApk(True)
         self._GenerateAndProcessProfile()
         self._MaybeArchiveOrderfile(self._GetUnpatchedOrderfileFilename())
@@ -656,6 +635,22 @@ class OrderfileGenerator(object):
       finally:
         self._DeleteTempFiles()
         _StashOutputDirectory(self._instrumented_out_dir)
+    elif self._options.manual_symbol_offsets:
+      assert self._options.manual_libname
+      assert self._options.manual_objdir
+      with file(self._options.manual_symbol_offsets) as f:
+        symbol_offsets = [int(x) for x in f.xreadlines()]
+      processor = process_profiles.SymbolOffsetProcessor(
+          self._options.manual_libname)
+      generator = cyglog_to_orderfile.OffsetOrderfileGenerator(
+          processor, cyglog_to_orderfile.ObjectFileProcessor(
+              self._options.manual_objdir))
+      ordered_sections = generator.GetOrderedSections(symbol_offsets)
+      if not ordered_sections:  # Either None or empty is a problem.
+        raise Exception('Failed to get ordered sections')
+      with open(self._GetUnpatchedOrderfileFilename(), 'w') as orderfile:
+        orderfile.write('\n'.join(ordered_sections))
+
     if self._options.patch:
       if self._options.profile:
         self._RemoveBlanks(self._GetUnpatchedOrderfileFilename(),
@@ -705,6 +700,9 @@ def CreateArgumentParser():
       '--buildbot', action='store_true',
       help='If true, the script expects to be run on a buildbot')
   parser.add_argument(
+      '--device', default=None, type=str,
+      help='Device serial number on which to run profiling.')
+  parser.add_argument(
       '--verify', action='store_true',
       help='If true, the script only verifies the current orderfile')
   parser.add_argument('--target-arch', action='store', dest='arch',
@@ -737,6 +735,18 @@ def CreateArgumentParser():
   parser.add_argument(
       '--use-goma', action='store_true', help='Enable GOMA.', default=False)
   parser.add_argument('--adb-path', help='Path to the adb binary.')
+
+  parser.add_argument('--manual-symbol-offsets', default=None, type=str,
+                      help=('File of list of ordered symbol offsets generated '
+                            'by manual profiling. Must set other --manual* '
+                            'flags if this is used, and must --skip-profile.'))
+  parser.add_argument('--manual-libname', default=None, type=str,
+                      help=('Library filename corresponding to '
+                            '--manual-symbol-offsets.'))
+  parser.add_argument('--manual-objdir', default=None, type=str,
+                      help=('Root of object file directory corresponding to '
+                            '--manual-symbol-offsets.'))
+
   profile_android_startup.AddProfileCollectionArguments(parser)
   return parser
 

@@ -11,7 +11,6 @@
 #include <utility>
 
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "build/build_config.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -22,6 +21,7 @@
 #include "ui/events/event_utils.h"
 #include "ui/events/test/events_test_utils.h"
 #include "ui/events/test/events_test_utils_x11.h"
+#include "ui/events/test/scoped_event_test_tick_clock.h"
 #include "ui/events/x/events_x_utils.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/x/x11.h"
@@ -382,7 +382,7 @@ TEST_F(EventsXTest, TouchEventNotRemovingFromNativeMapping) {
 
 // Copied events should not remove native touch id mappings, as this causes a
 // crash (crbug.com/467102). Copied events do not contain a proper
-// base::NativeEvent and should not attempt to access it.
+// PlatformEvent and should not attempt to access it.
 TEST_F(EventsXTest, CopiedTouchEventNotRemovingFromNativeMapping) {
   std::vector<int> devices;
   devices.push_back(0);
@@ -555,9 +555,8 @@ TEST_F(EventsXTest, TimestampRolloverAndAdjustWhenDecreasing) {
   XEvent event;
   InitButtonEvent(&event, true, gfx::Point(5, 10), 1, 0);
 
-  base::SimpleTestTickClock clock;
+  test::ScopedEventTestTickClock clock;
   clock.SetNowTicks(TimeTicksFromMillis(0x100000001));
-  SetEventTickClockForTesting(&clock);
   ResetTimestampRolloverCountersForTesting();
 
   event.xbutton.time = 0xFFFFFFFF;
@@ -575,9 +574,8 @@ TEST_F(EventsXTest, NoTimestampRolloverWhenMonotonicIncreasing) {
   XEvent event;
   InitButtonEvent(&event, true, gfx::Point(5, 10), 1, 0);
 
-  base::SimpleTestTickClock clock;
+  test::ScopedEventTestTickClock clock;
   clock.SetNowTicks(TimeTicksFromMillis(10));
-  SetEventTickClockForTesting(&clock);
   ResetTimestampRolloverCountersForTesting();
 
   event.xbutton.time = 6;

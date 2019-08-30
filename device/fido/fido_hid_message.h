@@ -17,6 +17,7 @@
 #include "base/containers/queue.h"
 #include "base/containers/span.h"
 #include "base/macros.h"
+#include "base/optional.h"
 #include "device/fido/fido_constants.h"
 #include "device/fido/fido_hid_packet.h"
 
@@ -27,14 +28,16 @@ namespace device {
 class COMPONENT_EXPORT(DEVICE_FIDO) FidoHidMessage {
  public:
   // Static functions to create CTAP/U2F HID commands.
-  static std::unique_ptr<FidoHidMessage> Create(uint32_t channel_id,
-                                                CtapHidDeviceCommand cmd,
-                                                base::span<const uint8_t> data);
+  static base::Optional<FidoHidMessage> Create(uint32_t channel_id,
+                                               FidoHidDeviceCommand cmd,
+                                               base::span<const uint8_t> data);
 
   // Reconstruct a message from serialized message data.
-  static std::unique_ptr<FidoHidMessage> CreateFromSerializedData(
+  static base::Optional<FidoHidMessage> CreateFromSerializedData(
       base::span<const uint8_t> serialized_data);
 
+  FidoHidMessage(FidoHidMessage&& that);
+  FidoHidMessage& operator=(FidoHidMessage&& other);
   ~FidoHidMessage();
 
   bool MessageComplete() const;
@@ -47,7 +50,7 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoHidMessage {
 
   size_t NumPackets() const;
   uint32_t channel_id() const { return channel_id_; }
-  CtapHidDeviceCommand cmd() const { return cmd_; }
+  FidoHidDeviceCommand cmd() const { return cmd_; }
   const base::circular_deque<std::unique_ptr<FidoHidPacket>>&
   GetPacketsForTesting() const {
     return packets_;
@@ -55,12 +58,12 @@ class COMPONENT_EXPORT(DEVICE_FIDO) FidoHidMessage {
 
  private:
   FidoHidMessage(uint32_t channel_id,
-                 CtapHidDeviceCommand type,
+                 FidoHidDeviceCommand type,
                  base::span<const uint8_t> data);
   FidoHidMessage(std::unique_ptr<FidoHidInitPacket> init_packet,
                  size_t remaining_size);
   uint32_t channel_id_ = kHidBroadcastChannel;
-  CtapHidDeviceCommand cmd_ = CtapHidDeviceCommand::kCtapHidMsg;
+  FidoHidDeviceCommand cmd_ = FidoHidDeviceCommand::kMsg;
   base::circular_deque<std::unique_ptr<FidoHidPacket>> packets_;
   size_t remaining_size_ = 0;
 

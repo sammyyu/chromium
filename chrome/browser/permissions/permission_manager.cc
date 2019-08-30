@@ -36,13 +36,14 @@
 #include "chrome/common/url_constants.h"
 #include "components/content_settings/core/browser/host_content_settings_map.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/permission_controller.h"
 #include "content/public/browser/permission_type.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/web_contents.h"
 #include "device/vr/buildflags/buildflags.h"
 #include "extensions/common/constants.h"
-#include "ppapi/features/features.h"
+#include "ppapi/buildflags/buildflags.h"
 
 #if BUILDFLAG(ENABLE_PLUGINS)
 #include "chrome/browser/plugins/flash_permission_context.h"
@@ -53,7 +54,6 @@
 #endif
 
 #if defined(OS_ANDROID)
-#include "chrome/browser/android/chrome_feature_list.h"
 #include "chrome/browser/geolocation/geolocation_permission_context_android.h"
 #else
 #include "chrome/browser/geolocation/geolocation_permission_context.h"
@@ -368,22 +368,18 @@ int PermissionManager::RequestPermissions(
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   if (permissions.empty()) {
     callback.Run(std::vector<ContentSetting>());
-    return kNoPendingOperation;
+    return content::PermissionController::kNoPendingOperation;
   }
 
   content::WebContents* web_contents =
       content::WebContents::FromRenderFrameHost(render_frame_host);
 
-#if defined(OS_ANDROID)
-  if (vr::VrTabHelper::IsInVr(web_contents) &&
-      !base::FeatureList::IsEnabled(
-          chrome::android::kVrBrowsingNativeAndroidUi)) {
-    vr::VrTabHelper::UISuppressed(vr::UiSuppressedElement::kPermissionRequest);
+  if (vr::VrTabHelper::IsUiSuppressedInVr(
+          web_contents, vr::UiSuppressedElement::kPermissionRequest)) {
     callback.Run(
         std::vector<ContentSetting>(permissions.size(), CONTENT_SETTING_BLOCK));
-    return kNoPendingOperation;
+    return content::PermissionController::kNoPendingOperation;
   }
-#endif
 
   GURL embedding_origin = web_contents->GetLastCommittedURL().GetOrigin();
   GURL canonical_requesting_origin =
@@ -410,7 +406,7 @@ int PermissionManager::RequestPermissions(
 
   // The request might have been resolved already.
   if (!pending_requests_.Lookup(request_id))
-    return kNoPendingOperation;
+    return content::PermissionController::kNoPendingOperation;
 
   return request_id;
 }
@@ -593,7 +589,7 @@ void PermissionManager::OnContentSettingChanged(
     const ContentSettingsPattern& primary_pattern,
     const ContentSettingsPattern& secondary_pattern,
     ContentSettingsType content_type,
-    std::string resource_identifier) {
+    const std::string& resource_identifier) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
   std::list<base::Closure> callbacks;
 

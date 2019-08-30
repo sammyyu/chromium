@@ -16,11 +16,12 @@
 #include "ash/test/ash_test_base.h"
 #include "ash/test/ash_test_helper.h"
 #include "ash/wm/overview/window_selector_controller.h"
+#include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "ash/wm/window_state.h"
 #include "ash/wm/window_util.h"
 #include "base/command_line.h"
-#include "base/test/user_action_tester.h"
+#include "base/test/metrics/user_action_tester.h"
 #include "base/time/time.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
@@ -166,28 +167,22 @@ TEST_F(OverviewButtonTrayTest, PerformDoubleTapAction) {
 TEST_F(OverviewButtonTrayTest, TrayOverviewUserAction) {
   ASSERT_FALSE(Shell::Get()->window_selector_controller()->IsSelecting());
 
-  // Tapping on the control when there are no windows (and thus the user cannot
-  // enter overview mode) should still record the action.
-  base::UserActionTester user_action_tester;
-  GetTray()->PerformAction(CreateTapEvent());
-  ASSERT_FALSE(Shell::Get()->window_selector_controller()->IsSelecting());
-  EXPECT_EQ(1, user_action_tester.GetActionCount(kTrayOverview));
-
   // With one window present, tapping on the control to enter overview mode
   // should record the user action.
+  base::UserActionTester user_action_tester;
   std::unique_ptr<aura::Window> window(
       CreateTestWindowInShellWithBounds(gfx::Rect(5, 5, 20, 20)));
   GetTray()->PerformAction(
       CreateTapEvent(OverviewButtonTray::kDoubleTapThresholdMs));
   ASSERT_TRUE(Shell::Get()->window_selector_controller()->IsSelecting());
-  EXPECT_EQ(2, user_action_tester.GetActionCount(kTrayOverview));
+  EXPECT_EQ(1, user_action_tester.GetActionCount(kTrayOverview));
 
   // Tapping on the control to exit overview mode should record the
   // user action.
   GetTray()->PerformAction(
       CreateTapEvent(OverviewButtonTray::kDoubleTapThresholdMs * 2));
   ASSERT_FALSE(Shell::Get()->window_selector_controller()->IsSelecting());
-  EXPECT_EQ(3, user_action_tester.GetActionCount(kTrayOverview));
+  EXPECT_EQ(2, user_action_tester.GetActionCount(kTrayOverview));
 }
 
 // Tests that a second OverviewButtonTray has been created, and only shows
@@ -195,9 +190,15 @@ TEST_F(OverviewButtonTrayTest, TrayOverviewUserAction) {
 // By default the DisplayManger is in extended mode.
 TEST_F(OverviewButtonTrayTest, DisplaysOnBothDisplays) {
   UpdateDisplay("400x400,200x200");
+  base::RunLoop().RunUntilIdle();
   EXPECT_FALSE(GetTray()->visible());
   EXPECT_FALSE(GetSecondaryTray()->visible());
   Shell::Get()->tablet_mode_controller()->EnableTabletModeWindowManager(true);
+  base::RunLoop().RunUntilIdle();
+  // DisplayConfigurationObserver enables mirror mode when tablet mode is
+  // enabled. Disable mirror mode to test tablet mode with multiple displays.
+  display_manager()->SetMirrorMode(display::MirrorMode::kOff, base::nullopt);
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(GetTray()->visible());
   EXPECT_TRUE(GetSecondaryTray()->visible());
   Shell::Get()->tablet_mode_controller()->EnableTabletModeWindowManager(false);
@@ -205,9 +206,13 @@ TEST_F(OverviewButtonTrayTest, DisplaysOnBothDisplays) {
 
 // Tests if Maximize Mode is enabled before a secondary display is attached
 // that the second OverviewButtonTray should be created in a visible state.
-TEST_F(OverviewButtonTrayTest, SecondaryTrayCreatedVisible) {
+// TODO(oshima/jonross): This fails with RunIntilIdle after UpdateDisplay,
+// so disabling mirror mode after enabling tablet mode does not work.
+// https://crbug.com/798857.
+TEST_F(OverviewButtonTrayTest, DISABLED_SecondaryTrayCreatedVisible) {
   Shell::Get()->tablet_mode_controller()->EnableTabletModeWindowManager(true);
   UpdateDisplay("400x400,200x200");
+  base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(GetSecondaryTray()->visible());
   Shell::Get()->tablet_mode_controller()->EnableTabletModeWindowManager(false);
 }
@@ -297,6 +302,61 @@ TEST_F(OverviewButtonTrayTest, VisibilityChangesForSystemModalWindow) {
   EXPECT_TRUE(GetTray()->visible());
   Shell::Get()->tablet_mode_controller()->EnableTabletModeWindowManager(false);
   EXPECT_FALSE(GetTray()->visible());
+}
+
+// Verify that quick switch works properly when one of the windows has a
+// transient child.
+TEST_F(OverviewButtonTrayTest, TransientChildQuickSwitch) {
+  std::unique_ptr<aura::Window> window1 = CreateTestWindow();
+  std::unique_ptr<aura::Window> window2 =
+      CreateTestWindow(gfx::Rect(), aura::client::WINDOW_TYPE_POPUP);
+  std::unique_ptr<aura::Window> window3 = CreateTestWindow();
+
+  // Add |window2| as a transient child of |window1|, and focus |window1|.
+  ::wm::AddTransientChild(window1.get(), window2.get());
+  ::wm::ActivateWindow(window3.get());
+  ::wm::ActivateWindow(window2.get());
+  ::wm::ActivateWindow(window1.get());
+
+  // Verify that after double tapping, we have switched to |window3|, even
+  // though |window2| is more recently used.
+  PerformDoubleTap();
+  EXPECT_EQ(window3.get(), wm::GetActiveWindow());
+}
+
+// Verify that quick switch works properly when in split view mode.
+TEST_F(OverviewButtonTrayTest, SplitviewModeQuickSwitch) {
+  // Splitview is only available in tablet mode.
+  Shell::Get()->tablet_mode_controller()->EnableTabletModeWindowManager(true);
+
+  std::unique_ptr<aura::Window> window1 = CreateTestWindow();
+  std::unique_ptr<aura::Window> window2 = CreateTestWindow();
+  std::unique_ptr<aura::Window> window3 = CreateTestWindow();
+
+  // Enter splitview mode. Snap |window1| to the left, this will be the default
+  // splitview window.
+  Shell::Get()->window_selector_controller()->ToggleOverview();
+  SplitViewController* split_view_controller =
+      Shell::Get()->split_view_controller();
+  split_view_controller->SnapWindow(window1.get(), SplitViewController::LEFT);
+  split_view_controller->SnapWindow(window2.get(), SplitViewController::RIGHT);
+  ASSERT_EQ(window1.get(), split_view_controller->GetDefaultSnappedWindow());
+  EXPECT_EQ(window2.get(), wm::GetActiveWindow());
+
+  // Verify that after double tapping, we have switched to |window3|, even
+  // though |window1| is more recently used.
+  PerformDoubleTap();
+  EXPECT_EQ(window3.get(), split_view_controller->right_window());
+  EXPECT_EQ(window3.get(), wm::GetActiveWindow());
+
+  // Focus |window1|. Verify that after double tapping, |window2| is the on the
+  // right side for splitview.
+  wm::ActivateWindow(window1.get());
+  PerformDoubleTap();
+  EXPECT_EQ(window2.get(), split_view_controller->right_window());
+  EXPECT_EQ(window2.get(), wm::GetActiveWindow());
+
+  split_view_controller->EndSplitView();
 }
 
 }  // namespace ash

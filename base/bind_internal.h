@@ -11,10 +11,15 @@
 #include <utility>
 
 #include "base/callback_internal.h"
+#include "base/compiler_specific.h"
 #include "base/memory/raw_scoped_refptr_mismatch_checker.h"
 #include "base/memory/weak_ptr.h"
 #include "base/template_util.h"
 #include "build/build_config.h"
+
+#if defined(OS_MACOSX) && !HAS_FEATURE(objc_arc)
+#include "base/mac/scoped_block.h"
+#endif
 
 // See base/callback.h for user documentation.
 //
@@ -163,7 +168,7 @@ template <typename T>
 using Unwrapper = BindUnwrapTraits<std::decay_t<T>>;
 
 template <typename T>
-auto Unwrap(T&& o) -> decltype(Unwrapper<T>::Unwrap(std::forward<T>(o))) {
+decltype(auto) Unwrap(T&& o) {
   return Unwrapper<T>::Unwrap(std::forward<T>(o));
 }
 
@@ -397,9 +402,9 @@ struct FunctorTraits<R (*)(Args...)> {
   static constexpr bool is_method = false;
   static constexpr bool is_nullable = true;
 
-  template <typename... RunArgs>
-  static R Invoke(R (*function)(Args...), RunArgs&&... args) {
-    return function(std::forward<RunArgs>(args)...);
+  template <typename Function, typename... RunArgs>
+  static R Invoke(Function&& function, RunArgs&&... args) {
+    return std::forward<Function>(function)(std::forward<RunArgs>(args)...);
   }
 };
 
@@ -433,6 +438,61 @@ struct FunctorTraits<R(__fastcall*)(Args...)> {
 
 #endif  // defined(OS_WIN) && !defined(ARCH_CPU_X86_64)
 
+#if defined(OS_MACOSX)
+
+// Support for Objective-C blocks. There are two implementation depending
+// on whether Automated Reference Counting (ARC) is enabled. When ARC is
+// enabled, then the block itself can be bound as the compiler will ensure
+// its lifetime will be correctly managed. Otherwise, require the block to
+// be wrapped in a base::mac::ScopedBlock (via base::RetainBlock) that will
+// correctly manage the block lifetime.
+//
+// The two implementation ensure that the One Definition Rule (ODR) is not
+// broken (it is not possible to write a template base::RetainBlock that would
+// work correctly both with ARC enabled and disabled).
+
+#if HAS_FEATURE(objc_arc)
+
+template <typename R, typename... Args>
+struct FunctorTraits<R (^)(Args...)> {
+  using RunType = R(Args...);
+  static constexpr bool is_method = false;
+  static constexpr bool is_nullable = true;
+
+  template <typename BlockType, typename... RunArgs>
+  static R Invoke(BlockType&& block, RunArgs&&... args) {
+    // According to LLVM documentation (§ 6.3), "local variables of automatic
+    // storage duration do not have precise lifetime." Use objc_precise_lifetime
+    // to ensure that the Objective-C block is not deallocated until it has
+    // finished executing even if the Callback<> is destroyed during the block
+    // execution.
+    // https://clang.llvm.org/docs/AutomaticReferenceCounting.html#precise-lifetime-semantics
+    __attribute__((objc_precise_lifetime)) R (^scoped_block)(Args...) = block;
+    return scoped_block(std::forward<RunArgs>(args)...);
+  }
+};
+
+#else  // HAS_FEATURE(objc_arc)
+
+template <typename R, typename... Args>
+struct FunctorTraits<base::mac::ScopedBlock<R (^)(Args...)>> {
+  using RunType = R(Args...);
+  static constexpr bool is_method = false;
+  static constexpr bool is_nullable = true;
+
+  template <typename BlockType, typename... RunArgs>
+  static R Invoke(BlockType&& block, RunArgs&&... args) {
+    // Copy the block to ensure that the Objective-C block is not deallocated
+    // until it has finished executing even if the Callback<> is destroyed
+    // during the block execution.
+    base::mac::ScopedBlock<R (^)(Args...)> scoped_block(block);
+    return scoped_block.get()(std::forward<RunArgs>(args)...);
+  }
+};
+
+#endif  // HAS_FEATURE(objc_arc)
+#endif  // defined(OS_MACOSX)
+
 // For methods.
 template <typename R, typename Receiver, typename... Args>
 struct FunctorTraits<R (Receiver::*)(Args...)> {
@@ -440,8 +500,8 @@ struct FunctorTraits<R (Receiver::*)(Args...)> {
   static constexpr bool is_method = true;
   static constexpr bool is_nullable = true;
 
-  template <typename ReceiverPtr, typename... RunArgs>
-  static R Invoke(R (Receiver::*method)(Args...),
+  template <typename Method, typename ReceiverPtr, typename... RunArgs>
+  static R Invoke(Method method,
                   ReceiverPtr&& receiver_ptr,
                   RunArgs&&... args) {
     return ((*receiver_ptr).*method)(std::forward<RunArgs>(args)...);
@@ -455,13 +515,30 @@ struct FunctorTraits<R (Receiver::*)(Args...) const> {
   static constexpr bool is_method = true;
   static constexpr bool is_nullable = true;
 
-  template <typename ReceiverPtr, typename... RunArgs>
-  static R Invoke(R (Receiver::*method)(Args...) const,
+  template <typename Method, typename ReceiverPtr, typename... RunArgs>
+  static R Invoke(Method method,
                   ReceiverPtr&& receiver_ptr,
                   RunArgs&&... args) {
     return ((*receiver_ptr).*method)(std::forward<RunArgs>(args)...);
   }
 };
+
+#ifdef __cpp_noexcept_function_type
+// noexcept makes a distinct function type in C++17.
+// I.e. `void(*)()` and `void(*)() noexcept` are same in pre-C++17, and
+// different in C++17.
+template <typename R, typename... Args>
+struct FunctorTraits<R (*)(Args...) noexcept> : FunctorTraits<R (*)(Args...)> {
+};
+
+template <typename R, typename Receiver, typename... Args>
+struct FunctorTraits<R (Receiver::*)(Args...) noexcept>
+    : FunctorTraits<R (Receiver::*)(Args...)> {};
+
+template <typename R, typename Receiver, typename... Args>
+struct FunctorTraits<R (Receiver::*)(Args...) const noexcept>
+    : FunctorTraits<R (Receiver::*)(Args...) const> {};
+#endif
 
 // For IgnoreResults.
 template <typename T>
@@ -562,7 +639,7 @@ struct Invoker;
 template <typename StorageType, typename R, typename... UnboundArgs>
 struct Invoker<StorageType, R(UnboundArgs...)> {
   static R RunOnce(BindStateBase* base,
-                   PassingTraitsType<UnboundArgs>... unbound_args) {
+                   PassingType<UnboundArgs>... unbound_args) {
     // Local references to make debugger stepping easier. If in a debugger,
     // you really want to warp ahead and step through the
     // InvokeHelper<>::MakeItSo() call below.
@@ -575,8 +652,7 @@ struct Invoker<StorageType, R(UnboundArgs...)> {
                    std::forward<UnboundArgs>(unbound_args)...);
   }
 
-  static R Run(BindStateBase* base,
-               PassingTraitsType<UnboundArgs>... unbound_args) {
+  static R Run(BindStateBase* base, PassingType<UnboundArgs>... unbound_args) {
     // Local references to make debugger stepping easier. If in a debugger,
     // you really want to warp ahead and step through the
     // InvokeHelper<>::MakeItSo() call below.

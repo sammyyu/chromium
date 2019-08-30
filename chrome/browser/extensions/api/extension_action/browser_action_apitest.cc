@@ -11,6 +11,7 @@
 #include "base/run_loop.h"
 #include "base/threading/thread_restrictions.h"
 #include "build/build_config.h"
+#include "chrome/browser/download/download_prefs.h"
 #include "chrome/browser/extensions/api/extension_action/extension_action_api.h"
 #include "chrome/browser/extensions/extension_action.h"
 #include "chrome/browser/extensions/extension_action_icon_factory.h"
@@ -38,6 +39,7 @@
 #include "content/public/test/browser_test_utils.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/download_test_observer.h"
+#include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "extensions/browser/extension_registry.h"
 #include "extensions/browser/extension_system.h"
@@ -68,19 +70,6 @@ void ExecuteExtensionAction(Browser* browser, const Extension* extension) {
   ExtensionActionRunner::GetForWebContents(
       browser->tab_strip_model()->GetActiveWebContents())
       ->RunAction(extension, true);
-}
-
-std::unique_ptr<base::ScopedTempDir> CreateAndSetDownloadsDirectory(
-    PrefService* pref_service) {
-  base::ScopedAllowBlockingForTesting allow_blocking;
-  std::unique_ptr<base::ScopedTempDir> dir(new base::ScopedTempDir);
-
-  if (!dir->CreateUniqueTempDir())
-    return nullptr;
-
-  pref_service->SetFilePath(prefs::kDownloadDefaultDirectory, dir->GetPath());
-  pref_service->SetFilePath(prefs::kSaveFileDefaultDirectory, dir->GetPath());
-  return dir;
 }
 
 // An ImageSkia source that will do nothing (i.e., have a blank skia). We need
@@ -829,6 +818,39 @@ IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, BrowserActionOpenPopupOnPopup) {
   EXPECT_TRUE(catcher.GetNextResult()) << message_;
 }
 
+// Test that a browser action popup can download data URLs. See
+// https://crbug.com/821219
+// Fails consistently on Win7. https://crbug.com/827160
+#if defined(OS_WIN)
+#define MAYBE_BrowserActionPopupDownload DISABLED_BrowserActionPopupDownload
+#else
+#define MAYBE_BrowserActionPopupDownload BrowserActionPopupDownload
+#endif
+IN_PROC_BROWSER_TEST_F(BrowserActionApiTest, MAYBE_BrowserActionPopupDownload) {
+  ASSERT_TRUE(embedded_test_server()->Start());
+
+  ASSERT_TRUE(LoadExtension(
+      test_data_dir_.AppendASCII("browser_action/popup_download")));
+  const Extension* extension = GetSingleLoadedExtension();
+  ASSERT_TRUE(extension) << message_;
+
+  content::DownloadTestObserverTerminal downloads_observer(
+      content::BrowserContext::GetDownloadManager(browser()->profile()), 1,
+      content::DownloadTestObserver::ON_DANGEROUS_DOWNLOAD_FAIL);
+
+  // Simulate a click on the browser action to open the popup.
+  content::WebContents* popup = OpenPopup(0);
+  ASSERT_TRUE(popup);
+  content::ExecuteScriptAsync(popup, "run_tests()");
+
+  // Wait for the download that this should have triggered to finish.
+  downloads_observer.WaitForFinished();
+
+  EXPECT_EQ(1u, downloads_observer.NumDownloadsSeenInState(
+                    download::DownloadItem::COMPLETE));
+  EXPECT_TRUE(GetBrowserActionsBar()->HidePopup());
+}
+
 class NavigatingExtensionPopupBrowserTest : public BrowserActionApiTest {
  public:
   const Extension& popup_extension() { return *popup_extension_; }
@@ -851,6 +873,7 @@ class NavigatingExtensionPopupBrowserTest : public BrowserActionApiTest {
   enum ExpectedNavigationStatus {
     EXPECTING_NAVIGATION_SUCCESS,
     EXPECTING_NAVIGATION_FAILURE,
+    EXPECTING_NO_NAVIGATION,
   };
 
   void TestPopupNavigationViaGet(
@@ -898,6 +921,7 @@ class NavigatingExtensionPopupBrowserTest : public BrowserActionApiTest {
     // Try to navigate the pop-up.
     bool ignored_script_result = false;
     content::WebContentsDestroyedWatcher popup_destruction_watcher(popup);
+    content::TestNavigationObserver popup_navigation_observer(popup);
     EXPECT_TRUE(ExecuteScriptAndExtractBool(popup, script_to_execute,
                                             &ignored_script_result));
     popup = popup_destruction_watcher.web_contents();
@@ -911,7 +935,14 @@ class NavigatingExtensionPopupBrowserTest : public BrowserActionApiTest {
     } else {
       // If the extension popup is still opened, then wait until there is no
       // load in progress, and verify whether the navigation succeeded or not.
-      WaitForLoadStop(popup);
+      if (expected_navigation_status != EXPECTING_NO_NAVIGATION) {
+        popup_navigation_observer.Wait();
+      } else {
+        EXPECT_FALSE(popup->IsLoading());
+      }
+      // The popup should still be alive.
+      ASSERT_TRUE(popup_destruction_watcher.web_contents());
+
       if (expected_navigation_status == EXPECTING_NAVIGATION_SUCCESS) {
         EXPECT_EQ(target_url, popup->GetLastCommittedURL())
             << "Navigation to " << target_url
@@ -955,7 +986,7 @@ IN_PROC_BROWSER_TEST_F(NavigatingExtensionPopupBrowserTest, Webpage) {
 
   // The GET request will be blocked in ExtensionViewHost::OpenURLFromTab
   // (which silently drops navigations with CURRENT_TAB disposition).
-  TestPopupNavigationViaGet(web_url, EXPECTING_NAVIGATION_FAILURE);
+  TestPopupNavigationViaGet(web_url, EXPECTING_NO_NAVIGATION);
 
   // POST requests don't go through ExtensionViewHost::OpenURLFromTab.
   TestPopupNavigationViaPost(web_url, EXPECTING_NAVIGATION_FAILURE);
@@ -978,7 +1009,7 @@ IN_PROC_BROWSER_TEST_F(NavigatingExtensionPopupBrowserTest,
 IN_PROC_BROWSER_TEST_F(NavigatingExtensionPopupBrowserTest,
                        PageInOtherExtension) {
   GURL other_extension_url = other_extension().GetResourceURL("other.html");
-  TestPopupNavigationViaGet(other_extension_url, EXPECTING_NAVIGATION_FAILURE);
+  TestPopupNavigationViaGet(other_extension_url, EXPECTING_NO_NAVIGATION);
   TestPopupNavigationViaPost(other_extension_url, EXPECTING_NAVIGATION_FAILURE);
 }
 
@@ -995,14 +1026,6 @@ IN_PROC_BROWSER_TEST_F(NavigatingExtensionPopupBrowserTest,
 // TODO(lukasza): https://crbug.com/650694: Add a "Get" flavour of the test once
 // the download works both for GET and POST requests.
 IN_PROC_BROWSER_TEST_F(NavigatingExtensionPopupBrowserTest, DownloadViaPost) {
-  // Override the default downloads directory, so that the test can cleanup
-  // after itself.  This section is based on CreateAndSetDownloadsDirectory
-  // method defined in a few other source files with tests.
-  base::ScopedAllowBlockingForTesting allow_blocking;
-  std::unique_ptr<base::ScopedTempDir> downloads_directory =
-      CreateAndSetDownloadsDirectory(browser()->profile()->GetPrefs());
-  ASSERT_TRUE(downloads_directory);
-
   // Setup monitoring of the downloads.
   content::DownloadTestObserverTerminal downloads_observer(
       content::BrowserContext::GetDownloadManager(browser()->profile()),
@@ -1021,8 +1044,12 @@ IN_PROC_BROWSER_TEST_F(NavigatingExtensionPopupBrowserTest, DownloadViaPost) {
   EXPECT_EQ(0u, downloads_observer.NumDangerousDownloadsSeen());
   EXPECT_EQ(1u, downloads_observer.NumDownloadsSeenInState(
                     download::DownloadItem::COMPLETE));
-  EXPECT_TRUE(base::PathExists(downloads_directory->GetPath().AppendASCII(
-      "download-test3-attachment.gif")));
+
+  base::ScopedAllowBlockingForTesting allow_blocking;
+  base::FilePath downloads_directory =
+      DownloadPrefs(browser()->profile()).DownloadPath();
+  EXPECT_TRUE(base::PathExists(
+      downloads_directory.AppendASCII("download-test3-attachment.gif")));
 
   // The test verification below is applicable only to scenarios where the
   // download shelf is supported - on ChromeOS, instead of the download shelf,

@@ -8,7 +8,9 @@
  */
 
 Polymer({
-  is: 'arc-tos-md',
+  is: 'arc-tos-root',
+
+  behaviors: [OobeDialogHostBehavior],
 
   properties: {
     /**
@@ -36,12 +38,28 @@ Polymer({
   },
 
   /**
+   * Returns focused element inside this element.
+   */
+  getActiveElement: function(id) {
+    return this.shadowRoot.activeElement;
+  },
+
+  /**
    * On-tap event handler for Accept button.
    *
    * @private
    */
   onAccept_: function() {
     this.screen.onAccept();
+  },
+
+  /**
+   * On-tap event handler for Next button.
+   *
+   * @private
+   */
+  onNext_: function() {
+    this.screen.onNext();
   },
 
   /**
@@ -60,5 +78,14 @@ Polymer({
    */
   onSkip_: function() {
     this.screen.onSkip();
+  },
+
+  /**
+   * On-tap event handler for Back button.
+   *
+   * @private
+   */
+  onBack_: function() {
+    chrome.send('login.ArcTermsOfServiceScreen.userActed', ['go-back']);
   }
 });

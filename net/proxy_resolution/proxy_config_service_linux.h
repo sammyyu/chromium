@@ -167,17 +167,11 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
 
   class Delegate : public base::RefCountedThreadSafe<Delegate> {
    public:
-    // Sets the |env_var_getter| to empty.
-    Delegate();
-
-    // Normal constructor.
-    explicit Delegate(std::unique_ptr<base::Environment> env_var_getter,
-                      const NetworkTrafficAnnotationTag& traffic_annotation);
-
-    // Constructor for testing.
+    // Test code can set |setting_getter| and |traffic_annotation|. If left
+    // unspecified, reasonable defaults will be used.
     Delegate(std::unique_ptr<base::Environment> env_var_getter,
-             SettingGetter* setting_getter,
-             const NetworkTrafficAnnotationTag& traffic_annotation);
+             base::Optional<std::unique_ptr<SettingGetter>> setting_getter,
+             base::Optional<NetworkTrafficAnnotationTag> traffic_annotation);
 
     // Synchronously obtains the proxy configuration. If gconf,
     // gsettings, or kioslaverc are used, also enables notifications for
@@ -292,16 +286,16 @@ class NET_EXPORT_PRIVATE ProxyConfigServiceLinux : public ProxyConfigService {
       const NetworkTrafficAnnotationTag& traffic_annotation);
   ProxyConfigServiceLinux(
       std::unique_ptr<base::Environment> env_var_getter,
-      SettingGetter* setting_getter,
+      SettingGetter* setting_getter,  // TODO(eroman): Use std::unique_ptr.
       const NetworkTrafficAnnotationTag& traffic_annotation);
 
   ~ProxyConfigServiceLinux() override;
 
   void SetupAndFetchInitialConfig(
       const scoped_refptr<base::SingleThreadTaskRunner>& glib_task_runner,
-      const scoped_refptr<base::SequencedTaskRunner>& io_task_runner,
+      const scoped_refptr<base::SequencedTaskRunner>& main_task_runner,
       const NetworkTrafficAnnotationTag& traffic_annotation) {
-    delegate_->SetUpAndFetchInitialConfig(glib_task_runner, io_task_runner,
+    delegate_->SetUpAndFetchInitialConfig(glib_task_runner, main_task_runner,
                                           traffic_annotation);
   }
   void OnCheckProxyConfigSettings() {

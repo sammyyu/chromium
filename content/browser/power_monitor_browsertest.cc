@@ -6,6 +6,7 @@
 #include "base/macros.h"
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
+#include "content/browser/renderer_host/render_process_host_impl.h"
 #include "content/browser/utility_process_host.h"
 #include "content/browser/utility_process_host_client.h"
 #include "content/public/browser/browser_thread.h"
@@ -46,6 +47,7 @@ void StartUtilityProcessOnIOThread(mojom::PowerMonitorTestRequest request) {
   UtilityProcessHost* host =
       new UtilityProcessHost(/*client=*/nullptr,
                              /*client_task_runner=*/nullptr);
+  host->SetMetricsName("test_process");
   host->SetName(base::ASCIIToUTF16("TestProcess"));
   EXPECT_TRUE(host->Start());
 
@@ -91,32 +93,40 @@ class MockPowerMonitorMessageBroadcaster : public device::mojom::PowerMonitor {
 
 class PowerMonitorTest : public ContentBrowserTest {
  public:
-  PowerMonitorTest() = default;
-
-  void SetUp() override {
+  PowerMonitorTest() {
     // Because Device Service also runs in this process(browser process), we can
     // set our binder to intercept requests for PowerMonitor interface to it.
     service_manager::ServiceContext::SetGlobalBinderForTesting(
         device::mojom::kServiceName, device::mojom::PowerMonitor::Name_,
         base::Bind(&PowerMonitorTest::BindPowerMonitor,
                    base::Unretained(this)));
+  }
 
-    ContentBrowserTest::SetUp();
+  ~PowerMonitorTest() override {
+    service_manager::ServiceContext::ClearGlobalBindersForTesting(
+        device::mojom::kServiceName);
   }
 
   void BindPowerMonitor(const std::string& interface_name,
                         mojo::ScopedMessagePipeHandle handle,
                         const service_manager::BindSourceInfo& source_info) {
     if (source_info.identity.name() == mojom::kRendererServiceName) {
-      ++request_count_from_renderer_;
-
-      DCHECK(renderer_bound_closure_);
-      std::move(renderer_bound_closure_).Run();
+      // We can receive binding requests for the spare RenderProcessHost - this
+      // might happen before the test has provided the
+      // |renderer_bound_closure_|.
+      if (renderer_bound_closure_) {
+        ++request_count_from_renderer_;
+        std::move(renderer_bound_closure_).Run();
+      } else {
+        DCHECK(RenderProcessHostImpl::GetSpareRenderProcessHostForTesting());
+      }
     } else if (source_info.identity.name() == mojom::kUtilityServiceName) {
-      ++request_count_from_utility_;
-
-      DCHECK(utility_bound_closure_);
-      std::move(utility_bound_closure_).Run();
+      // If the network service is enabled, it will create utility processes
+      // without a utility closure.
+      if (utility_bound_closure_) {
+        ++request_count_from_utility_;
+        std::move(utility_bound_closure_).Run();
+      }
     } else if (source_info.identity.name() == mojom::kGpuServiceName) {
       ++request_count_from_gpu_;
 
@@ -139,7 +149,7 @@ class PowerMonitorTest : public ContentBrowserTest {
  protected:
   void StartUtilityProcess(mojom::PowerMonitorTestPtr* power_monitor_test,
                            base::Closure utility_bound_closure) {
-    utility_bound_closure_ = utility_bound_closure;
+    utility_bound_closure_ = std::move(utility_bound_closure);
     BrowserThread::PostTask(
         BrowserThread::IO, FROM_HERE,
         base::BindOnce(&StartUtilityProcessOnIOThread,
@@ -147,11 +157,11 @@ class PowerMonitorTest : public ContentBrowserTest {
   }
 
   void set_renderer_bound_closure(base::Closure closure) {
-    renderer_bound_closure_ = closure;
+    renderer_bound_closure_ = std::move(closure);
   }
 
   void set_gpu_bound_closure(base::Closure closure) {
-    gpu_bound_closure_ = closure;
+    gpu_bound_closure_ = std::move(closure);
   }
 
   int request_count_from_renderer() { return request_count_from_renderer_; }

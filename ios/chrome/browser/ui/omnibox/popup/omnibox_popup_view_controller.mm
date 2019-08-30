@@ -11,8 +11,10 @@
 #import "ios/chrome/browser/ui/omnibox/image_retriever.h"
 #include "ios/chrome/browser/ui/omnibox/omnibox_util.h"
 #import "ios/chrome/browser/ui/omnibox/popup/omnibox_popup_row.h"
+#import "ios/chrome/browser/ui/omnibox/popup/self_sizing_table_view.h"
 #import "ios/chrome/browser/ui/omnibox/truncating_attributed_label.h"
 #include "ios/chrome/browser/ui/rtl_geometry.h"
+#import "ios/chrome/browser/ui/toolbar/buttons/toolbar_configuration.h"
 #include "ios/chrome/browser/ui/ui_util.h"
 #import "ios/chrome/browser/ui/uikit_ui_util.h"
 #include "ios/chrome/grit/ios_theme_resources.h"
@@ -43,7 +45,8 @@ UIColor* BackgroundColorIncognito() {
 }
 }  // namespace
 
-@interface OmniboxPopupViewController () {
+@interface OmniboxPopupViewController ()<UITableViewDelegate,
+                                         UITableViewDataSource> {
   // Alignment of omnibox text. Popup text should match this alignment.
   NSTextAlignment _alignment;
 
@@ -61,6 +64,8 @@ UIColor* BackgroundColorIncognito() {
 // tapping and holding on them or by using arrow keys on a hardware keyboard.
 @property(nonatomic, strong) NSIndexPath* highlightedIndexPath;
 
+@property(nonatomic, strong) UITableView* tableView;
+
 @end
 
 @implementation OmniboxPopupViewController
@@ -68,12 +73,13 @@ UIColor* BackgroundColorIncognito() {
 @synthesize incognito = _incognito;
 @synthesize imageRetriever = _imageRetriever;
 @synthesize highlightedIndexPath = _highlightedIndexPath;
+@synthesize tableView = _tableView;
 
 #pragma mark -
 #pragma mark Initialization
 
 - (instancetype)init {
-  if ((self = [super initWithStyle:UITableViewStylePlain])) {
+  if (self = [super initWithNibName:nil bundle:nil]) {
     if (IsIPadIdiom()) {
       // The iPad keyboard can cover some of the rows of the scroll view. The
       // scroll view's content inset may need to be updated when the keyboard is
@@ -91,6 +97,15 @@ UIColor* BackgroundColorIncognito() {
 
 - (void)dealloc {
   self.tableView.delegate = nil;
+}
+
+- (void)loadView {
+  self.tableView =
+      [[SelfSizingTableView alloc] initWithFrame:CGRectZero
+                                           style:UITableViewStylePlain];
+  self.tableView.delegate = self;
+  self.tableView.dataSource = self;
+  self.view = self.tableView;
 }
 
 - (UIScrollView*)scrollView {
@@ -113,6 +128,7 @@ UIColor* BackgroundColorIncognito() {
     self.view.backgroundColor =
         IsIPadIdiom() ? BackgroundColorTablet() : BackgroundColorPhone();
   }
+
   [self.view setAutoresizingMask:(UIViewAutoresizingFlexibleWidth |
                                   UIViewAutoresizingFlexibleHeight)];
 
@@ -154,7 +170,32 @@ UIColor* BackgroundColorIncognito() {
 }
 
 - (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
+  [super traitCollectionDidChange:previousTraitCollection];
   [self layoutRows];
+
+  if (!IsUIRefreshPhase1Enabled()) {
+    return;
+  }
+
+  ToolbarConfiguration* configuration = [[ToolbarConfiguration alloc]
+      initWithStyle:self.incognito ? INCOGNITO : NORMAL];
+
+  if (IsRegularXRegularSizeClass(self)) {
+    self.view.backgroundColor = configuration.backgroundColor;
+  } else {
+    self.view.backgroundColor = [UIColor clearColor];
+  }
+}
+
+- (void)viewWillTransitionToSize:(CGSize)size
+       withTransitionCoordinator:
+           (id<UIViewControllerTransitionCoordinator>)coordinator {
+  [super viewWillTransitionToSize:size withTransitionCoordinator:coordinator];
+  [coordinator animateAlongsideTransition:^(
+                   id<UIViewControllerTransitionCoordinatorContext> context) {
+    [self layoutRows];
+  }
+                               completion:nil];
 }
 
 #pragma mark - Properties accessors
@@ -188,8 +229,13 @@ UIColor* BackgroundColorIncognito() {
 
 - (void)updateRow:(OmniboxPopupRow*)row
         withMatch:(id<AutocompleteSuggestion>)match {
-  const CGFloat kTextCellLeadingPadding =
-      IsIPadIdiom() ? (!IsCompactTablet() ? 192 : 100) : 16;
+  CGFloat kTextCellLeadingPadding =
+      [self showsLeadingIcons] ? ([self useRegularWidthOffset] ? 192 : 100)
+                               : 16;
+  if (IsUIRefreshPhase1Enabled()) {
+    kTextCellLeadingPadding = [self showsLeadingIcons] ? 221 : 24;
+  }
+
   const CGFloat kTextCellTopPadding = 6;
   const CGFloat kDetailCellTopPadding = 26;
   const CGFloat kTextLabelHeight = 24;
@@ -295,12 +341,19 @@ UIColor* BackgroundColorIncognito() {
 
   // The leading image (e.g. magnifying glass, star, clock) is only shown on
   // iPad.
-  if (IsIPadIdiom()) {
-    [row updateLeadingImage:match.imageID];
+  if ([self showsLeadingIcons]) {
+    UIImage* image = nil;
+    if (IsUIRefreshPhase1Enabled()) {
+      image = match.suggestionTypeIcon;
+    } else {
+      image = NativeImage(match.imageID);
+    }
+    DCHECK(image);
+    [row updateLeadingImage:image];
   }
 
-  // Show append button for search history/search suggestions/Physical Web as
-  // the right control element (aka an accessory element of a table view cell).
+  // Show append button for search history/search suggestions as the right
+  // control element (aka an accessory element of a table view cell).
   row.appendButton.hidden = !match.isAppendable;
   [row.appendButton cancelTrackingWithEvent:nil];
 
@@ -324,7 +377,8 @@ UIColor* BackgroundColorIncognito() {
   if (LTRTextInRTLLayout) {
     // This is really a left padding, not a leading padding.
     const CGFloat kLTRTextInRTLLayoutLeftPadding =
-        IsIPadIdiom() ? (!IsCompactTablet() ? 176 : 94) : 94;
+        [self showsLeadingIcons] ? ([self useRegularWidthOffset] ? 176 : 94)
+                                 : 94;
     CGRect frame = textLabel.frame;
     frame.size.width -= kLTRTextInRTLLayoutLeftPadding - frame.origin.x;
     frame.origin.x = kLTRTextInRTLLayoutLeftPadding;
@@ -592,6 +646,20 @@ UIColor* BackgroundColorIncognito() {
     [self.delegate autocompleteResultConsumer:self
                       didSelectRowForDeletion:indexPath.row];
   }
+}
+
+#pragma mark - private
+
+- (BOOL)showsLeadingIcons {
+  if (IsUIRefreshPhase1Enabled()) {
+    return IsRegularXRegularSizeClass();
+  } else {
+    return IsIPadIdiom();
+  }
+}
+
+- (BOOL)useRegularWidthOffset {
+  return [self showsLeadingIcons] && !IsCompactWidth();
 }
 
 @end

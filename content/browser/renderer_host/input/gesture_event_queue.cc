@@ -5,8 +5,6 @@
 #include "content/browser/renderer_host/input/gesture_event_queue.h"
 
 #include "base/auto_reset.h"
-#include "base/debug/crash_logging.h"
-#include "base/debug/dump_without_crashing.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/renderer_host/input/touchpad_tap_suppression_controller.h"
 #include "content/browser/renderer_host/input/touchscreen_tap_suppression_controller.h"
@@ -28,8 +26,8 @@ GestureEventQueue::Config::Config() {
 
 GestureEventQueue::GestureEventQueue(
     GestureEventQueueClient* client,
-    TouchpadTapSuppressionControllerClient* touchpad_client,
-    FlingControllerClient* fling_client,
+    FlingControllerEventSenderClient* fling_event_sender_client,
+    FlingControllerSchedulerClient* fling_scheduler_client,
     const Config& config)
     : client_(client),
       fling_in_progress_(false),
@@ -39,56 +37,68 @@ GestureEventQueue::GestureEventQueue(
           base::FeatureList::IsEnabled(features::kVsyncAlignedInputEvents)),
       debounce_interval_(config.debounce_interval),
       fling_controller_(this,
-                        touchpad_client,
-                        fling_client,
+                        fling_event_sender_client,
+                        fling_scheduler_client,
                         config.fling_config) {
   DCHECK(client);
-  DCHECK(touchpad_client);
-  DCHECK(fling_client);
+  DCHECK(fling_event_sender_client);
+  DCHECK(fling_scheduler_client);
 }
 
 GestureEventQueue::~GestureEventQueue() { }
 
-bool GestureEventQueue::QueueEvent(
+bool GestureEventQueue::DebounceOrQueueEvent(
     const GestureEventWithLatencyInfo& gesture_event) {
-  TRACE_EVENT0("input", "GestureEventQueue::QueueEvent");
-  if (!ShouldForwardForBounceReduction(gesture_event) ||
-      fling_controller_.FilterGestureEvent(gesture_event)) {
+  // GFS should have been filtered in FlingControllerFilterEvent.
+  DCHECK_NE(gesture_event.event.GetType(), WebInputEvent::kGestureFlingStart);
+  if (!ShouldForwardForBounceReduction(gesture_event))
     return false;
-  }
-
-  // fling_controller_ is in charge of handling GFS events from touchpad source
-  // when wheel scroll latching is enabled. In this case instead of queuing the
-  // GFS event to be sent to the renderer, the controller processes the fling
-  // and generates wheel events with momentum phase which are handled in the
-  // renderer normally.
-  if (gesture_event.event.GetType() == WebInputEvent::kGestureFlingStart &&
-      gesture_event.event.source_device == blink::kWebGestureDeviceTouchpad) {
-    fling_controller_.ProcessGestureFlingStart(gesture_event);
-    fling_in_progress_ = true;
-    return false;
-  }
-
-  // If the GestureFlingStart event is processed by the fling_controller_, the
-  // GestureFlingCancel event should be the same.
-  if (gesture_event.event.GetType() == WebInputEvent::kGestureFlingCancel &&
-      fling_controller_.fling_in_progress()) {
-    fling_controller_.ProcessGestureFlingCancel(gesture_event);
-    fling_in_progress_ = false;
-    return false;
-  }
 
   QueueAndForwardIfNecessary(gesture_event);
   return true;
 }
 
-void GestureEventQueue::ProgressFling(base::TimeTicks current_time) {
-  fling_controller_.ProgressFling(current_time);
+bool GestureEventQueue::FlingControllerFilterEvent(
+    const GestureEventWithLatencyInfo& gesture_event) {
+  TRACE_EVENT0("input", "GestureEventQueue::QueueEvent");
+  if (fling_controller_.FilterGestureEvent(gesture_event))
+    return true;
+
+  // fling_controller_ is in charge of handling GFS events and the events are
+  // not sent to the renderer, the controller processes the fling and generates
+  // fling progress events (wheel events for touchpad and GSU events for
+  // touchscreen and autoscroll) which are handled normally.
+  if (gesture_event.event.GetType() == WebInputEvent::kGestureFlingStart) {
+    fling_controller_.ProcessGestureFlingStart(gesture_event);
+    fling_in_progress_ = true;
+    return true;
+  }
+
+  // If the GestureFlingStart event is processed by the fling_controller_, the
+  // GestureFlingCancel event should be the same.
+  if (gesture_event.event.GetType() == WebInputEvent::kGestureFlingCancel) {
+    fling_controller_.ProcessGestureFlingCancel(gesture_event);
+    fling_in_progress_ = false;
+    return true;
+  }
+
+  return false;
 }
 
 void GestureEventQueue::StopFling() {
   fling_in_progress_ = false;
   fling_controller_.StopFling();
+}
+
+bool GestureEventQueue::FlingCancellationIsDeferred() const {
+  return fling_controller_.FlingCancellationIsDeferred();
+}
+
+bool GestureEventQueue::TouchscreenFlingInProgress() const {
+  return fling_controller_.TouchscreenFlingInProgress();
+}
+gfx::Vector2dF GestureEventQueue::CurrentFlingVelocity() const {
+  return fling_controller_.CurrentFlingVelocity();
 }
 
 bool GestureEventQueue::ShouldDiscardFlingCancelEvent(
@@ -124,8 +134,6 @@ bool GestureEventQueue::ShouldForwardForBounceReduction(
 
   switch (gesture_event.event.GetType()) {
     case WebInputEvent::kGestureScrollUpdate:
-      if (fling_in_progress_)
-        return false;
       if (!scrolling_in_progress_) {
         debounce_deferring_timer_.Start(
             FROM_HERE,
@@ -161,36 +169,8 @@ bool GestureEventQueue::ShouldForwardForBounceReduction(
   }
 }
 
-void GestureEventQueue::ReportPossibleHang(
-    const blink::WebGestureEvent& event) {
-  if (processing_acks_ && !did_report_hang_ &&
-      (base::TimeTicks::Now() - processing_acks_start_) >
-          base::TimeDelta::FromSeconds(2)) {
-    // Diagnostic for the hang in https://crbug.com/818214
-    static auto* type_key = base::debug::AllocateCrashKeyString(
-        "gesture-event-queue-hang-event-type",
-        base::debug::CrashKeySize::Size32);
-    base::debug::ScopedCrashKeyString type_key_value(
-        type_key, std::to_string(event.GetType()));
-    static auto* device_key = base::debug::AllocateCrashKeyString(
-        "gesture-event-queue-hang-source-device",
-        base::debug::CrashKeySize::Size32);
-    base::debug::ScopedCrashKeyString device_key_value(
-        device_key, std::to_string(event.source_device));
-    static auto* size_key = base::debug::AllocateCrashKeyString(
-        "gesture-event-queue-hang-queue-size",
-        base::debug::CrashKeySize::Size32);
-    base::debug::ScopedCrashKeyString size_key_value(
-        size_key, std::to_string(coalesced_gesture_events_.size()));
-    base::debug::DumpWithoutCrashing();
-    did_report_hang_ = true;
-  }
-}
-
 void GestureEventQueue::QueueAndForwardIfNecessary(
     const GestureEventWithLatencyInfo& gesture_event) {
-  ReportPossibleHang(gesture_event.event);
-
   if (allow_multiple_inflight_events_) {
     // Event coalescing should be handled in compositor thread event queue.
     if (gesture_event.event.GetType() == WebInputEvent::kGestureFlingCancel)
@@ -282,7 +262,6 @@ void GestureEventQueue::AckCompletedEvents() {
   if (processing_acks_)
     return;
   base::AutoReset<bool> process_acks(&processing_acks_, true);
-  processing_acks_start_ = base::TimeTicks::Now();
   while (!coalesced_gesture_events_.empty()) {
     auto iter = coalesced_gesture_events_.begin();
     if (iter->ack_state() == INPUT_EVENT_ACK_STATE_UNKNOWN)

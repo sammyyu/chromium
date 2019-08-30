@@ -104,8 +104,11 @@ jlong DataReductionProxySettingsAndroid::GetDataReductionLastUpdateTime(
 
 void DataReductionProxySettingsAndroid::ClearDataSavingStatistics(
     JNIEnv* env,
-    const base::android::JavaParamRef<jobject>& obj) {
-  Settings()->ClearDataSavingStatistics();
+    const base::android::JavaParamRef<jobject>& obj,
+    jint reason) {
+  Settings()->ClearDataSavingStatistics(
+      static_cast<data_reduction_proxy::DataReductionProxySavingsClearedReason>(
+          reason));
 }
 
 base::android::ScopedJavaLocalRef<jobject>
@@ -169,6 +172,7 @@ DataReductionProxySettingsAndroid::MaybeRewriteWebliteUrl(
     const base::android::JavaRef<jstring>& url) {
   if (url.is_null() || !Settings()->IsDataReductionProxyEnabled() ||
       !previews::params::ArePreviewsAllowed() ||
+      data_reduction_proxy::params::IsIncludedInHoldbackFieldTrial() ||
       !base::FeatureList::IsEnabled(data_reduction_proxy::features::
                                         kDataReductionProxyDecidesTransform)) {
     return ScopedJavaLocalRef<jstring>(url);

@@ -32,7 +32,7 @@ namespace net {
 const int64_t kDnsDefaultTimeoutMs = 1000;
 
 // DnsConfig stores configuration of the system resolver.
-struct NET_EXPORT_PRIVATE DnsConfig {
+struct NET_EXPORT DnsConfig {
   DnsConfig();
   DnsConfig(const DnsConfig& other);
   ~DnsConfig();
@@ -51,7 +51,7 @@ struct NET_EXPORT_PRIVATE DnsConfig {
     return !nameservers.empty();
   }
 
-  struct NET_EXPORT_PRIVATE DnsOverHttpsServerConfig {
+  struct NET_EXPORT DnsOverHttpsServerConfig {
     DnsOverHttpsServerConfig(const GURL& server, bool use_post);
 
     GURL server;
@@ -88,8 +88,6 @@ struct NET_EXPORT_PRIVATE DnsConfig {
   int attempts;
   // Round robin entries in |nameservers| for subsequent requests.
   bool rotate;
-  // Enable EDNS0 extensions.
-  bool edns0;
 
   // Indicates system configuration uses local IPv6 connectivity, e.g.,
   // DirectAccess. This is exposed for HostResolver to skip IPv6 probes,

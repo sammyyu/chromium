@@ -34,6 +34,7 @@
 #include "net/base/io_buffer.h"
 #include "net/base/ip_address.h"
 #include "net/base/ip_endpoint.h"
+#include "net/base/load_flags.h"
 #include "net/base/net_errors.h"
 #include "net/base/upload_bytes_element_reader.h"
 #include "net/dns/dns_protocol.h"
@@ -173,19 +174,15 @@ class DnsAttempt {
     return std::move(dict);
   }
 
-  void set_result(int result) {
-    result_ = result;
-  }
+  void set_result(int result) { result_ = result; }
 
   // True if current attempt is pending (waiting for server response).
-  bool is_pending() const {
-    return result_ == ERR_IO_PENDING;
-  }
+  bool is_pending() const { return result_ == ERR_IO_PENDING; }
 
   // True if attempt is completed (received server response).
   bool is_completed() const {
     return (result_ == OK) || (result_ == ERR_NAME_NOT_RESOLVED) ||
-        (result_ == ERR_DNS_SERVER_REQUIRES_TCP);
+           (result_ == ERR_DNS_SERVER_REQUIRES_TCP);
   }
 
  private:
@@ -206,7 +203,12 @@ class DnsUDPAttempt : public DnsAttempt {
         socket_lease_(std::move(socket_lease)),
         query_(std::move(query)) {}
 
-  // DnsAttempt:
+  // DnsAttempt methods.
+
+  // TODO(https://crbug.com/779589):  This method violates the usual convention
+  // that |callback| is only called once.  In particular, this method might
+  // return ERR_IO_PENDING, then |callback| might be called with
+  // ERR_DNS_MALFORMED_RESPONSE, then again with some other error code.
   int Start(const CompletionCallback& callback) override {
     DCHECK_EQ(STATE_NONE, next_state_);
     callback_ = callback;
@@ -235,9 +237,7 @@ class DnsUDPAttempt : public DnsAttempt {
     STATE_NONE,
   };
 
-  DatagramClientSocket* socket() {
-    return socket_lease_->socket();
-  }
+  DatagramClientSocket* socket() { return socket_lease_->socket(); }
 
   int DoLoop(int result) {
     CHECK_NE(STATE_NONE, next_state_);
@@ -289,7 +289,7 @@ class DnsUDPAttempt : public DnsAttempt {
     next_state_ = STATE_SEND_QUERY_COMPLETE;
     return socket()->Write(
         query_->io_buffer(), query_->io_buffer()->size(),
-        base::Bind(&DnsUDPAttempt::OnIOComplete, base::Unretained(this)),
+        base::BindOnce(&DnsUDPAttempt::OnIOComplete, base::Unretained(this)),
         kTrafficAnnotation);
   }
 
@@ -311,7 +311,7 @@ class DnsUDPAttempt : public DnsAttempt {
     response_ = std::make_unique<DnsResponse>();
     return socket()->Read(
         response_->io_buffer(), response_->io_buffer_size(),
-        base::Bind(&DnsUDPAttempt::OnIOComplete, base::Unretained(this)));
+        base::BindOnce(&DnsUDPAttempt::OnIOComplete, base::Unretained(this)));
   }
 
   int DoReadResponseComplete(int rv) {
@@ -333,7 +333,6 @@ class DnsUDPAttempt : public DnsAttempt {
     }
     if (response_->flags() & dns_protocol::kFlagTC)
       return ERR_DNS_SERVER_REQUIRES_TCP;
-    // TODO(szym): Extract TTL for NXDOMAIN results. http://crbug.com/115051
     if (response_->rcode() == dns_protocol::kRcodeNXDOMAIN)
       return ERR_NAME_NOT_RESOLVED;
     if (response_->rcode() != dns_protocol::kRcodeNOERROR)
@@ -414,6 +413,7 @@ class DnsHTTPAttempt : public DnsAttempt, public URLRequest::Delegate {
                                           "is disabled by default"
         }
       )"));
+    net_log_ = request_->net_log();
 
     if (use_post) {
       request_->set_method("POST");
@@ -454,9 +454,7 @@ class DnsHTTPAttempt : public DnsAttempt, public URLRequest::Delegate {
     const DnsResponse* resp = response_.get();
     return (resp != NULL && resp->IsValid()) ? resp : NULL;
   }
-  const NetLogWithSource& GetSocketNetLog() const override {
-    return request_->net_log();
-  }
+  const NetLogWithSource& GetSocketNetLog() const override { return net_log_; }
 
   // URLRequest::Delegate overrides
 
@@ -574,6 +572,7 @@ class DnsHTTPAttempt : public DnsAttempt, public URLRequest::Delegate {
   CompletionCallback callback_;
   std::unique_ptr<DnsResponse> response_;
   std::unique_ptr<URLRequest> request_;
+  NetLogWithSource net_log_;
 
   base::WeakPtrFactory<DnsHTTPAttempt> weak_factory_;
 
@@ -599,7 +598,7 @@ class DnsTCPAttempt : public DnsAttempt {
     start_time_ = base::TimeTicks::Now();
     next_state_ = STATE_CONNECT_COMPLETE;
     int rv = socket_->Connect(
-        base::Bind(&DnsTCPAttempt::OnIOComplete, base::Unretained(this)));
+        base::BindOnce(&DnsTCPAttempt::OnIOComplete, base::Unretained(this)));
     if (rv == ERR_IO_PENDING) {
       set_result(rv);
       return rv;
@@ -701,7 +700,7 @@ class DnsTCPAttempt : public DnsAttempt {
       next_state_ = STATE_SEND_LENGTH;
       return socket_->Write(
           buffer_.get(), buffer_->BytesRemaining(),
-          base::Bind(&DnsTCPAttempt::OnIOComplete, base::Unretained(this)),
+          base::BindOnce(&DnsTCPAttempt::OnIOComplete, base::Unretained(this)),
           kTrafficAnnotation);
     }
     buffer_ =
@@ -720,7 +719,7 @@ class DnsTCPAttempt : public DnsAttempt {
       next_state_ = STATE_SEND_QUERY;
       return socket_->Write(
           buffer_.get(), buffer_->BytesRemaining(),
-          base::Bind(&DnsTCPAttempt::OnIOComplete, base::Unretained(this)),
+          base::BindOnce(&DnsTCPAttempt::OnIOComplete, base::Unretained(this)),
           kTrafficAnnotation);
     }
     buffer_ =
@@ -802,7 +801,7 @@ class DnsTCPAttempt : public DnsAttempt {
   int ReadIntoBuffer() {
     return socket_->Read(
         buffer_.get(), buffer_->BytesRemaining(),
-        base::Bind(&DnsTCPAttempt::OnIOComplete, base::Unretained(this)));
+        base::BindOnce(&DnsTCPAttempt::OnIOComplete, base::Unretained(this)));
   }
 
   State next_state_;
@@ -835,7 +834,7 @@ class DnsTransactionImpl : public DnsTransaction,
   DnsTransactionImpl(DnsSession* session,
                      const std::string& hostname,
                      uint16_t qtype,
-                     DnsTransactionFactory::CallbackType& callback,
+                     DnsTransactionFactory::CallbackType callback,
                      const NetLogWithSource& net_log,
                      const OptRecordRdata* opt_rdata)
       : session_(session),
@@ -890,9 +889,12 @@ class DnsTransactionImpl : public DnsTransaction,
 
     // Must always return result asynchronously, to avoid reentrancy.
     if (result.rv != ERR_IO_PENDING) {
+      // Clear all other non-completed attempts. They are no longer needed and
+      // they may interfere with this posted result.
+      ClearAttempts(result.attempt);
       base::ThreadTaskRunnerHandle::Get()->PostTask(
           FROM_HERE,
-          base::Bind(&DnsTransactionImpl::DoCallback, AsWeakPtr(), result));
+          base::BindOnce(&DnsTransactionImpl::DoCallback, AsWeakPtr(), result));
     }
   }
 
@@ -990,7 +992,7 @@ class DnsTransactionImpl : public DnsTransaction,
     net_log_.EndEventWithNetErrorCode(NetLogEventType::DNS_TRANSACTION,
                                       result.rv);
 
-    base::ResetAndReturn(&callback_).Run(this, result.rv, response);
+    std::move(callback_).Run(this, result.rv, response);
   }
 
   bool IsHostInDnsOverHttpsServerList(const std::string& host) const {
@@ -1117,14 +1119,9 @@ class DnsTransactionImpl : public DnsTransaction,
 
     RecordLostPacketsIfAny();
 
-    // Cancel all other attempts that have not received a response, no point
-    // waiting on them.
-    for (auto it = attempts_.begin(); it != attempts_.end();) {
-      if (!(*it)->is_completed())
-        it = attempts_.erase(it);
-      else
-        ++it;
-    }
+    // Cancel all attempts that have not received a response, no point waiting
+    // on them.
+    ClearAttempts(nullptr);
 
     unsigned attempt_number = attempts_.size();
 
@@ -1255,7 +1252,7 @@ class DnsTransactionImpl : public DnsTransaction,
           if (!qnames_.empty())
             qnames_.pop_front();
           if (qnames_.empty()) {
-            return AttemptResult(ERR_NAME_NOT_RESOLVED, NULL);
+            return result;
           } else {
             result = StartQuery();
           }
@@ -1295,6 +1292,18 @@ class DnsTransactionImpl : public DnsTransaction,
       }
     }
     return result;
+  }
+
+  // Clears and cancels all non-completed attempts. If |leave_attempt| is not
+  // null, it is not cleared even if complete.
+  void ClearAttempts(const DnsAttempt* leave_attempt) {
+    for (auto it = attempts_.begin(); it != attempts_.end();) {
+      if (!(*it)->is_completed() && it->get() != leave_attempt) {
+        it = attempts_.erase(it);
+      } else {
+        ++it;
+      }
+    }
   }
 
   void OnTimeout() {
@@ -1356,8 +1365,9 @@ class DnsTransactionFactoryImpl : public DnsTransactionFactory {
       uint16_t qtype,
       CallbackType callback,
       const NetLogWithSource& net_log) override {
-    return std::unique_ptr<DnsTransaction>(new DnsTransactionImpl(
-        session_.get(), hostname, qtype, callback, net_log, opt_rdata_.get()));
+    return std::make_unique<DnsTransactionImpl>(session_.get(), hostname, qtype,
+                                                std::move(callback), net_log,
+                                                opt_rdata_.get());
   }
 
   void AddEDNSOption(const OptRecordRdata::Opt& opt) override {

@@ -11,21 +11,13 @@ from optparse import OptionParser
 
 import build_cmd_buffer_lib
 
-# Empty flags because raster interface does not support glEnable
-_CAPABILITY_FLAGS = []
-
-_STATE_INFO = {}
-
 # Named type info object represents a named type that is used in OpenGL call
 # arguments.  Each named type defines a set of valid OpenGL call arguments.  The
 # named types are used in 'raster_cmd_buffer_functions.txt'.
 # type: The actual GL type of the named type.
 # valid: The list of values that are valid for both the client and the service.
-# valid_es3: The list of values that are valid in OpenGL ES 3, but not ES 2.
 # invalid: Examples of invalid values for the type. At least these values
 #          should be tested to be invalid.
-# deprecated_es3: The list of values that are valid in OpenGL ES 2, but
-#                 deprecated in ES 3.
 # is_complete: The list of valid values of type are final and will not be
 #              modified during runtime.
 # validator: If set to False will prevent creation of a ValueValidator. Values
@@ -117,11 +109,11 @@ _NAMED_TYPE_INFO = {
     ],
     'invalid': [
       'gfx::BufferUsage::SCANOUT_CAMERA_READ_WRITE',
+      'gfx::BufferUsage::CAMERA_AND_CPU_READ_WRITE',
     ],
   },
   'viz::ResourceFormat': {
     'type': 'viz::ResourceFormat',
-    'is_complete': True,
     'valid': [
       'viz::ResourceFormat::RGBA_8888',
       'viz::ResourceFormat::RGBA_4444',
@@ -129,11 +121,23 @@ _NAMED_TYPE_INFO = {
       'viz::ResourceFormat::ALPHA_8',
       'viz::ResourceFormat::LUMINANCE_8',
       'viz::ResourceFormat::RGB_565',
-      'viz::ResourceFormat::ETC1',
+      'viz::ResourceFormat::BGR_565',
       'viz::ResourceFormat::RED_8',
+      'viz::ResourceFormat::RG_88',
       'viz::ResourceFormat::LUMINANCE_F16',
       'viz::ResourceFormat::RGBA_F16',
       'viz::ResourceFormat::R16_EXT',
+      'viz::ResourceFormat::RGBX_8888',
+      'viz::ResourceFormat::BGRX_8888',
+      'viz::ResourceFormat::RGBX_1010102',
+      'viz::ResourceFormat::BGRX_1010102',
+      'viz::ResourceFormat::YVU_420',
+      'viz::ResourceFormat::YUV_420_BIPLANAR',
+      'viz::ResourceFormat::UYVY_422',
+
+    ],
+    'invalid': [
+      'viz::ResourceFormat::ETC1',
     ],
   },
 }
@@ -180,6 +184,14 @@ _FUNCTION_INFO = {
     'type': 'NoCommand',
     'trace_level': 2,
   },
+  'CreateAndConsumeTextureINTERNAL': {
+    'decoder_func': 'DoCreateAndConsumeTextureINTERNAL',
+    'internal': True,
+    'type': 'PUT',
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
+    'unit_test': False,
+    'trace_level': 2,
+  },
   'CreateImageCHROMIUM': {
     'type': 'NoCommand',
     'cmd_args':
@@ -212,9 +224,6 @@ _FUNCTION_INFO = {
     'impl_func': False,
     'decoder_func': 'DoFlush',
     'trace_level': 1,
-  },
-  'GenMailbox': {
-    'type': 'NoCommand',
   },
   'GetError': {
     'type': 'Is',
@@ -259,7 +268,6 @@ _FUNCTION_INFO = {
                 'GLuint64 timeout',
     'impl_func': False,
     'client_test': False,
-    'es3': True,
     'trace_level': 1,
   },
   'CompressedCopyTextureCHROMIUM': {
@@ -272,7 +280,6 @@ _FUNCTION_INFO = {
     'resource_type': 'Query',
     'resource_types': 'Queries',
     'unit_test': False,
-    'pepper_interface': 'Query',
     'not_shared': 'True',
   },
   'DeleteQueriesEXT': {
@@ -281,7 +288,6 @@ _FUNCTION_INFO = {
     'resource_type': 'Query',
     'resource_types': 'Queries',
     'unit_test': False,
-    'pepper_interface': 'Query',
   },
   'BeginQueryEXT': {
     'type': 'Custom',
@@ -289,7 +295,6 @@ _FUNCTION_INFO = {
     'cmd_args': 'GLenumQueryTarget target, GLidQuery id, void* sync_data',
     'data_transfer_methods': ['shm'],
     'gl_test_func': 'glBeginQuery',
-    'pepper_interface': 'Query',
   },
   'EndQueryEXT': {
     'type': 'Custom',
@@ -297,12 +302,10 @@ _FUNCTION_INFO = {
     'cmd_args': 'GLenumQueryTarget target, GLuint submit_count',
     'gl_test_func': 'glEndnQuery',
     'client_test': False,
-    'pepper_interface': 'Query',
   },
   'GetQueryObjectuivEXT': {
     'type': 'NoCommand',
     'gl_test_func': 'glGetQueryObjectuiv',
-    'pepper_interface': 'Query',
   },
   'BindTexImage2DCHROMIUM': {
     'decoder_func': 'DoBindTexImage2DCHROMIUM',
@@ -317,6 +320,20 @@ _FUNCTION_INFO = {
   },
   'OrderingBarrierCHROMIUM': {
     'type': 'NoCommand',
+  },
+  'TraceBeginCHROMIUM': {
+    'type': 'Custom',
+    'impl_func': False,
+    'client_test': False,
+    'cmd_args': 'GLuint category_bucket_id, GLuint name_bucket_id',
+    'extension': 'CHROMIUM_trace_marker',
+  },
+  'TraceEndCHROMIUM': {
+    'impl_func': False,
+    'client_test': False,
+    'decoder_func': 'DoTraceEndCHROMIUM',
+    'unit_test': False,
+    'extension': 'CHROMIUM_trace_marker',
   },
   'InsertFenceSyncCHROMIUM': {
     'type': 'Custom',
@@ -368,20 +385,27 @@ _FUNCTION_INFO = {
   },
   'BeginRasterCHROMIUM': {
     'decoder_func': 'DoBeginRasterCHROMIUM',
+    'type': 'PUT',
+    'count': 16,  # GL_MAILBOX_SIZE_CHROMIUM
     'internal': True,
     'impl_func': False,
     'unit_test': False,
   },
   'RasterCHROMIUM': {
-    'type': 'Data',
-    'internal': True,
     'decoder_func': 'DoRasterCHROMIUM',
-    'data_transfer_methods': ['shm'],
+    'internal': True,
+    'impl_func': True,
+    'cmd_args': 'GLuint raster_shm_id, GLuint raster_shm_offset,'
+                'GLsizeiptr raster_shm_size, GLuint font_shm_id,'
+                'GLuint font_shm_offset, GLsizeiptr font_shm_size',
+    'extension': 'CHROMIUM_raster_transport',
+    'extension_flag': 'chromium_raster_transport',
   },
   'EndRasterCHROMIUM': {
     'decoder_func': 'DoEndRasterCHROMIUM',
-    'impl_func': True,
+    'impl_func': False,
     'unit_test': False,
+    'client_test': False,
   },
   'CreateTransferCacheEntryINTERNAL': {
     'decoder_func': 'DoCreateTransferCacheEntryINTERNAL',
@@ -453,8 +477,7 @@ def main(argv):
   base_dir = os.getcwd()
   build_cmd_buffer_lib.InitializePrefix("Raster")
   gen = build_cmd_buffer_lib.GLGenerator(options.verbose, "2018",
-                                         _FUNCTION_INFO, _NAMED_TYPE_INFO,
-                                         _STATE_INFO, _CAPABILITY_FLAGS)
+                                         _FUNCTION_INFO, _NAMED_TYPE_INFO)
   gen.ParseGLH("gpu/command_buffer/raster_cmd_buffer_functions.txt")
 
   # Support generating files under gen/
@@ -463,38 +486,24 @@ def main(argv):
 
   os.chdir(base_dir)
 
-  # TODO(backer): Uncomment once the output looks good.
   gen.WriteCommandIds("gpu/command_buffer/common/raster_cmd_ids_autogen.h")
   gen.WriteFormat("gpu/command_buffer/common/raster_cmd_format_autogen.h")
   gen.WriteFormatTest(
     "gpu/command_buffer/common/raster_cmd_format_test_autogen.h")
   gen.WriteGLES2InterfaceHeader(
     "gpu/command_buffer/client/raster_interface_autogen.h")
-  # gen.WriteGLES2InterfaceStub(
-  #   "gpu/command_buffer/client/raster_interface_stub_autogen.h")
-  # gen.WriteGLES2InterfaceStubImpl(
-  #     "gpu/command_buffer/client/raster_interface_stub_impl_autogen.h")
   gen.WriteGLES2ImplementationHeader(
     "gpu/command_buffer/client/raster_implementation_autogen.h")
   gen.WriteGLES2Implementation(
     "gpu/command_buffer/client/raster_implementation_impl_autogen.h")
   gen.WriteGLES2ImplementationUnitTests(
     "gpu/command_buffer/client/raster_implementation_unittest_autogen.h")
-  # gen.WriteGLES2TraceImplementationHeader(
-  #     "gpu/command_buffer/client/raster_trace_implementation_autogen.h")
-  # gen.WriteGLES2TraceImplementation(
-  #     "gpu/command_buffer/client/raster_trace_implementation_impl_autogen.h")
-  # gen.WriteGLES2CLibImplementation(
-  #   "gpu/command_buffer/client/raster_c_lib_autogen.h")
   gen.WriteCmdHelperHeader(
      "gpu/command_buffer/client/raster_cmd_helper_autogen.h")
   gen.WriteServiceImplementation(
     "gpu/command_buffer/service/raster_decoder_autogen.h")
   gen.WriteServiceUnitTests(
     "gpu/command_buffer/service/raster_decoder_unittest_%d_autogen.h")
-  # gen.WriteServiceUnitTestsForExtensions(
-  #   "gpu/command_buffer/service/"
-  #   "raster_cmd_decoder_unittest_extensions_autogen.h")
   gen.WriteServiceUtilsHeader(
     "gpu/command_buffer/service/raster_cmd_validation_autogen.h")
   gen.WriteServiceUtilsImplementation(

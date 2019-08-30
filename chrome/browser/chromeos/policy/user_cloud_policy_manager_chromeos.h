@@ -17,15 +17,19 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/chromeos/policy/wildcard_login_checker.h"
+#include "components/account_id/account_id.h"
 #include "components/keyed_service/core/keyed_service.h"
+#include "components/keyed_service/core/keyed_service_shutdown_notifier.h"
 #include "components/policy/core/common/cloud/cloud_policy_client.h"
 #include "components/policy/core/common/cloud/cloud_policy_constants.h"
 #include "components/policy/core/common/cloud/cloud_policy_manager.h"
 #include "components/policy/core/common/cloud/cloud_policy_service.h"
-#include "components/signin/core/account_id/account_id.h"
+#include "content/public/browser/notification_observer.h"
+#include "content/public/browser/notification_registrar.h"
 
 class GoogleServiceAuthError;
 class PrefService;
+class Profile;
 
 namespace base {
 class SequencedTaskRunner;
@@ -35,17 +39,23 @@ namespace net {
 class URLRequestContextGetter;
 }
 
+namespace network {
+class SharedURLLoaderFactory;
+}
+
 namespace policy {
 
 class AppInstallEventLogUploader;
 class CloudExternalDataManager;
 class DeviceManagementService;
 class PolicyOAuth2TokenFetcher;
+class RemoteCommandsInvalidator;
 
 // Implements logic for initializing user policy on Chrome OS.
 class UserCloudPolicyManagerChromeOS : public CloudPolicyManager,
                                        public CloudPolicyClient::Observer,
                                        public CloudPolicyService::Observer,
+                                       public content::NotificationObserver,
                                        public KeyedService {
  public:
   // Enum describing what behavior we want to enforce here.
@@ -90,6 +100,7 @@ class UserCloudPolicyManagerChromeOS : public CloudPolicyManager,
   // |io_task_runner| is used for network IO. Currently this must be the IO
   // BrowserThread.
   UserCloudPolicyManagerChromeOS(
+      Profile* profile,
       std::unique_ptr<CloudPolicyStore> store,
       std::unique_ptr<CloudExternalDataManager> external_data_manager,
       const base::FilePath& component_policy_cache_path,
@@ -106,7 +117,8 @@ class UserCloudPolicyManagerChromeOS : public CloudPolicyManager,
   void Connect(
       PrefService* local_state,
       DeviceManagementService* device_management_service,
-      scoped_refptr<net::URLRequestContextGetter> system_request_context);
+      scoped_refptr<net::URLRequestContextGetter> system_request_context,
+      scoped_refptr<network::SharedURLLoaderFactory> system_url_loader_factory);
 
   // This class is one of the policy providers, and must be ready for the
   // creation of the Profile's PrefService; all the other KeyedServices depend
@@ -150,6 +162,13 @@ class UserCloudPolicyManagerChromeOS : public CloudPolicyManager,
 
   // Helper function to force a policy fetch timeout.
   void ForceTimeoutForTest();
+
+  // Sets the SharedURLLoaderFactory's that should be used for tests instead of
+  // retrieving one from the BrowserProcess object in FetchPolicyOAuthToken().
+  void SetSignInURLLoaderFactoryForTests(
+      scoped_refptr<network::SharedURLLoaderFactory> signin_url_loader_factory);
+  void SetSystemURLLoaderFactoryForTests(
+      scoped_refptr<network::SharedURLLoaderFactory> system_url_loader_factory);
 
  protected:
   // CloudPolicyManager:
@@ -195,6 +214,17 @@ class UserCloudPolicyManagerChromeOS : public CloudPolicyManager,
 
   void StartRefreshSchedulerIfReady();
 
+  // content::NotificationObserver:
+  void Observe(int type,
+               const content::NotificationSource& source,
+               const content::NotificationDetails& details) override;
+
+  // Observer called on profile shutdown.
+  void ProfileShutdown();
+
+  // Profile associated with the current user.
+  Profile* const profile_;
+
   // Owns the store, note that CloudPolicyManager just keeps a plain pointer.
   std::unique_ptr<CloudPolicyStore> store_;
 
@@ -219,8 +249,7 @@ class UserCloudPolicyManagerChromeOS : public CloudPolicyManager,
 
   // A timer that puts a hard limit on the maximum time to wait for a policy
   // refresh.
-  base::Timer policy_refresh_timeout_{false /* retain_user_task */,
-                                      false /* is_repeating */};
+  base::OneShotTimer policy_refresh_timeout_;
 
   // The pref service to pass to the refresh scheduler on initialization.
   PrefService* local_state_;
@@ -253,6 +282,22 @@ class UserCloudPolicyManagerChromeOS : public CloudPolicyManager,
   // The callback to invoke if the user session should be shutdown. This is
   // injected in the constructor to make it easier to write tests.
   base::OnceClosure fatal_error_callback_;
+
+  // Used to register for notification that profile creation is complete.
+  content::NotificationRegistrar registrar_;
+
+  // Invalidator used for remote commands to be delivered to this user.
+  std::unique_ptr<RemoteCommandsInvalidator> invalidator_;
+
+  // Listening to notification that profile is destroyed.
+  std::unique_ptr<KeyedServiceShutdownNotifier::Subscription>
+      shutdown_notifier_;
+
+  // The SharedURLLoaderFactory used in some tests to simulate network requests.
+  scoped_refptr<network::SharedURLLoaderFactory>
+      system_url_loader_factory_for_tests_;
+  scoped_refptr<network::SharedURLLoaderFactory>
+      signin_url_loader_factory_for_tests_;
 
   DISALLOW_COPY_AND_ASSIGN(UserCloudPolicyManagerChromeOS);
 };

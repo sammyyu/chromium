@@ -120,6 +120,18 @@ void SigninViewControllerDelegateViews::ResizeNativeView(int height) {
   }
 }
 
+void SigninViewControllerDelegateViews::HandleKeyboardEvent(
+    content::WebContents* source,
+    const content::NativeWebKeyboardEvent& event) {
+  // If this is a MODAL_TYPE_CHILD, then GetFocusManager() will return the focus
+  // manager of the parent window, which has registered accelerators, and the
+  // accelerators will fire. If this is a MODAL_TYPE_WINDOW, then this will have
+  // no effect, since no accelerators have been registered for this standalone
+  // window.
+  unhandled_keyboard_event_handler_.HandleKeyboardEvent(event,
+                                                        GetFocusManager());
+}
+
 void SigninViewControllerDelegateViews::DisplayModal() {
   DCHECK(!modal_signin_widget_);
 
@@ -184,9 +196,12 @@ SigninViewControllerDelegateViews::CreateGaiaWebView(
 
 std::unique_ptr<views::WebView>
 SigninViewControllerDelegateViews::CreateSyncConfirmationWebView(
-    Browser* browser) {
+    Browser* browser,
+    bool is_consent_bump) {
   return CreateDialogWebView(
-      browser, chrome::kChromeUISyncConfirmationURL,
+      browser,
+      is_consent_bump ? chrome::kChromeUISyncConsentBumpURL
+                      : chrome::kChromeUISyncConfirmationURL,
       GetSyncConfirmationDialogPreferredHeight(browser->profile()),
       GetSyncConfirmationDialogPreferredWidth(browser->profile()));
 }
@@ -243,15 +258,18 @@ SigninViewControllerDelegate::CreateModalSigninDelegate(
 SigninViewControllerDelegate*
 SigninViewControllerDelegate::CreateSyncConfirmationDelegate(
     SigninViewController* signin_view_controller,
-    Browser* browser) {
+    Browser* browser,
+    bool is_consent_bump) {
 #if defined(OS_MACOSX)
   if (views_mode_controller::IsViewsBrowserCocoa()) {
-    return CreateSyncConfirmationDelegate(signin_view_controller, browser);
+    return CreateSyncConfirmationDelegateCocoa(signin_view_controller, browser,
+                                               is_consent_bump);
   }
 #endif
   return new SigninViewControllerDelegateViews(
       signin_view_controller,
-      SigninViewControllerDelegateViews::CreateSyncConfirmationWebView(browser),
+      SigninViewControllerDelegateViews::CreateSyncConfirmationWebView(
+          browser, is_consent_bump),
       browser, ui::MODAL_TYPE_WINDOW, true);
 }
 

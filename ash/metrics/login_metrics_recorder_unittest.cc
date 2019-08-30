@@ -13,6 +13,7 @@
 #include "ash/login/ui/lock_contents_view.h"
 #include "ash/login/ui/lock_screen.h"
 #include "ash/login/ui/login_auth_user_view.h"
+#include "ash/login/ui/login_big_user_view.h"
 #include "ash/login/ui/login_test_base.h"
 #include "ash/login/ui/login_test_utils.h"
 #include "ash/public/cpp/config.h"
@@ -20,7 +21,7 @@
 #include "ash/shell.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/run_loop.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "ui/events/test/event_generator.h"
 #include "ui/views/widget/widget.h"
 
@@ -111,26 +112,31 @@ TEST_F(LoginMetricsRecorderTest, UnlockAttempts) {
   std::unique_ptr<MockLoginScreenClient> client = BindMockLoginScreenClient();
   client->set_authenticate_user_callback_result(false);
   auto* contents = new LockContentsView(
-      mojom::TrayActionState::kNotAvailable, data_dispatcher(),
+      mojom::TrayActionState::kNotAvailable, LockScreen::ScreenType::kLock,
+      data_dispatcher(),
       std::make_unique<FakeLoginDetachableBaseModel>(data_dispatcher()));
   LockContentsView::TestApi test_api(contents);
   SetUserCount(1);
   std::unique_ptr<views::Widget> widget = CreateWidgetWithContent(contents);
   LoginAuthUserView::AuthMethods auth_method = LoginAuthUserView::AUTH_PASSWORD;
-  AccountId primary_user =
-      test_api.primary_auth()->current_user()->basic_user_info->account_id;
-  EXPECT_EQ(test_api.primary_auth()->auth_methods(), auth_method);
-  EXPECT_CALL(*client, AuthenticateUser_(primary_user, testing::_, testing::_,
-                                         false, testing::_));
+  AccountId primary_user = test_api.primary_big_view()
+                               ->GetCurrentUser()
+                               ->basic_user_info->account_id;
+
+  EXPECT_NE(nullptr, test_api.primary_big_view()->auth_user());
+  EXPECT_EQ(test_api.primary_big_view()->auth_user()->auth_methods(),
+            auth_method);
+  EXPECT_CALL(*client,
+              AuthenticateUser_(primary_user, testing::_, false, testing::_));
   EXPECT_CALL(*client, OnFocusPod(primary_user));
 
   // Authentication attempt with password "abc1";
-  ui::test::EventGenerator& generator = GetEventGenerator();
-  generator.PressKey(ui::KeyboardCode::VKEY_A, 0);
-  generator.PressKey(ui::KeyboardCode::VKEY_B, 0);
-  generator.PressKey(ui::KeyboardCode::VKEY_C, 0);
-  generator.PressKey(ui::KeyboardCode::VKEY_1, 0);
-  generator.PressKey(ui::KeyboardCode::VKEY_RETURN, 0);
+  ui::test::EventGenerator* generator = GetEventGenerator();
+  generator->PressKey(ui::KeyboardCode::VKEY_A, 0);
+  generator->PressKey(ui::KeyboardCode::VKEY_B, 0);
+  generator->PressKey(ui::KeyboardCode::VKEY_C, 0);
+  generator->PressKey(ui::KeyboardCode::VKEY_1, 0);
+  generator->PressKey(ui::KeyboardCode::VKEY_RETURN, 0);
 
   // Run the loop to get the system salt and flush
   // LoginScreenClient::AuthenticateUser mojo call.
@@ -142,17 +148,17 @@ TEST_F(LoginMetricsRecorderTest, UnlockAttempts) {
       static_cast<int>(LoginMetricsRecorder::AuthMethod::kPassword), 1);
 
   // Authentication attempt with pin "1111"
-  test_api.primary_auth()->SetAuthMethods(auth_method |
-                                          LoginAuthUserView::AUTH_PIN);
-  EXPECT_EQ(test_api.primary_auth()->auth_methods(),
+  test_api.primary_big_view()->auth_user()->SetAuthMethods(
+      auth_method | LoginAuthUserView::AUTH_PIN);
+  EXPECT_EQ(test_api.primary_big_view()->auth_user()->auth_methods(),
             (auth_method | LoginAuthUserView::AUTH_PIN));
-  EXPECT_CALL(*client, AuthenticateUser_(primary_user, testing::_, testing::_,
-                                         true, testing::_));
-  generator.PressKey(ui::KeyboardCode::VKEY_1, 0);
-  generator.PressKey(ui::KeyboardCode::VKEY_1, 0);
-  generator.PressKey(ui::KeyboardCode::VKEY_1, 0);
-  generator.PressKey(ui::KeyboardCode::VKEY_1, 0);
-  generator.PressKey(ui::KeyboardCode::VKEY_RETURN, 0);
+  EXPECT_CALL(*client,
+              AuthenticateUser_(primary_user, testing::_, true, testing::_));
+  generator->PressKey(ui::KeyboardCode::VKEY_1, 0);
+  generator->PressKey(ui::KeyboardCode::VKEY_1, 0);
+  generator->PressKey(ui::KeyboardCode::VKEY_1, 0);
+  generator->PressKey(ui::KeyboardCode::VKEY_1, 0);
+  generator->PressKey(ui::KeyboardCode::VKEY_RETURN, 0);
 
   // Run the loop to get the system salt and flush
   // LoginScreenClient::AuthenticateUser mojo call.
@@ -164,16 +170,16 @@ TEST_F(LoginMetricsRecorderTest, UnlockAttempts) {
       static_cast<int>(LoginMetricsRecorder::AuthMethod::kPin), 1);
 
   // Authentication attempt with easy unlock tap.
-  test_api.primary_auth()->SetAuthMethods(auth_method |
-                                          LoginAuthUserView::AUTH_TAP);
-  EXPECT_EQ(test_api.primary_auth()->auth_methods(),
+  test_api.primary_big_view()->auth_user()->SetAuthMethods(
+      auth_method | LoginAuthUserView::AUTH_TAP);
+  EXPECT_EQ(test_api.primary_big_view()->auth_user()->auth_methods(),
             (auth_method | LoginAuthUserView::AUTH_TAP));
   EXPECT_CALL(*client, AttemptUnlock(primary_user));
-  generator.MoveMouseTo(MakeLoginPrimaryAuthTestApi(contents)
-                            .user_view()
-                            ->GetBoundsInScreen()
-                            .CenterPoint());
-  generator.ClickLeftButton();
+  generator->MoveMouseTo(MakeLoginAuthTestApi(contents, AuthTarget::kPrimary)
+                             .user_view()
+                             ->GetBoundsInScreen()
+                             .CenterPoint());
+  generator->ClickLeftButton();
 
   // Flush LoginScreenClient::AttemptUnlock mojo call.
   Shell::Get()->login_screen_controller()->FlushForTesting();
@@ -190,7 +196,8 @@ TEST_F(LoginMetricsRecorderTest, NoteActionButtonClick) {
       session_manager::SessionState::LOCKED);
 
   auto* contents = new LockContentsView(
-      mojom::TrayActionState::kAvailable, data_dispatcher(),
+      mojom::TrayActionState::kAvailable, LockScreen::ScreenType::kLock,
+      data_dispatcher(),
       std::make_unique<FakeLoginDetachableBaseModel>(data_dispatcher()));
   SetUserCount(1);
   std::unique_ptr<views::Widget> widget = CreateWidgetWithContent(contents);
@@ -198,10 +205,10 @@ TEST_F(LoginMetricsRecorderTest, NoteActionButtonClick) {
   LockContentsView::TestApi test_api(contents);
   EXPECT_TRUE(test_api.note_action()->visible());
 
-  ui::test::EventGenerator& generator = GetEventGenerator();
-  generator.MoveMouseTo(
+  ui::test::EventGenerator* generator = GetEventGenerator();
+  generator->MoveMouseTo(
       test_api.note_action()->GetBoundsInScreen().CenterPoint());
-  generator.ClickLeftButton();
+  generator->ClickLeftButton();
 
   histogram_tester_->ExpectTotalCount(kUserClicksOnLockHistogramName, 1);
   histogram_tester_->ExpectBucketCount(

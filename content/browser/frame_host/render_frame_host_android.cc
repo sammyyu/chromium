@@ -4,6 +4,8 @@
 
 #include "content/browser/frame_host/render_frame_host_android.h"
 
+#include <utility>
+
 #include "base/android/callback_android.h"
 #include "base/android/jni_string.h"
 #include "base/android/unguessable_token_android.h"
@@ -28,12 +30,12 @@ void OnGetCanonicalUrlForSharing(
     const base::android::JavaRef<jobject>& jcallback,
     const base::Optional<GURL>& url) {
   if (!url) {
-    base::android::RunCallbackAndroid(jcallback, ScopedJavaLocalRef<jstring>());
+    base::android::RunObjectCallbackAndroid(jcallback,
+                                            ScopedJavaLocalRef<jstring>());
     return;
   }
 
-  base::android::RunCallbackAndroid(
-      jcallback, ConvertUTF8ToJavaString(AttachCurrentThread(), url->spec()));
+  base::android::RunStringCallbackAndroid(jcallback, url->spec());
 }
 }  // namespace
 
@@ -93,10 +95,10 @@ RenderFrameHostAndroid::GetAndroidOverlayRoutingToken(
       env, render_frame_host_->GetOverlayRoutingToken());
 }
 
-void RenderFrameHostAndroid::SetHasReceivedUserGesture(
+void RenderFrameHostAndroid::NotifyUserActivation(
     JNIEnv* env,
     const base::android::JavaParamRef<jobject>&) {
-  render_frame_host_->SetHasReceivedUserGesture();
+  render_frame_host_->NotifyUserActivation();
 }
 
 }  // namespace content

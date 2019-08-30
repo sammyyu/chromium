@@ -10,10 +10,6 @@
 
 namespace ash {
 
-// The fallback notifier id for ARC notifications. Used when ArcNotificationItem
-// is provided with an empty app id.
-ASH_EXPORT constexpr char kDefaultArcNotifierId[] = "ARC_NOTIFICATION";
-
 // Size of the shelf when visible (height when the shelf is horizontal and
 // width when the shelf is vertical).
 ASH_EXPORT constexpr int kShelfSize = 48;
@@ -41,6 +37,7 @@ ASH_EXPORT constexpr int kShelfButtonSize = 48;
 
 // Size of the space between buttons on the shelf.
 ASH_EXPORT constexpr int kShelfButtonSpacing = 16;
+ASH_EXPORT constexpr int kShelfButtonSpacingNewUi = 8;
 
 // Highlight color used for shelf button activated states.
 // TODO(bruthig|mohsen): Use of this color is temporary. Draw the active state
@@ -60,12 +57,13 @@ ASH_EXPORT constexpr SkColor kShelfIconColor = SK_ColorWHITE;
 
 // The alpha value for the shelf background when a window is overlapping.
 ASH_EXPORT constexpr int kShelfTranslucentAlpha = 153;
+ASH_EXPORT constexpr int kShelfTranslucentWithOverlapAlphaNewUi = 190;
 
 // The alpha value used to darken a colorized shelf when the shelf is
 // translucent.
 constexpr int kShelfTranslucentColorDarkenAlpha = 178;
 
-// The alpha vlaue usesd to darken a colorized shelf when the shelf is opaque.
+// The alpha value used to darken a colorized shelf when the shelf is opaque.
 constexpr int kShelfOpaqueColorDarkenAlpha = 178;
 
 // The width and height of the material design overflow button.

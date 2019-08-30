@@ -4,7 +4,6 @@
 
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
 #include "base/path_service.h"
 #include "base/process/process.h"
 #include "base/run_loop.h"
@@ -48,22 +47,14 @@ using content::WebContents;
 namespace {
 
 int RenderProcessHostCount() {
-  content::RenderProcessHost::iterator hosts =
-      content::RenderProcessHost::AllHostsIterator();
-  int count = 0;
-  while (!hosts.IsAtEnd()) {
-    if (hosts.GetCurrentValue()->HasConnection())
-      count++;
-    hosts.Advance();
-  }
-  return count;
+  return content::RenderProcessHost::GetCurrentRenderProcessCountForTesting();
 }
 
 WebContents* FindFirstDevToolsContents() {
   std::unique_ptr<content::RenderWidgetHostIterator> widgets(
       RenderWidgetHost::GetRenderWidgetHosts());
   while (content::RenderWidgetHost* widget = widgets->GetNextHost()) {
-    if (!widget->GetProcess()->HasConnection())
+    if (!widget->GetProcess()->IsInitializedAndNotDead())
       continue;
     RenderViewHost* view_host = RenderViewHost::From(widget);
     if (!view_host)
@@ -94,7 +85,7 @@ base::Process ProcessFromHandle(base::ProcessHandle handle) {
 
 }  // namespace
 
-class ChromeRenderProcessHostTest : public ExtensionBrowserTest {
+class ChromeRenderProcessHostTest : public extensions::ExtensionBrowserTest {
  public:
   ChromeRenderProcessHostTest() {}
 
@@ -108,7 +99,8 @@ class ChromeRenderProcessHostTest : public ExtensionBrowserTest {
 
     WaitForLauncherThread();
     WaitForMessageProcessing(wc);
-    return ProcessFromHandle(wc->GetMainFrame()->GetProcess()->GetHandle());
+    return ProcessFromHandle(
+        wc->GetMainFrame()->GetProcess()->GetProcess().Handle());
   }
 
   // Loads the given url in a new background tab and returns the handle of its
@@ -125,7 +117,8 @@ class ChromeRenderProcessHostTest : public ExtensionBrowserTest {
 
     WaitForLauncherThread();
     WaitForMessageProcessing(wc);
-    return ProcessFromHandle(wc->GetMainFrame()->GetProcess()->GetHandle());
+    return ProcessFromHandle(
+        wc->GetMainFrame()->GetProcess()->GetProcess().Handle());
   }
 
   // Ensures that the backgrounding / foregrounding gets a chance to run.
@@ -534,21 +527,21 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
 class WindowDestroyer : public content::WebContentsObserver {
  public:
   WindowDestroyer(content::WebContents* web_contents, TabStripModel* model)
-      : content::WebContentsObserver(web_contents), tab_strip_model_(model) {}
+      : content::WebContentsObserver(web_contents),
+        tab_strip_model_(model),
+        browser_closed_observer_(chrome::NOTIFICATION_BROWSER_CLOSED,
+                                 content::NotificationService::AllSources()) {}
+
+  // Wait for the browser window to be destroyed.
+  void Wait() { browser_closed_observer_.Wait(); }
 
   void RenderProcessGone(base::TerminationStatus status) override {
-    // Wait for the window to be destroyed, which will ensure all other
-    // RenderViewHost objects are deleted before we return and proceed with
-    // the next iteration of notifications.
-    content::WindowedNotificationObserver observer(
-        chrome::NOTIFICATION_BROWSER_CLOSED,
-        content::NotificationService::AllSources());
     tab_strip_model_->CloseAllTabs();
-    observer.Wait();
   }
 
  private:
   TabStripModel* tab_strip_model_;
+  content::WindowedNotificationObserver browser_closed_observer_;
 
   DISALLOW_COPY_AND_ASSIGN(WindowDestroyer);
 };
@@ -582,16 +575,12 @@ IN_PROC_BROWSER_TEST_F(ChromeRenderProcessHostTest,
   // Create an object that will close the window on a process crash.
   WindowDestroyer destroyer(wc1, browser()->tab_strip_model());
 
-  content::WindowedNotificationObserver observer(
-      chrome::NOTIFICATION_BROWSER_CLOSED,
-      content::NotificationService::AllSources());
-
   // Kill the renderer process, simulating a crash. This should the ProcessDied
   // method to be called. Alternatively, RenderProcessHost::OnChannelError can
   // be called to directly force a call to ProcessDied.
   wc1->GetMainFrame()->GetProcess()->Shutdown(-1);
 
-  observer.Wait();
+  destroyer.Wait();
 }
 
 // Sets up the browser in order to start the tests with two tabs open: one
@@ -619,7 +608,7 @@ class ChromeRenderProcessHostBackgroundingTest
 
     // Set up the server and get the test pages.
     base::FilePath test_data_dir;
-    ASSERT_TRUE(PathService::Get(base::DIR_SOURCE_ROOT, &test_data_dir));
+    ASSERT_TRUE(base::PathService::Get(base::DIR_SOURCE_ROOT, &test_data_dir));
     embedded_test_server()->ServeFilesFromDirectory(
         test_data_dir.AppendASCII("chrome/test/data/"));
     audio_url_ = embedded_test_server()->GetURL("/extensions/loop_audio.html");
@@ -634,8 +623,10 @@ class ChromeRenderProcessHostBackgroundingTest
 
     // Create a new tab for the no audio page and confirm that the process of
     // each tab is different and that both are valid.
-    audio_process_ = ProcessFromHandle(
-        audio_tab_web_contents_->GetMainFrame()->GetProcess()->GetHandle());
+    audio_process_ = ProcessFromHandle(audio_tab_web_contents_->GetMainFrame()
+                                           ->GetProcess()
+                                           ->GetProcess()
+                                           .Handle());
     no_audio_process_ = ShowSingletonTab(no_audio_url_);
     ASSERT_NE(audio_process_.Pid(), no_audio_process_.Pid());
     ASSERT_TRUE(no_audio_process_.IsValid());

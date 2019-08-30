@@ -40,7 +40,8 @@ class ShellContentBrowserClient : public ContentBrowserClient {
       content::RenderFrameHost* render_frame_host,
       const std::string& interface_name,
       mojo::ScopedMessagePipeHandle interface_pipe) override;
-  void RegisterInProcessServices(StaticServiceMap* services) override;
+  void RegisterInProcessServices(StaticServiceMap* services,
+                                 ServiceManagerConnection* connection) override;
   void RegisterOutOfProcessServices(OutOfProcessServiceMap* services) override;
   bool ShouldTerminateOnServiceQuit(
       const service_manager::Identity& id) override;
@@ -72,11 +73,12 @@ class ShellContentBrowserClient : public ContentBrowserClient {
   scoped_refptr<LoginDelegate> CreateLoginDelegate(
       net::AuthChallengeInfo* auth_info,
       content::ResourceRequestInfo::WebContentsGetter web_contents_getter,
+      const content::GlobalRequestID& request_id,
       bool is_main_frame,
       const GURL& url,
+      scoped_refptr<net::HttpResponseHeaders> response_headers,
       bool first_auth_attempt,
-      const base::Callback<void(const base::Optional<net::AuthCredentials>&)>&
-          auth_required_callback) override;
+      LoginAuthRequiredCallback auth_required_callback) override;
 
 #if defined(OS_LINUX) || defined(OS_ANDROID)
   void GetAdditionalMappedFilesForChildProcess(
@@ -101,15 +103,16 @@ class ShellContentBrowserClient : public ContentBrowserClient {
   // Used for content_browsertests.
   void set_select_client_certificate_callback(
       base::Closure select_client_certificate_callback) {
-    select_client_certificate_callback_ = select_client_certificate_callback;
+    select_client_certificate_callback_ =
+        std::move(select_client_certificate_callback);
   }
   void set_should_terminate_on_service_quit_callback(
       base::Callback<bool(const service_manager::Identity&)> callback) {
-    should_terminate_on_service_quit_callback_ = callback;
+    should_terminate_on_service_quit_callback_ = std::move(callback);
   }
   void set_login_request_callback(
       base::Callback<void()> login_request_callback) {
-    login_request_callback_ = login_request_callback;
+    login_request_callback_ = std::move(login_request_callback);
   }
 
  protected:

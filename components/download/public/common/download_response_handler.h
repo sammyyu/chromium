@@ -5,12 +5,14 @@
 #ifndef COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_RESPONSE_HANDLER_H_
 #define COMPONENTS_DOWNLOAD_PUBLIC_COMMON_DOWNLOAD_RESPONSE_HANDLER_H_
 
+#include <string>
 #include <vector>
 
 #include "components/download/public/common/download_create_info.h"
 #include "components/download/public/common/download_export.h"
 #include "components/download/public/common/download_source.h"
 #include "components/download/public/common/download_stream.mojom.h"
+#include "components/download/public/common/download_url_parameters.h"
 #include "net/cert/cert_status_flags.h"
 #include "services/network/public/cpp/resource_response.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
@@ -24,34 +26,34 @@ namespace download {
 class COMPONENTS_DOWNLOAD_EXPORT DownloadResponseHandler
     : public network::mojom::URLLoaderClient {
  public:
-  // Class for handling the stream once response starts.
+  // Class for handling the stream response.
   class Delegate {
    public:
     virtual void OnResponseStarted(
         std::unique_ptr<DownloadCreateInfo> download_create_info,
         mojom::DownloadStreamHandlePtr stream_handle) = 0;
     virtual void OnReceiveRedirect() = 0;
+    virtual void OnResponseCompleted() = 0;
   };
 
-  DownloadResponseHandler(network::ResourceRequest* resource_request,
-                          Delegate* delegate,
-                          std::unique_ptr<DownloadSaveInfo> save_info,
-                          bool is_parallel_request,
-                          bool is_transient,
-                          bool fetch_error_body,
-                          const std::string& request_origin,
-                          DownloadSource download_source,
-                          std::vector<GURL> url_chain);
+  DownloadResponseHandler(
+      network::ResourceRequest* resource_request,
+      Delegate* delegate,
+      std::unique_ptr<DownloadSaveInfo> save_info,
+      bool is_parallel_request,
+      bool is_transient,
+      bool fetch_error_body,
+      bool follow_cross_origin_redirects,
+      const DownloadUrlParameters::RequestHeadersType& request_headers,
+      const std::string& request_origin,
+      DownloadSource download_source,
+      std::vector<GURL> url_chain);
   ~DownloadResponseHandler() override;
 
   // network::mojom::URLLoaderClient
-  void OnReceiveResponse(
-      const network::ResourceResponseHead& head,
-      const base::Optional<net::SSLInfo>& ssl_info,
-      network::mojom::DownloadedTempFilePtr downloaded_file) override;
+  void OnReceiveResponse(const network::ResourceResponseHead& head) override;
   void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
                          const network::ResourceResponseHead& head) override;
-  void OnDataDownloaded(int64_t data_length, int64_t encoded_length) override;
   void OnUploadProgress(int64_t current_position,
                         int64_t total_size,
                         OnUploadProgressCallback callback) override;
@@ -79,8 +81,12 @@ class COMPONENTS_DOWNLOAD_EXPORT DownloadResponseHandler
   std::vector<GURL> url_chain_;
   std::string method_;
   GURL referrer_;
+  net::URLRequest::ReferrerPolicy referrer_policy_;
   bool is_transient_;
   bool fetch_error_body_;
+  bool follow_cross_origin_redirects_;
+  url::Origin first_origin_;
+  DownloadUrlParameters::RequestHeadersType request_headers_;
   std::string request_origin_;
   DownloadSource download_source_;
   net::CertStatus cert_status_;

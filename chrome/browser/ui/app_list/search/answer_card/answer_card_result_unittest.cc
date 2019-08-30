@@ -31,6 +31,7 @@ class AnswerCardTestContents : public AnswerCardContents {
   // AnswerCardContents overrides:
   void LoadURL(const GURL& url) override { NOTREACHED(); }
   const base::UnguessableToken& GetToken() const override { return token_; }
+  gfx::Size GetPreferredSize() const override { return gfx::Size(); }
 
  private:
   base::UnguessableToken token_;
@@ -86,20 +87,12 @@ TEST_F(AnswerCardResultTest, Basic) {
 
   EXPECT_EQ(kResultUrl, result->id());
   EXPECT_EQ(base::ASCIIToUTF16(kResultTitle), result->title());
-  EXPECT_EQ(SearchResult::DISPLAY_CARD, result->display_type());
+  EXPECT_EQ(ash::SearchResultDisplayType::kCard, result->display_type());
   EXPECT_EQ(1, result->relevance());
   EXPECT_EQ(GetToken(), result->answer_card_contents_token());
 
   result->Open(ui::EF_NONE);
   EXPECT_EQ(kResultUrl, GetLastOpenedUrl().spec());
-
-  std::unique_ptr<SearchResult> result1 = result->Duplicate();
-
-  EXPECT_EQ(kResultUrl, result1->id());
-  EXPECT_EQ(base::ASCIIToUTF16(kResultTitle), result1->title());
-  EXPECT_EQ(SearchResult::DISPLAY_CARD, result1->display_type());
-  EXPECT_EQ(1, result1->relevance());
-  EXPECT_EQ(GetToken(), result1->answer_card_contents_token());
 }
 
 TEST_F(AnswerCardResultTest, NullContents) {
@@ -108,7 +101,6 @@ TEST_F(AnswerCardResultTest, NullContents) {
   // Shouldn't crash with null contents.
   std::unique_ptr<AnswerCardResult> result = CreateResult(
       kResultUrl, kResultUrlStripped, base::ASCIIToUTF16(kResultTitle));
-  std::unique_ptr<SearchResult> result1 = result->Duplicate();
 }
 
 TEST_F(AnswerCardResultTest, EarlyDeleteContents) {
@@ -117,8 +109,6 @@ TEST_F(AnswerCardResultTest, EarlyDeleteContents) {
       kResultUrl, kResultUrlStripped, base::ASCIIToUTF16(kResultTitle));
 
   DeleteContents();
-
-  result->Duplicate();
 }
 
 }  // namespace test

@@ -11,11 +11,10 @@ import org.junit.Assert;
 import org.junit.Before;
 import org.junit.Rule;
 import org.junit.Test;
-import org.junit.rules.TestRule;
 import org.junit.runner.RunWith;
 
+import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
-import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.base.test.util.Feature;
 import org.chromium.base.test.util.Restriction;
@@ -23,12 +22,11 @@ import org.chromium.chrome.R;
 import org.chromium.chrome.browser.ChromeActivity;
 import org.chromium.chrome.browser.ChromeFeatureList;
 import org.chromium.chrome.browser.ChromeSwitches;
-import org.chromium.chrome.browser.search_engines.TemplateUrlService;
-import org.chromium.chrome.browser.toolbar.ToolbarModelImpl;
+import org.chromium.chrome.browser.search_engines.TemplateUrlServiceTestUtils;
+import org.chromium.chrome.browser.toolbar.ToolbarModel;
 import org.chromium.chrome.browser.widget.TintedImageButton;
 import org.chromium.chrome.test.ChromeActivityTestRule;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
-import org.chromium.chrome.test.util.browser.Features;
 import org.chromium.chrome.test.util.browser.Features.DisableFeatures;
 import org.chromium.chrome.test.util.browser.Features.EnableFeatures;
 import org.chromium.components.security_state.ConnectionSecurityLevel;
@@ -48,23 +46,29 @@ public class LocationBarLayoutTest {
     public ChromeActivityTestRule<ChromeActivity> mActivityTestRule =
             new ChromeActivityTestRule<>(ChromeActivity.class);
 
-    @Rule
-    public TestRule mProcessor = new Features.InstrumentationProcessor();
-
-    private static final int SEARCH_ICON_RESOURCE = R.drawable.ic_search;
+    private static final int SEARCH_ICON_RESOURCE = R.drawable.omnibox_search;
 
     private static final String SEARCH_TERMS = "machine learning";
+    private static final String SEARCH_TERMS_URL = "testing.com";
     private static final String GOOGLE_SRP_URL = "https://www.google.com/search?q=machine+learning";
+    private static final String GOOGLE_SRP_URL_LIKE_URL =
+            "https://www.google.com/search?q=" + SEARCH_TERMS_URL;
     private static final String BING_SRP_URL = "https://www.bing.com/search?q=machine+learning";
+
+    private static final String VERBOSE_URL = "https://www.suchwowveryyes.edu";
+    private static final String TRIMMED_URL = "suchwowveryyes.edu";
 
     private TestToolbarModel mTestToolbarModel;
 
-    private class TestToolbarModel extends ToolbarModelImpl {
+    private class TestToolbarModel extends ToolbarModel {
         private String mCurrentUrl;
+        private String mEditingText;
+        private String mDisplayText;
         private Integer mSecurityLevel;
 
         public TestToolbarModel() {
-            super(null /* bottomSheet */, false /* useModernDesign */);
+            super(ContextUtils.getApplicationContext(), null /* bottomSheet */,
+                    false /* useModernDesign */);
             initializeWithNative();
         }
 
@@ -90,6 +94,14 @@ public class LocationBarLayoutTest {
         }
 
         @Override
+        public UrlBarData getUrlBarData() {
+            UrlBarData urlBarData = super.getUrlBarData();
+            CharSequence displayText = mDisplayText == null ? urlBarData.displayText : mDisplayText;
+            String editingText = mEditingText == null ? urlBarData.editingText : mEditingText;
+            return UrlBarData.forUrlAndText(getCurrentUrl(), displayText.toString(), editingText);
+        }
+
+        @Override
         public boolean shouldShowGoogleG(String urlBarText) {
             return false;
         }
@@ -109,22 +121,12 @@ public class LocationBarLayoutTest {
         ThreadUtils.runOnUiThreadBlocking(() -> { getLocationBar().updateLoadingState(true); });
     }
 
-    // Partially lifted from TemplateUrlServiceTest.
-    private void setSearchEngine(String keyword)
-            throws ExecutionException, InterruptedException, TimeoutException {
-        CallbackHelper callback = new CallbackHelper();
-        Callable<Void> setSearchEngineCallable = new Callable<Void>() {
-            @Override
-            public Void call() {
-                TemplateUrlService.getInstance().runWhenLoaded(() -> {
-                    TemplateUrlService.getInstance().setSearchEngine(keyword);
-                    callback.notifyCalled();
-                });
-                return null;
-            }
-        };
-        ThreadUtils.runOnUiThreadBlocking(setSearchEngineCallable);
-        callback.waitForCallback("Failed to set search engine", 0);
+    private String getUrlText(UrlBar urlBar) {
+        try {
+            return ThreadUtils.runOnUiThreadBlocking(() -> urlBar.getText().toString());
+        } catch (ExecutionException ex) {
+            throw new RuntimeException(ex);
+        }
     }
 
     private UrlBar getUrlBar() {
@@ -153,8 +155,8 @@ public class LocationBarLayoutTest {
         ThreadUtils.runOnUiThreadBlocking(new Callable<Void>() {
             @Override
             public Void call() throws InterruptedException {
-                mActivityTestRule.typeInOmnibox(text, false);
                 getLocationBar().onUrlFocusChange(true);
+                mActivityTestRule.typeInOmnibox(text, false);
                 return null;
             }
         });
@@ -224,7 +226,7 @@ public class LocationBarLayoutTest {
         mTestToolbarModel.setSecurityLevel(ConnectionSecurityLevel.SECURE);
         setUrlToPageUrl(locationBar);
 
-        Assert.assertEquals(SEARCH_TERMS, urlBar.getText().toString());
+        Assert.assertEquals(SEARCH_TERMS, getUrlText(urlBar));
     }
 
     @Test
@@ -236,12 +238,12 @@ public class LocationBarLayoutTest {
         final UrlBar urlBar = getUrlBar();
         final LocationBarLayout locationBar = getLocationBar();
 
-        setSearchEngine("bing.com");
+        TemplateUrlServiceTestUtils.setSearchEngine("bing.com");
         mTestToolbarModel.setCurrentUrl(BING_SRP_URL);
         mTestToolbarModel.setSecurityLevel(ConnectionSecurityLevel.SECURE);
         setUrlToPageUrl(locationBar);
 
-        Assert.assertEquals(SEARCH_TERMS, urlBar.getText().toString());
+        Assert.assertEquals(SEARCH_TERMS, getUrlText(urlBar));
     }
 
     @Test
@@ -253,12 +255,12 @@ public class LocationBarLayoutTest {
         final UrlBar urlBar = getUrlBar();
         final LocationBarLayout locationBar = getLocationBar();
 
-        setSearchEngine("bing.com");
+        TemplateUrlServiceTestUtils.setSearchEngine("bing.com");
         mTestToolbarModel.setCurrentUrl(GOOGLE_SRP_URL);
         mTestToolbarModel.setSecurityLevel(ConnectionSecurityLevel.SECURE);
         setUrlToPageUrl(locationBar);
 
-        Assert.assertNotEquals(SEARCH_TERMS, urlBar.getText().toString());
+        Assert.assertNotEquals(SEARCH_TERMS, getUrlText(urlBar));
     }
 
     @Test
@@ -275,10 +277,11 @@ public class LocationBarLayoutTest {
 
         TintedImageButton securityButton = getSecurityButton();
         Assert.assertNotEquals(SEARCH_TERMS, urlBar.getText().toString());
-        ThreadUtils.runOnUiThreadBlocking(
-                ()
-                        -> Assert.assertNotEquals(
-                                mTestToolbarModel.getSecurityIconResource(), SEARCH_ICON_RESOURCE));
+        ThreadUtils.runOnUiThreadBlocking(() -> {
+            Assert.assertNotEquals(mTestToolbarModel.getSecurityIconResource(
+                                           mActivityTestRule.getActivity().isTablet()),
+                    SEARCH_ICON_RESOURCE);
+        });
     }
 
     @Test
@@ -294,17 +297,34 @@ public class LocationBarLayoutTest {
 
         TintedImageButton securityButton = getSecurityButton();
         Assert.assertEquals(securityButton.getVisibility(), View.VISIBLE);
-        ThreadUtils.runOnUiThreadBlocking(
-                ()
-                        -> Assert.assertEquals(
-                                mTestToolbarModel.getSecurityIconResource(), SEARCH_ICON_RESOURCE));
+        ThreadUtils.runOnUiThreadBlocking(() -> {
+            Assert.assertEquals(mTestToolbarModel.getSecurityIconResource(
+                                        mActivityTestRule.getActivity().isTablet()),
+                    SEARCH_ICON_RESOURCE);
+        });
+    }
+
+    @Test
+    @SmallTest
+    @EnableFeatures(ChromeFeatureList.QUERY_IN_OMNIBOX)
+    @Feature({"QueryInOmnibox"})
+    public void testNotShowingSearchTermsIfLooksLikeUrl() throws ExecutionException {
+        final UrlBar urlBar = getUrlBar();
+        final LocationBarLayout locationBar = getLocationBar();
+
+        mTestToolbarModel.setCurrentUrl(GOOGLE_SRP_URL_LIKE_URL);
+        mTestToolbarModel.setSecurityLevel(ConnectionSecurityLevel.SECURE);
+        setUrlToPageUrl(locationBar);
+
+        Assert.assertNotEquals(SEARCH_TERMS_URL, getUrlText(urlBar));
     }
 
     @Test
     @SmallTest
     @DisableFeatures(ChromeFeatureList.QUERY_IN_OMNIBOX)
     @Feature({"QueryInOmnibox"})
-    public void testNotShowingSearchTermsIfSrpIsGoogleAndFlagIsDisabled() {
+    public void testNotShowingSearchTermsIfSrpIsGoogleAndFlagIsDisabled()
+            throws ExecutionException {
         final UrlBar urlBar = getUrlBar();
         final LocationBarLayout locationBar = getLocationBar();
 
@@ -312,6 +332,28 @@ public class LocationBarLayoutTest {
         mTestToolbarModel.setSecurityLevel(ConnectionSecurityLevel.SECURE);
         setUrlToPageUrl(locationBar);
 
-        Assert.assertNotEquals(SEARCH_TERMS, urlBar.getText().toString());
+        Assert.assertNotEquals(SEARCH_TERMS, getUrlText(urlBar));
+    }
+
+    @Test
+    @SmallTest
+    public void testEditingTextShownOnFocus() {
+        final UrlBar urlBar = getUrlBar();
+        final LocationBarLayout locationBar = getLocationBar();
+
+        mTestToolbarModel.mDisplayText = TRIMMED_URL;
+        mTestToolbarModel.mEditingText = VERBOSE_URL;
+        setUrlToPageUrl(locationBar);
+
+        Assert.assertEquals(TRIMMED_URL, getUrlText(urlBar));
+
+        ThreadUtils.runOnUiThreadBlocking(() -> { urlBar.requestFocus(); });
+
+        Assert.assertEquals(VERBOSE_URL, getUrlText(urlBar));
+
+        ThreadUtils.runOnUiThreadBlocking(() -> {
+            Assert.assertEquals(0, urlBar.getSelectionStart());
+            Assert.assertEquals(VERBOSE_URL.length(), urlBar.getSelectionEnd());
+        });
     }
 }

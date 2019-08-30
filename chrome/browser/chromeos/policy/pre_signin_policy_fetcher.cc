@@ -110,7 +110,8 @@ void PreSigninPolicyFetcher::OnCachedPolicyRetrieved(
   // are not signed).
   if (!policy_blob.empty() && !is_active_directory_managed_) {
     base::FilePath policy_key_dir;
-    CHECK(PathService::Get(chromeos::DIR_USER_POLICY_KEYS, &policy_key_dir));
+    CHECK(base::PathService::Get(chromeos::DIR_USER_POLICY_KEYS,
+                                 &policy_key_dir));
     cached_policy_key_loader_ = std::make_unique<CachedPolicyKeyLoaderChromeOS>(
         cryptohome_client_, task_runner_, account_id_, policy_key_dir);
     cached_policy_key_loader_->EnsurePolicyKeyLoaded(base::Bind(
@@ -295,15 +296,15 @@ void PreSigninPolicyFetcher::NotifyCallback(
 std::unique_ptr<UserCloudPolicyValidator>
 PreSigninPolicyFetcher::CreateValidatorForCachedPolicy(
     std::unique_ptr<em::PolicyFetchResponse> policy) {
-  std::unique_ptr<UserCloudPolicyValidator> validator =
-      UserCloudPolicyValidator::Create(std::move(policy), task_runner_);
+  auto validator = std::make_unique<UserCloudPolicyValidator>(std::move(policy),
+                                                              task_runner_);
 
   validator->ValidatePolicyType(dm_protocol::kChromeUserPolicyType);
   validator->ValidatePayload();
 
   if (!is_active_directory_managed_) {
-    // Also validate the user e-mail and the signature (except for authpolicy).
-    validator->ValidateUsername(account_id_.GetUserEmail(), true);
+    // Also validate the user and the signature (except for authpolicy).
+    validator->ValidateUser(account_id_);
     validator->ValidateSignature(
         cached_policy_key_loader_->cached_policy_key());
   }
@@ -314,8 +315,8 @@ std::unique_ptr<UserCloudPolicyValidator>
 PreSigninPolicyFetcher::CreateValidatorForFetchedPolicy(
     std::unique_ptr<em::PolicyFetchResponse> policy) {
   // Configure the validator to validate based on cached policy.
-  std::unique_ptr<UserCloudPolicyValidator> validator =
-      UserCloudPolicyValidator::Create(std::move(policy), task_runner_);
+  auto validator = std::make_unique<UserCloudPolicyValidator>(std::move(policy),
+                                                              task_runner_);
 
   validator->ValidatePolicyType(dm_protocol::kChromeUserPolicyType);
   validator->ValidateAgainstCurrentPolicy(

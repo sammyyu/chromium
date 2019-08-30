@@ -20,9 +20,11 @@
 #include "base/synchronization/waitable_event.h"
 #include "base/task_scheduler/post_task.h"
 #include "base/task_scheduler/task_scheduler.h"
+#include "base/test/gtest_util.h"
 #include "base/test/scoped_task_environment.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread_restrictions.h"
+#include "build/build_config.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -128,7 +130,9 @@ class AddRemoveThread : public PlatformThread::Delegate,
     // After ready_ is signaled, loop_ is only accessed by the main test thread
     // (i.e. not this thread) in particular by Quit() which causes Run() to
     // return, and we "control" loop_ again.
-    RunLoop().Run();
+    RunLoop run_loop;
+    quit_loop_ = run_loop.QuitClosure();
+    run_loop.Run();
     delete loop_;
     loop_ = reinterpret_cast<MessageLoop*>(0xdeadbeef);
     delete this;
@@ -159,10 +163,7 @@ class AddRemoveThread : public PlatformThread::Delegate,
   }
 
   // This function is only callable from the main thread.
-  void Quit() {
-    loop_->task_runner()->PostTask(FROM_HERE,
-                                   MessageLoop::QuitWhenIdleClosure());
-  }
+  void Quit() { std::move(quit_loop_).Run(); }
 
   void Observe(int x) override {
     count_observes_++;
@@ -190,6 +191,8 @@ class AddRemoveThread : public PlatformThread::Delegate,
   bool do_notifies_;    // Whether these threads should do notifications.
   WaitableEvent* ready_;
 
+  base::OnceClosure quit_loop_;
+
   base::WeakPtrFactory<AddRemoveThread> weak_factory_;
 };
 
@@ -211,7 +214,7 @@ TEST(ObserverListTest, BasicTest) {
     EXPECT_EQ(it3, it1);
     EXPECT_EQ(it3, it2);
     // Self assignment.
-    it3 = it3;
+    it3 = *&it3;  // The *& defeats Clang's -Wself-assign warning.
     EXPECT_EQ(it3, it1);
     EXPECT_EQ(it3, it2);
   }
@@ -228,7 +231,7 @@ TEST(ObserverListTest, BasicTest) {
     EXPECT_EQ(it3, it1);
     EXPECT_EQ(it3, it2);
     // Self assignment.
-    it3 = it3;
+    it3 = *&it3;  // The *& defeats Clang's -Wself-assign warning.
     EXPECT_EQ(it3, it1);
     EXPECT_EQ(it3, it2);
   }
@@ -255,7 +258,7 @@ TEST(ObserverListTest, BasicTest) {
     EXPECT_EQ(it3, it1);
     EXPECT_EQ(it3, it2);
     // Self assignment.
-    it3 = it3;
+    it3 = *&it3;  // The *& defeats Clang's -Wself-assign warning.
     EXPECT_EQ(it3, it1);
     EXPECT_EQ(it3, it2);
     // Iterator post increment.
@@ -278,7 +281,7 @@ TEST(ObserverListTest, BasicTest) {
     EXPECT_EQ(it3, it1);
     EXPECT_EQ(it3, it2);
     // Self assignment.
-    it3 = it3;
+    it3 = *&it3;  // The *& defeats Clang's -Wself-assign warning.
     EXPECT_EQ(it3, it1);
     EXPECT_EQ(it3, it2);
     // Iterator post increment.
@@ -632,7 +635,13 @@ static void ThreadSafeObserverHarness(int num_threads,
   }
 }
 
-TEST(ObserverListThreadSafeTest, CrossThreadObserver) {
+#if defined(OS_FUCHSIA)
+// TODO(crbug.com/738275): This is flaky on Fuchsia.
+#define MAYBE_CrossThreadObserver DISABLED_CrossThreadObserver
+#else
+#define MAYBE_CrossThreadObserver CrossThreadObserver
+#endif
+TEST(ObserverListThreadSafeTest, MAYBE_CrossThreadObserver) {
   // Use 7 observer threads.  Notifications only come from
   // the main thread.
   ThreadSafeObserverHarness(7, false);
@@ -1244,18 +1253,14 @@ TEST(ObserverListTest, NonReentrantObserverList) {
   Adder a(1);
   non_reentrant_observer_list.AddObserver(&a);
 
-  ::testing::StrictMock<MockLogAssertHandler> handler;
-  EXPECT_CALL(handler, HandleLogAssert(_, _, _, _)).Times(1);
-  {
-    logging::ScopedLogAssertHandler scoped_handler_b(base::BindRepeating(
-        &MockLogAssertHandler::HandleLogAssert, base::Unretained(&handler)));
+  EXPECT_DCHECK_DEATH({
     for (const Foo& a : non_reentrant_observer_list) {
       for (const Foo& b : non_reentrant_observer_list) {
         std::ignore = a;
         std::ignore = b;
       }
     }
-  }
+  });
 }
 
 TEST(ObserverListTest, ReentrantObserverList) {

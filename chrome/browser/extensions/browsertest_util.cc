@@ -14,7 +14,7 @@
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/extensions/app_launch_params.h"
 #include "chrome/browser/ui/extensions/application_launch.h"
-#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/extensions/web_app_extension_helpers.h"
 #include "chrome/common/web_application_info.h"
 #include "content/public/browser/notification_service.h"
 #include "content/public/test/test_utils.h"
@@ -43,8 +43,8 @@ ExtensionService* GetExtensionService(Profile* profile) {
 void CreateAndInitializeLocalCache() {
 #if defined(OS_CHROMEOS)
   base::FilePath extension_cache_dir;
-  CHECK(PathService::Get(chromeos::DIR_DEVICE_EXTENSION_LOCAL_CACHE,
-                         &extension_cache_dir));
+  CHECK(base::PathService::Get(chromeos::DIR_DEVICE_EXTENSION_LOCAL_CACHE,
+                               &extension_cache_dir));
   base::FilePath cache_init_file = extension_cache_dir.Append(
       extensions::LocalExtensionCache::kCacheReadyFlagFileName);
   EXPECT_EQ(base::WriteFile(cache_init_file, "", 0), 0);

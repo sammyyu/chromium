@@ -16,6 +16,7 @@
 #include "content/browser/accessibility/browser_accessibility_state_impl.h"
 #include "content/common/accessibility_messages.h"
 #include "ui/accessibility/ax_role_properties.h"
+#include "ui/accessibility/ax_table_info.h"
 #include "ui/accessibility/ax_text_utils.h"
 #include "ui/accessibility/platform/ax_unique_id.h"
 #include "ui/gfx/geometry/rect_conversions.h"
@@ -58,6 +59,8 @@ bool BrowserAccessibility::PlatformIsLeaf() const {
   // (Note that whilst ARIA buttons can have only presentational children, HTML5
   // buttons are allowed to have content.)
   switch (GetRole()) {
+    case ax::mojom::Role::kDocCover:
+    case ax::mojom::Role::kGraphicsSymbol:
     case ax::mojom::Role::kImage:
     case ax::mojom::Role::kMeter:
     case ax::mojom::Role::kScrollBar:
@@ -423,47 +426,52 @@ gfx::Rect BrowserAccessibility::GetPageBoundsForRange(int start, int len)
         local_start > 0 ? character_offsets[local_start - 1] : 0;
     int end_pixel_offset =
         local_end > 0 ? character_offsets[local_end - 1] : 0;
+    int max_pixel_offset = character_offsets_length > 0
+                               ? character_offsets[character_offsets_length - 1]
+                               : 0;
 
-    gfx::Rect child_rect = child->GetPageBoundsRect();
     auto text_direction = static_cast<ax::mojom::TextDirection>(
         child->GetIntAttribute(ax::mojom::IntAttribute::kTextDirection));
-    gfx::Rect child_overlap_rect;
+    gfx::RectF child_overlap_rect;
     switch (text_direction) {
       case ax::mojom::TextDirection::kNone:
       case ax::mojom::TextDirection::kLtr: {
-        int left = child_rect.x() + start_pixel_offset;
-        int right = child_rect.x() + end_pixel_offset;
-        child_overlap_rect = gfx::Rect(left, child_rect.y(),
-                                       right - left, child_rect.height());
+        int height = child->GetLocation().height();
+        child_overlap_rect =
+            gfx::RectF(start_pixel_offset, 0,
+                       end_pixel_offset - start_pixel_offset, height);
         break;
       }
       case ax::mojom::TextDirection::kRtl: {
-        int right = child_rect.right() - start_pixel_offset;
-        int left = child_rect.right() - end_pixel_offset;
-        child_overlap_rect = gfx::Rect(left, child_rect.y(),
-                                       right - left, child_rect.height());
+        int right = max_pixel_offset - start_pixel_offset;
+        int left = max_pixel_offset - end_pixel_offset;
+        int height = child->GetLocation().height();
+        child_overlap_rect = gfx::RectF(left, 0, right - left, height);
         break;
       }
       case ax::mojom::TextDirection::kTtb: {
-        int top = child_rect.y() + start_pixel_offset;
-        int bottom = child_rect.y() + end_pixel_offset;
-        child_overlap_rect = gfx::Rect(child_rect.x(), top,
-                                       child_rect.width(), bottom - top);
+        int width = child->GetLocation().width();
+        child_overlap_rect = gfx::RectF(0, start_pixel_offset, width,
+                                        end_pixel_offset - start_pixel_offset);
         break;
       }
       case ax::mojom::TextDirection::kBtt: {
-        int bottom = child_rect.bottom() - start_pixel_offset;
-        int top = child_rect.bottom() - end_pixel_offset;
-        child_overlap_rect = gfx::Rect(child_rect.x(), top,
-                                       child_rect.width(), bottom - top);
+        int bottom = max_pixel_offset - start_pixel_offset;
+        int top = max_pixel_offset - end_pixel_offset;
+        int width = child->GetLocation().width();
+        child_overlap_rect = gfx::RectF(0, top, width, bottom - top);
         break;
       }
     }
 
-    if (bounds.width() == 0 && bounds.height() == 0)
-      bounds = child_overlap_rect;
-    else
-      bounds.Union(child_overlap_rect);
+    gfx::Rect absolute_child_rect = child->RelativeToAbsoluteBounds(
+        child_overlap_rect, false /* frame_only */, nullptr /* offscreen */,
+        true /* clip_bounds */);
+    if (bounds.width() == 0 && bounds.height() == 0) {
+      bounds = absolute_child_rect;
+    } else {
+      bounds.Union(absolute_child_rect);
+    }
   }
 
   return bounds;
@@ -955,35 +963,139 @@ BrowserAccessibility::GetTargetForNativeAccessibilityEvent() {
   return root_delegate->AccessibilityGetAcceleratedWidget();
 }
 
+int BrowserAccessibility::GetTableRowCount() const {
+  ui::AXTableInfo* table_info = manager()->ax_tree()->GetTableInfo(node());
+  if (!table_info)
+    return 0;
+
+  return table_info->row_count;
+}
+
+int BrowserAccessibility::GetTableColCount() const {
+  ui::AXTableInfo* table_info = manager()->ax_tree()->GetTableInfo(node());
+  if (!table_info)
+    return 0;
+
+  return table_info->col_count;
+}
+
+std::vector<int32_t> BrowserAccessibility::GetColHeaderNodeIds() const {
+  ui::AXTableInfo* table_info = manager()->ax_tree()->GetTableInfo(node());
+  if (!table_info)
+    return {};
+
+  std::vector<std::vector<int32_t>> headers = table_info->col_headers;
+  std::vector<int32_t> all_ids;
+  for (const auto& col_ids : headers) {
+    all_ids.insert(all_ids.end(), col_ids.begin(), col_ids.end());
+  }
+
+  return all_ids;
+}
+
+std::vector<int32_t> BrowserAccessibility::GetColHeaderNodeIds(
+    int32_t col_index) const {
+  ui::AXTableInfo* table_info = manager()->ax_tree()->GetTableInfo(node());
+  if (!table_info)
+    return {};
+
+  if (col_index < 0 || col_index >= table_info->col_count)
+    return {};
+
+  return table_info->col_headers[col_index];
+}
+
+std::vector<int32_t> BrowserAccessibility::GetRowHeaderNodeIds() const {
+  ui::AXTableInfo* table_info = manager()->ax_tree()->GetTableInfo(node());
+  if (!table_info)
+    return {};
+
+  std::vector<std::vector<int32_t>> headers = table_info->row_headers;
+  std::vector<int32_t> all_ids;
+  for (const auto& col_ids : headers) {
+    all_ids.insert(all_ids.end(), col_ids.begin(), col_ids.end());
+  }
+
+  return all_ids;
+}
+
+std::vector<int32_t> BrowserAccessibility::GetRowHeaderNodeIds(
+    int32_t row_index) const {
+  ui::AXTableInfo* table_info = manager()->ax_tree()->GetTableInfo(node());
+  if (!table_info)
+    return {};
+
+  if (row_index < 0 || row_index >= table_info->row_count)
+    return {};
+
+  return table_info->row_headers[row_index];
+}
+
+int32_t BrowserAccessibility::GetCellId(int32_t row_index,
+                                        int32_t col_index) const {
+  ui::AXTableInfo* table_info = manager()->ax_tree()->GetTableInfo(node());
+  if (!table_info)
+    return -1;
+
+  if (row_index < 0 || row_index >= table_info->row_count || col_index < 0 ||
+      col_index >= table_info->col_count)
+    return -1;
+
+  return table_info->cell_ids[row_index][col_index];
+}
+
+int32_t BrowserAccessibility::CellIdToIndex(int32_t cell_id) const {
+  ui::AXTableInfo* table_info = manager()->ax_tree()->GetTableInfo(node());
+  if (!table_info)
+    return -1;
+
+  const auto& iter = table_info->cell_id_to_index.find(cell_id);
+  if (iter != table_info->cell_id_to_index.end())
+    return iter->second;
+
+  return -1;
+}
+
+int32_t BrowserAccessibility::CellIndexToId(int32_t cell_index) const {
+  ui::AXTableInfo* table_info = manager()->ax_tree()->GetTableInfo(node());
+  if (!table_info)
+    return -1;
+
+  if (cell_index < 0 ||
+      cell_index >= static_cast<int32_t>(table_info->unique_cell_ids.size()))
+    return -1;
+
+  return table_info->unique_cell_ids[cell_index];
+}
+
 bool BrowserAccessibility::AccessibilityPerformAction(
     const ui::AXActionData& data) {
-  if (data.action == ax::mojom::Action::kDoDefault) {
-    manager_->DoDefaultAction(*this);
-    return true;
+  switch (data.action) {
+    case ax::mojom::Action::kDoDefault:
+      manager_->DoDefaultAction(*this);
+      return true;
+    case ax::mojom::Action::kFocus:
+      manager_->SetFocus(*this);
+      return true;
+    case ax::mojom::Action::kScrollToPoint: {
+      // target_point is in screen coordinates.  We need to convert this to
+      // frame coordinates because that's what BrowserAccessiblity cares about.
+      gfx::Point target =
+          data.target_point -
+          manager_->GetRootManager()->GetViewBounds().OffsetFromOrigin();
+
+      manager_->ScrollToPoint(*this, target);
+      return true;
+    }
+    case ax::mojom::Action::kScrollToMakeVisible:
+      manager_->ScrollToMakeVisible(*this, data.target_rect);
+      return true;
+    case ax::mojom::Action::kSetValue:
+      manager_->SetValue(*this, data.value);
+      return true;
+    default:
+      return false;
   }
-
-  if (data.action == ax::mojom::Action::kFocus) {
-    manager_->SetFocus(*this);
-    return true;
-  }
-
-  if (data.action == ax::mojom::Action::kScrollToPoint) {
-    // target_point is in screen coordinates.  We need to convert this to frame
-    // coordinates because that's what BrowserAccessiblity cares about.
-    gfx::Point target =
-        data.target_point -
-        manager_->GetRootManager()->GetViewBounds().OffsetFromOrigin();
-
-    manager_->ScrollToPoint(*this, target);
-    return true;
-  }
-
-  if (data.action == ax::mojom::Action::kScrollToMakeVisible) {
-    manager_->ScrollToMakeVisible(*this, data.target_rect);
-    return true;
-  }
-
-  return false;
 }
 
 bool BrowserAccessibility::ShouldIgnoreHoveredStateForTesting() {

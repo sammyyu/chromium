@@ -54,6 +54,7 @@ void PopulateFixedWebPreferences(WebPreferences* web_prefs) {
   web_prefs->shrinks_standalone_images_to_fit = false;
   web_prefs->should_clear_document_background = false;
   web_prefs->viewport_meta_enabled = true;
+  web_prefs->picture_in_picture_enabled = false;
 }
 
 const void* const kAwSettingsUserDataKey = &kAwSettingsUserDataKey;
@@ -110,6 +111,11 @@ void AwSettings::Destroy(JNIEnv* env, const JavaParamRef<jobject>& obj) {
 
 AwSettings* AwSettings::FromWebContents(content::WebContents* web_contents) {
   return AwSettingsUserData::GetSettings(web_contents);
+}
+
+bool AwSettings::GetAllowSniffingFileUrls() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  return Java_AwSettings_getAllowSniffingFileUrls(env);
 }
 
 AwRenderViewHostExt* AwSettings::GetAwRenderViewHostExt() {
@@ -360,8 +366,7 @@ void AwSettings::PopulateWebPreferencesLocked(JNIEnv* env,
   web_prefs->supports_multiple_windows =
       Java_AwSettings_getSupportMultipleWindowsLocked(env, obj);
 
-  web_prefs->plugins_enabled =
-      !Java_AwSettings_getPluginsDisabledLocked(env, obj);
+  web_prefs->plugins_enabled = false;
 
   web_prefs->application_cache_enabled =
       Java_AwSettings_getAppCacheEnabledLocked(env, obj);
@@ -412,7 +417,7 @@ void AwSettings::PopulateWebPreferencesLocked(JNIEnv* env,
   web_prefs->ignore_main_frame_overflow_hidden_quirk = support_quirks;
   web_prefs->report_screen_size_in_physical_pixels_quirk = support_quirks;
 
-  web_prefs->resue_global_for_unowned_main_frame =
+  web_prefs->reuse_global_for_unowned_main_frame =
       Java_AwSettings_getAllowEmptyDocumentPersistenceLocked(env, obj);
 
   web_prefs->password_echo_enabled =

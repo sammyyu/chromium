@@ -20,23 +20,29 @@
 #include "ash/root_window_controller.h"
 #include "ash/session/session_controller.h"
 #include "ash/session/test_session_controller_client.h"
+#include "ash/shelf/shelf.h"
 #include "ash/shell.h"
 #include "ash/shell/toplevel_window.h"
+#include "ash/system/status_area_widget.h"
 #include "ash/test/ash_test_environment.h"
 #include "ash/test/ash_test_helper.h"
 #include "ash/test_screenshot_delegate.h"
 #include "ash/test_shell_delegate.h"
 #include "ash/utility/screenshot_controller.h"
-#include "ash/window_manager.h"
-#include "ash/window_manager_service.h"
 #include "ash/wm/top_level_window_factory.h"
 #include "ash/wm/window_positioner.h"
+#include "ash/ws/window_service_owner.h"
 #include "base/memory/ptr_util.h"
-#include "components/signin/core/account_id/account_id.h"
+#include "components/account_id/account_id.h"
 #include "components/user_manager/user_names.h"
+#include "mojo/public/cpp/bindings/map.h"
 #include "services/ui/public/cpp/property_type_converters.h"
 #include "services/ui/public/interfaces/window_manager.mojom.h"
-#include "services/ui/public/interfaces/window_manager_constants.mojom.h"
+#include "services/ui/public/interfaces/window_tree_constants.mojom.h"
+#include "services/ui/ws2/test_window_tree_client.h"
+#include "services/ui/ws2/window_service.h"
+#include "services/ui/ws2/window_tree.h"
+#include "services/ui/ws2/window_tree_test_helper.h"
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/client/screen_position_client.h"
 #include "ui/aura/client/window_parenting_client.h"
@@ -128,10 +134,6 @@ ui::mojom::WindowType MusWindowTypeFromWindowType(
 
 AshTestBase::AshTestBase()
     : setup_called_(false), teardown_called_(false), start_session_(true) {
-  if (AshTestHelper::config() != Config::CLASSIC) {
-    CHECK(aura::Env::GetInstance());
-    aura::Env::GetInstance()->AddObserver(this);
-  }
   ash_test_environment_ = AshTestEnvironment::Create();
 
   // Must initialize |ash_test_helper_| here because some tests rely on
@@ -144,8 +146,6 @@ AshTestBase::~AshTestBase() {
       << "You have overridden SetUp but never called AshTestBase::SetUp";
   CHECK(teardown_called_)
       << "You have overridden TearDown but never called AshTestBase::TearDown";
-  if (AshTestHelper::config() != Config::CLASSIC)
-    aura::Env::GetInstance()->RemoveObserver(this);
 }
 
 void AshTestBase::SetUp() {
@@ -180,6 +180,11 @@ void AshTestBase::TearDown() {
   teardown_called_ = true;
   Shell::Get()->session_controller()->NotifyChromeTerminating();
 
+  // These depend upon WindowService, which is owned by Shell, so they must
+  // be destroyed before the Shell (owned by AshTestHelper).
+  window_tree_test_helper_.reset();
+  window_tree_.reset();
+
   // Flush the message loop to finish pending release tasks.
   RunAllPendingInMessageLoop();
 
@@ -201,12 +206,17 @@ SystemTray* AshTestBase::GetPrimarySystemTray() {
   return Shell::Get()->GetPrimarySystemTray();
 }
 
-ui::test::EventGenerator& AshTestBase::GetEventGenerator() {
+// static
+UnifiedSystemTray* AshTestBase::GetPrimaryUnifiedSystemTray() {
+  return GetPrimaryShelf()->GetStatusAreaWidget()->unified_system_tray();
+}
+
+ui::test::EventGenerator* AshTestBase::GetEventGenerator() {
   if (!event_generator_) {
     event_generator_.reset(
         new ui::test::EventGenerator(new AshEventGeneratorDelegate()));
   }
-  return *event_generator_.get();
+  return event_generator_.get();
 }
 
 // static
@@ -228,7 +238,6 @@ void AshTestBase::UpdateDisplay(const std::string& display_specs) {
   ScreenOrientationControllerTestApi(
       Shell::Get()->screen_orientation_controller())
       .UpdateNaturalOrientation();
-  ash_test_helper_->NotifyClientAboutAcceleratedWidgets();
 }
 
 aura::Window* AshTestBase::CurrentContext() {
@@ -255,14 +264,7 @@ std::unique_ptr<aura::Window> AshTestBase::CreateTestWindow(
     const gfx::Rect& bounds_in_screen,
     aura::client::WindowType type,
     int shell_window_id) {
-  if (AshTestHelper::config() != Config::MASH) {
-    return base::WrapUnique<aura::Window>(
-        CreateTestWindowInShellWithDelegateAndType(
-            nullptr, type, shell_window_id, bounds_in_screen));
-  }
-
-  // For mash route creation through the window manager. This better simulates
-  // what happens when a client creates a top level window.
+  // The following simulates what happens when a client creates a window.
   std::map<std::string, std::vector<uint8_t>> properties;
   if (!bounds_in_screen.IsEmpty()) {
     properties[ui::mojom::WindowManager::kBounds_InitProperty] =
@@ -278,23 +280,22 @@ std::unique_ptr<aura::Window> AshTestBase::CreateTestWindow(
 
   const ui::mojom::WindowType mus_window_type =
       MusWindowTypeFromWindowType(type);
-  WindowManager* window_manager =
-      ash_test_helper_->window_manager_service()->window_manager();
-  aura::Window* window = CreateAndParentTopLevelWindow(
-      window_manager, mus_window_type, &properties);
+  properties[ui::mojom::WindowManager::kWindowType_InitProperty] =
+      mojo::ConvertTo<std::vector<uint8_t>>(
+          static_cast<int32_t>(mus_window_type));
+
+  // WindowTreeTestHelper maps 0 to a unique id.
+  std::unique_ptr<aura::Window> window(
+      GetWindowTreeTestHelper()->NewTopLevelWindow(
+          mojo::MapToFlatMap(std::move(properties))));
   window->set_id(shell_window_id);
   window->Show();
-  return base::WrapUnique<aura::Window>(window);
+  return window;
 }
 
 std::unique_ptr<aura::Window> AshTestBase::CreateToplevelTestWindow(
     const gfx::Rect& bounds_in_screen,
     int shell_window_id) {
-  if (AshTestHelper::config() == Config::MASH) {
-    return CreateTestWindow(bounds_in_screen, aura::client::WINDOW_TYPE_NORMAL,
-                            shell_window_id);
-  }
-
   aura::test::TestWindowDelegate* delegate =
       aura::test::TestWindowDelegate::CreateSelfDestroyingDelegate();
   return base::WrapUnique<aura::Window>(
@@ -380,7 +381,7 @@ void AshTestBase::ParentWindowInPrimaryRootWindow(aura::Window* window) {
 }
 
 void AshTestBase::RunAllPendingInMessageLoop() {
-  ash_test_helper_->RunAllPendingInMessageLoop();
+  base::RunLoop().RunUntilIdle();
 }
 
 TestScreenshotDelegate* AshTestBase::GetScreenshotDelegate() {
@@ -407,6 +408,18 @@ void AshTestBase::SimulateUserLogin(const std::string& user_email) {
   session_controller_client->SwitchActiveUser(
       AccountId::FromUserEmail(user_email));
   session_controller_client->SetSessionState(SessionState::ACTIVE);
+}
+
+void AshTestBase::SimulateNewUserFirstLogin(const std::string& user_email) {
+  TestSessionControllerClient* const session_controller_client =
+      GetSessionControllerClient();
+  session_controller_client->AddUserSession(
+      user_email, user_manager::USER_TYPE_REGULAR, true /* enable_settings */,
+      true /* provide_pref_service */, true /* is_new_profile */);
+  session_controller_client->SwitchActiveUser(
+      AccountId::FromUserEmail(user_email));
+  session_controller_client->SetSessionState(
+      session_manager::SessionState::ACTIVE);
 }
 
 void AshTestBase::SimulateGuestLogin() {
@@ -478,7 +491,7 @@ display::DisplayManager* AshTestBase::display_manager() {
   return Shell::Get()->display_manager();
 }
 
-bool AshTestBase::TestIfMouseWarpsAt(ui::test::EventGenerator& event_generator,
+bool AshTestBase::TestIfMouseWarpsAt(ui::test::EventGenerator* event_generator,
                                      const gfx::Point& point_in_screen) {
   DCHECK(!Shell::Get()->display_manager()->IsInUnifiedMode());
   static_cast<ExtendedMouseWarpController*>(
@@ -487,7 +500,7 @@ bool AshTestBase::TestIfMouseWarpsAt(ui::test::EventGenerator& event_generator,
   display::Screen* screen = display::Screen::GetScreen();
   display::Display original_display =
       screen->GetDisplayNearestPoint(point_in_screen);
-  event_generator.MoveMouseTo(point_in_screen);
+  event_generator->MoveMouseTo(point_in_screen);
   return original_display.id() !=
          screen
              ->GetDisplayNearestPoint(
@@ -511,21 +524,33 @@ display::Display AshTestBase::GetSecondaryDisplay() {
   return ash_test_helper_->GetSecondaryDisplay();
 }
 
-void AshTestBase::OnWindowInitialized(aura::Window* window) {}
-
-void AshTestBase::OnHostInitialized(aura::WindowTreeHost* host) {
-  // AshTestBase outlives all the WindowTreeHosts. So RemoveObserver() is not
-  // necessary.
-  host->AddObserver(this);
-  OnHostResized(host);
+ui::ws2::WindowTreeTestHelper* AshTestBase::GetWindowTreeTestHelper() {
+  CreateWindowTreeIfNecessary();
+  return window_tree_test_helper_.get();
 }
 
-void AshTestBase::OnHostResized(aura::WindowTreeHost* host) {
-  // The local surface id comes from the window server. However, there is no
-  // window server in tests. So a fake id is assigned so that the layer
-  // compositor can submit compositor frames.
-  viz::LocalSurfaceId id(1, base::UnguessableToken::Create());
-  host->compositor()->SetLocalSurfaceId(id);
+ui::ws2::TestWindowTreeClient* AshTestBase::GetTestWindowTreeClient() {
+  CreateWindowTreeIfNecessary();
+  return window_tree_client_.get();
+}
+
+ui::ws2::WindowTree* AshTestBase::GetWindowTree() {
+  CreateWindowTreeIfNecessary();
+  return window_tree_.get();
+}
+
+void AshTestBase::CreateWindowTreeIfNecessary() {
+  if (window_tree_client_)
+    return;
+
+  // Lazily create a single client.
+  window_tree_client_ = std::make_unique<ui::ws2::TestWindowTreeClient>();
+  window_tree_ =
+      Shell::Get()->window_service_owner()->window_service()->CreateWindowTree(
+          window_tree_client_.get());
+  window_tree_->InitFromFactory();
+  window_tree_test_helper_ =
+      std::make_unique<ui::ws2::WindowTreeTestHelper>(window_tree_.get());
 }
 
 }  // namespace ash

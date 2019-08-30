@@ -10,7 +10,6 @@
 #include <utility>
 #include <vector>
 
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "components/sync/base/model_type_test_util.h"
 #include "components/sync/test/mock_invalidation.h"
@@ -97,16 +96,20 @@ TEST_F(NudgeTrackerTest, EmptyNudgeTracker) {
   // Now we're at the normal, "idle" state.
   EXPECT_FALSE(nudge_tracker_.IsSyncRequired());
   EXPECT_FALSE(nudge_tracker_.IsGetUpdatesRequired());
+  EXPECT_EQ(sync_pb::SyncEnums::UNKNOWN_ORIGIN, nudge_tracker_.GetOrigin());
 
   sync_pb::GetUpdateTriggers gu_trigger;
   nudge_tracker_.FillProtoMessage(BOOKMARKS, &gu_trigger);
+
+  EXPECT_EQ(sync_pb::SyncEnums::UNKNOWN_ORIGIN, nudge_tracker_.GetOrigin());
 }
 
 // Verify that nudges override each other based on a priority order.
 // RETRY < all variants of GU_TRIGGER
-TEST_F(NudgeTrackerTest, SourcePriorities) {
+TEST_F(NudgeTrackerTest, OriginPriorities) {
   // Start with a retry request.
-  const base::TimeTicks t0 = base::TimeTicks::FromInternalValue(1234);
+  const base::TimeTicks t0 =
+      base::TimeTicks() + base::TimeDelta::FromMicroseconds(1234);
   const base::TimeTicks t1 = t0 + base::TimeDelta::FromSeconds(10);
   nudge_tracker_.SetNextRetryTime(t0);
   nudge_tracker_.SetSyncCycleStartTime(t1);

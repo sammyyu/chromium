@@ -2,8 +2,8 @@
 // Minimum width is 48px.
 var NARROW_VIDEO_WIDTH = 40;
 var NORMAL_VIDEO_WIDTH = 200;
-// Minimum height is 116px.
-var NARROW_VIDEO_HEIGHT = 90;
+// Minimum height is 56px.
+var NARROW_VIDEO_HEIGHT = 50;
 var NORMAL_VIDEO_HEIGHT = 200;
 
 function assertOverlayPlayButtonVisible(videoElement) {
@@ -19,7 +19,7 @@ function assertOverlayPlayButtonNotVisible(videoElement) {
 function overlayPlayButton(videoElement) {
   var controlID = '-webkit-media-controls-overlay-play-button';
   var button = mediaControlsElement(
-      window.internals.shadowRoot(videoElement).firstChild,
+      internals.shadowRoot(videoElement).firstChild,
       controlID);
   if (!button)
     throw 'Failed to find overlay play button';

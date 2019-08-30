@@ -20,17 +20,15 @@ PowerButtonControllerTestApi::PowerButtonControllerTestApi(
 
 PowerButtonControllerTestApi::~PowerButtonControllerTestApi() = default;
 
-bool PowerButtonControllerTestApi::ShutdownTimerIsRunning() const {
-  return controller_->shutdown_timer_.IsRunning();
+bool PowerButtonControllerTestApi::PreShutdownTimerIsRunning() const {
+  return controller_->pre_shutdown_timer_.IsRunning();
 }
 
-bool PowerButtonControllerTestApi::TriggerShutdownTimeout() {
-  if (!controller_->shutdown_timer_.IsRunning())
+bool PowerButtonControllerTestApi::TriggerPreShutdownTimeout() {
+  if (!controller_->pre_shutdown_timer_.IsRunning())
     return false;
 
-  base::Closure task = controller_->shutdown_timer_.user_task();
-  controller_->shutdown_timer_.Stop();
-  task.Run();
+  controller_->pre_shutdown_timer_.FireNow();
   return true;
 }
 
@@ -42,9 +40,7 @@ bool PowerButtonControllerTestApi::TriggerPowerButtonMenuTimeout() {
   if (!controller_->power_button_menu_timer_.IsRunning())
     return false;
 
-  base::Closure task = controller_->power_button_menu_timer_.user_task();
-  controller_->power_button_menu_timer_.Stop();
-  task.Run();
+  controller_->power_button_menu_timer_.FireNow();
   return true;
 }
 
@@ -70,12 +66,16 @@ bool PowerButtonControllerTestApi::IsMenuOpened() const {
 }
 
 bool PowerButtonControllerTestApi::MenuHasSignOutItem() const {
-  return IsMenuOpened() &&
-         GetPowerButtonMenuView()->sign_out_item_for_testing();
+  return IsMenuOpened() && GetPowerButtonMenuView()->sign_out_item_for_test();
 }
 
-bool PowerButtonControllerTestApi::ShouldTurnScreenOffForTap() const {
-  return controller_->turn_screen_off_for_tap_;
+bool PowerButtonControllerTestApi::MenuHasLockScreenItem() const {
+  return IsMenuOpened() &&
+         GetPowerButtonMenuView()->lock_screen_item_for_test();
+}
+
+bool PowerButtonControllerTestApi::MenuHasFeedbackItem() const {
+  return IsMenuOpened() && GetPowerButtonMenuView()->feedback_item_for_test();
 }
 
 PowerButtonScreenshotController*
@@ -88,18 +88,14 @@ void PowerButtonControllerTestApi::SetPowerButtonType(
   controller_->button_type_ = button_type;
 }
 
-void PowerButtonControllerTestApi::SetTickClock(base::TickClock* tick_clock) {
+void PowerButtonControllerTestApi::SetTickClock(
+    const base::TickClock* tick_clock) {
   DCHECK(tick_clock);
   controller_->tick_clock_ = tick_clock;
 
   controller_->display_controller_ =
       std::make_unique<PowerButtonDisplayController>(
           controller_->backlights_forced_off_setter_, controller_->tick_clock_);
-}
-
-void PowerButtonControllerTestApi::SetTurnScreenOffForTap(
-    bool turn_screen_off_for_tap) {
-  controller_->turn_screen_off_for_tap_ = turn_screen_off_for_tap;
 }
 
 void PowerButtonControllerTestApi::SetShowMenuAnimationDone(

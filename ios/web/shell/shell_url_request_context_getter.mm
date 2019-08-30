@@ -73,7 +73,8 @@ net::URLRequestContext* ShellURLRequestContextGetter::GetURLRequestContext() {
 
     // Setup the cookie store.
     base::FilePath cookie_path;
-    bool cookie_path_found = PathService::Get(base::DIR_APP_DATA, &cookie_path);
+    bool cookie_path_found =
+        base::PathService::Get(base::DIR_APP_DATA, &cookie_path);
     DCHECK(cookie_path_found);
     cookie_path = cookie_path.Append("WebShell").Append("Cookies");
     scoped_refptr<net::CookieMonster::PersistentCookieStore> persistent_store =
@@ -94,7 +95,8 @@ net::URLRequestContext* ShellURLRequestContextGetter::GetURLRequestContext() {
     storage_->set_proxy_resolution_service(
         net::ProxyResolutionService::CreateUsingSystemProxyResolver(
             std::move(proxy_config_service_), url_request_context_->net_log()));
-    storage_->set_ssl_config_service(new net::SSLConfigServiceDefaults);
+    storage_->set_ssl_config_service(
+        std::make_unique<net::SSLConfigServiceDefaults>());
     storage_->set_cert_verifier(net::CertVerifier::CreateDefault());
 
     storage_->set_transport_security_state(
@@ -102,7 +104,7 @@ net::URLRequestContext* ShellURLRequestContextGetter::GetURLRequestContext() {
     storage_->set_cert_transparency_verifier(
         base::WrapUnique(new net::MultiLogCTVerifier));
     storage_->set_ct_policy_enforcer(
-        base::WrapUnique(new net::CTPolicyEnforcer));
+        base::WrapUnique(new net::DefaultCTPolicyEnforcer));
     transport_security_persister_ =
         std::make_unique<net::TransportSecurityPersister>(
             url_request_context_->transport_security_state(), base_path_,

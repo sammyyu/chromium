@@ -25,10 +25,13 @@
 
 namespace color_utils {
 
-
-// Helper functions -----------------------------------------------------------
-
 namespace {
+
+// The darkest reference color in color_utils.
+SkColor g_color_utils_darkest = SK_ColorBLACK;
+
+// The luma midpoint for determining if a color is light or dark.
+int g_color_utils_luma_midpoint = 128;
 
 int calcHue(double temp1, double temp2, double hue) {
   if (hue < 0.0)
@@ -65,9 +68,6 @@ SkColor LightnessInvertColor(SkColor color) {
 }
 
 }  // namespace
-
-
-// ----------------------------------------------------------------------------
 
 double GetContrastRatio(SkColor color_a, SkColor color_b) {
   return GetContrastRatio(GetRelativeLuminance(color_a),
@@ -290,12 +290,12 @@ SkColor GetResultingPaintColor(SkColor foreground, SkColor background) {
 }
 
 bool IsDark(SkColor color) {
-  return GetLuma(color) < 128;
+  return GetLuma(color) < g_color_utils_luma_midpoint;
 }
 
 SkColor BlendTowardOppositeLuma(SkColor color, SkAlpha alpha) {
-  return AlphaBlend(IsDark(color) ? SK_ColorWHITE : SK_ColorBLACK, color,
-                    alpha);
+  return AlphaBlend(IsDark(color) ? SK_ColorWHITE : g_color_utils_darkest,
+                    color, alpha);
 }
 
 SkColor GetReadableColor(SkColor foreground, SkColor background) {
@@ -312,6 +312,40 @@ SkColor PickContrastingColor(SkColor foreground1,
           GetContrastRatio(GetRelativeLuminance(foreground2),
                            background_luminance)) ?
       foreground1 : foreground2;
+}
+
+SkColor GetColorWithMinimumContrast(SkColor default_foreground,
+                                    SkColor background) {
+  DCHECK_EQ(SkColorGetA(default_foreground), SK_AlphaOPAQUE);
+
+  const double background_luminance = GetRelativeLuminance(background);
+  if (GetContrastRatio(GetRelativeLuminance(default_foreground),
+                       background_luminance) >= kMinimumReadableContrastRatio) {
+    return default_foreground;
+  }
+
+  const SkColor blend_direction =
+      IsDark(background) ? SK_ColorWHITE : g_color_utils_darkest;
+  // Binary search to find the smallest blend that gives us acceptable contrast.
+  SkAlpha lower_bound_alpha = SK_AlphaTRANSPARENT;
+  SkAlpha upper_bound_alpha = SK_AlphaOPAQUE;
+  SkColor best_color = blend_direction;
+  constexpr int kCloseEnoughAlphaDelta = 0x04;
+  while (lower_bound_alpha + kCloseEnoughAlphaDelta < upper_bound_alpha) {
+    const SkAlpha next_alpha =
+        gfx::ToCeiledInt((lower_bound_alpha + upper_bound_alpha) / 2.f);
+    const SkColor next_foreground =
+        AlphaBlend(blend_direction, default_foreground, next_alpha);
+    if (GetContrastRatio(GetRelativeLuminance(next_foreground),
+                         background_luminance) <
+        kMinimumReadableContrastRatio) {
+      lower_bound_alpha = next_alpha;
+    } else {
+      upper_bound_alpha = next_alpha;
+      best_color = next_foreground;
+    }
+  }
+  return best_color;
 }
 
 SkColor InvertColor(SkColor color) {
@@ -336,15 +370,9 @@ bool IsInvertedColorScheme() {
 #endif  // !defined(OS_WIN)
 
 SkColor DeriveDefaultIconColor(SkColor text_color) {
-  // Lighten a dark color but leave it fully opaque.
-  if (IsDark(text_color)) {
-    // For black text, this comes out to kChromeIconGrey.
-    return color_utils::AlphaBlend(SK_ColorWHITE, text_color,
-                                   SkColorGetR(gfx::kChromeIconGrey));
-  }
-  // For a light color, just reduce opacity.
-  return SkColorSetA(text_color,
-                     static_cast<int>(0.8f * SkColorGetA(text_color)));
+  // Lighten dark colors and brighten light colors. The alpha value here (0x4c)
+  // is chosen to generate a value close to GoogleGrey700 from GoogleGrey900.
+  return BlendTowardOppositeLuma(text_color, 0x4c);
 }
 
 std::string SkColorToRgbaString(SkColor color) {
@@ -358,6 +386,15 @@ std::string SkColorToRgbaString(SkColor color) {
 std::string SkColorToRgbString(SkColor color) {
   return base::StringPrintf("%d,%d,%d", SkColorGetR(color), SkColorGetG(color),
                             SkColorGetB(color));
+}
+
+void SetDarkestColor(SkColor color) {
+  g_color_utils_darkest = color;
+  g_color_utils_luma_midpoint = (GetLuma(color) + 255) / 2;
+}
+
+SkColor GetDarkestColorForTesting() {
+  return g_color_utils_darkest;
 }
 
 }  // namespace color_utils

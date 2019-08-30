@@ -9,9 +9,9 @@
 #include "content/public/test/navigation_simulator.h"
 #include "content/public/test/test_renderer_host.h"
 #include "content/test/test_render_frame_host.h"
-#include "third_party/WebKit/public/common/feature_policy/feature_policy.h"
-#include "third_party/WebKit/public/common/frame/frame_policy.h"
-#include "third_party/WebKit/public/common/frame/sandbox_flags.h"
+#include "third_party/blink/public/common/feature_policy/feature_policy.h"
+#include "third_party/blink/public/common/frame/frame_policy.h"
+#include "third_party/blink/public/common/frame/sandbox_flags.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -113,7 +113,7 @@ TEST_F(RenderFrameHostFeaturePolicyTest, HeaderPolicy) {
   EXPECT_TRUE(parent->IsFeatureEnabled(kDefaultSelfFeature));
   EXPECT_TRUE(child->IsFeatureEnabled(kDefaultSelfFeature));
 
-  // Set an empty whitelist in the child to test that the policies combine
+  // Set an empty allowlist in the child to test that the policies combine
   // correctly.
   RefreshPageAndSetHeaderPolicy(&child, kDefaultSelfFeature,
                                 std::vector<std::string>());

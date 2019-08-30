@@ -85,6 +85,10 @@ class IconLabelBubbleView : public views::InkDropObserver,
     next_element_interior_padding_ = padding;
   }
 
+  void OnBubbleCreated(views::Widget* bubble_widget);
+
+  bool is_focused() const { return is_focused_; }
+
  protected:
   static constexpr int kOpenTimeMS = 150;
 
@@ -101,6 +105,21 @@ class IconLabelBubbleView : public views::InkDropObserver,
 
   // Returns true when the label should be visible.
   virtual bool ShouldShowLabel() const;
+
+  // Returns true when the separator should be visible.
+  virtual bool ShouldShowSeparator() const;
+
+  // Returns true when additional padding equal to GetPrefixedSeparatorWidth()
+  // should be added to the end of the view. This is useful in the case where
+  // it's required to layout subsequent views in the same position regardless
+  // of whether the separator is shown or not.
+  virtual bool ShouldShowExtraEndSpace() const;
+
+  // Returns true when additional padding equal to GetPrefixedSeparatorWidth()
+  // should be added between the icon and the label. This is useful in the case
+  // where it's required to align the label in the same position as text that
+  // would normally follow this view.
+  virtual bool ShouldShowExtraInternalSpace() const;
 
   // Returns a multiplier used to calculate the actual width of the view based
   // on its desired width.  This ranges from 0 for a zero-width view to 1 for a
@@ -137,6 +156,8 @@ class IconLabelBubbleView : public views::InkDropObserver,
   bool IsTriggerableEvent(const ui::Event& event) override;
   bool ShouldUpdateInkDropOnClickCanceled() const override;
   void NotifyClick(const ui::Event& event) override;
+  void OnFocus() override;
+  void OnBlur() override;
 
   // views::WidgetObserver:
   void OnWidgetDestroying(views::Widget* widget) override;
@@ -148,26 +169,16 @@ class IconLabelBubbleView : public views::InkDropObserver,
 
   gfx::Size GetSizeForLabelWidth(int label_width) const;
 
-  // Returns the maximum size for the label width. The value ignores
-  // WidthMultiplier().
-  gfx::Size GetMaxSizeForLabelWidth(int label_width) const;
-
  private:
-  // Amount of padding from the leading edge of the view to the leading edge of
-  // the image, and from the trailing edge of the label (or image, if the label
-  // is invisible) to the trailing edge of the view.
-  int GetOuterPadding() const;
-
   // Spacing between the image and the label.
   int GetInternalSpacing() const;
 
-  // Returns the amount of space reserved for the separator in DIP.
-  int GetSeparatorLayoutWidth() const;
+  // Retrieves the width taken the separator including padding before the
+  // separator stroke, taking into account whether it is shown or not.
+  int GetPrefixedSeparatorWidth() const;
 
   // Padding after the separator.
-  int GetPostSeparatorPadding() const;
-
-  float GetScaleFactor() const;
+  int GetEndPadding() const;
 
   // The view has been activated by a user gesture such as spacebar.
   // Returns true if some handling was performed.
@@ -181,6 +192,7 @@ class IconLabelBubbleView : public views::InkDropObserver,
   views::Label* label_;
   views::InkDropContainerView* ink_drop_container_;
   SeparatorView* separator_view_;
+  bool is_focused_ = false;
 
   // The padding of the element that will be displayed after |this|. This value
   // is relevant for calculating the amount of space to reserve after the

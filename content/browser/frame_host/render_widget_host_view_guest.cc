@@ -10,8 +10,8 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/logging.h"
-#include "base/message_loop/message_loop.h"
 #include "build/build_config.h"
+#include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
 #include "components/viz/service/surfaces/surface.h"
 #include "components/viz/service/surfaces/surface_hittest.h"
@@ -35,10 +35,6 @@
 #include "ui/base/ui_base_switches_util.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/gfx/geometry/dip_util.h"
-
-#if defined(OS_MACOSX)
-#import "content/browser/renderer_host/render_widget_host_view_mac_dictionary_helper.h"
-#endif
 
 #if defined(USE_AURA)
 #include "content/browser/renderer_host/ui_events_helper.h"
@@ -101,6 +97,10 @@ RenderWidgetHostViewBase* RenderWidgetHostViewGuest::GetRootView(
   return rwhv;
 }
 
+RenderWidgetHostViewBase* RenderWidgetHostViewGuest::GetParentView() {
+  return GetOwnerRenderWidgetHostView();
+}
+
 RenderWidgetHostViewGuest::RenderWidgetHostViewGuest(
     RenderWidgetHost* widget_host,
     BrowserPluginGuest* guest,
@@ -143,7 +143,7 @@ void RenderWidgetHostViewGuest::Show() {
   // first place: http://crbug.com/273089.
   //
   // |guest_| is NULL during test.
-  if ((guest_ && guest_->is_in_destruction()) || !host_->is_hidden())
+  if ((guest_ && guest_->is_in_destruction()) || !host()->is_hidden())
     return;
   // Make sure the size of this view matches the size of the WebContentsView.
   // The two sizes may fall out of sync if we switch RenderWidgetHostViews,
@@ -154,17 +154,16 @@ void RenderWidgetHostViewGuest::Show() {
     // Since we were last shown, our renderer may have had a different surface
     // set (e.g. showing an interstitial), so we resend our current surface to
     // the renderer.
-    if (last_received_local_surface_id_.is_valid())
-      SendSurfaceInfoToEmbedder();
+    SendSurfaceInfoToEmbedder();
   }
-  host_->WasShown(ui::LatencyInfo());
+  host()->WasShown(false /* record_presentation_time */);
 }
 
 void RenderWidgetHostViewGuest::Hide() {
   // |guest_| is NULL during test.
-  if ((guest_ && guest_->is_in_destruction()) || host_->is_hidden())
+  if ((guest_ && guest_->is_in_destruction()) || host()->is_hidden())
     return;
-  host_->WasHidden();
+  host()->WasHidden();
 }
 
 void RenderWidgetHostViewGuest::SetSize(const gfx::Size& size) {
@@ -178,7 +177,7 @@ void RenderWidgetHostViewGuest::Focus() {
   // InterstitialPages are not WebContents, and so BrowserPluginGuest does not
   // have direct access to the interstitial page's RenderWidgetHost.
   if (guest_)
-    guest_->SetFocus(host_, true, blink::kWebFocusTypeNone);
+    guest_->SetFocus(host(), true, blink::kWebFocusTypeNone);
 }
 
 bool RenderWidgetHostViewGuest::HasFocus() const {
@@ -250,8 +249,11 @@ gfx::Rect RenderWidgetHostViewGuest::GetBoundsInRootWindow() {
 
 gfx::PointF RenderWidgetHostViewGuest::TransformPointToRootCoordSpaceF(
     const gfx::PointF& point) {
-  if (!guest_ || !last_received_local_surface_id_.is_valid())
+  // LocalSurfaceId is not needed in Viz hit-test.
+  if (!guest_ ||
+      (!use_viz_hit_test_ && !last_activated_surface_info_.is_valid())) {
     return point;
+  }
 
   RenderWidgetHostViewBase* root_rwhv = GetRootView(this);
   if (!root_rwhv)
@@ -262,32 +264,29 @@ gfx::PointF RenderWidgetHostViewGuest::TransformPointToRootCoordSpaceF(
   // guarantee not to change transformed_point on failure, then we could skip
   // checking the function return value and directly return transformed_point.
   if (!root_rwhv->TransformPointToLocalCoordSpace(
-          point,
-          viz::SurfaceId(frame_sink_id_, last_received_local_surface_id_),
-          &transformed_point)) {
+          point, last_activated_surface_info_.id(), &transformed_point)) {
     return point;
   }
   return transformed_point;
 }
 
-bool RenderWidgetHostViewGuest::TransformPointToLocalCoordSpace(
+bool RenderWidgetHostViewGuest::TransformPointToLocalCoordSpaceLegacy(
     const gfx::PointF& point,
     const viz::SurfaceId& original_surface,
     gfx::PointF* transformed_point) {
   *transformed_point = point;
-  if (!guest_ || !last_received_local_surface_id_.is_valid())
+  if (!guest_ || !last_activated_surface_info_.is_valid())
     return false;
 
-  auto local_surface_id =
-      viz::SurfaceId(frame_sink_id_, last_received_local_surface_id_);
-  if (original_surface == local_surface_id)
+  if (original_surface == last_activated_surface_info_.id())
     return true;
 
   *transformed_point =
       gfx::ConvertPointToPixel(current_surface_scale_factor(), point);
   viz::SurfaceHittest hittest(nullptr,
                               GetFrameSinkManager()->surface_manager());
-  if (!hittest.TransformPointToTargetSurface(original_surface, local_surface_id,
+  if (!hittest.TransformPointToTargetSurface(original_surface,
+                                             last_activated_surface_info_.id(),
                                              transformed_point)) {
     return false;
   }
@@ -347,6 +346,14 @@ base::string16 RenderWidgetHostViewGuest::GetSelectedText() {
   return platform_view_->GetSelectedText();
 }
 
+base::string16 RenderWidgetHostViewGuest::GetSurroundingText() {
+  return platform_view_->GetSurroundingText();
+}
+
+gfx::Range RenderWidgetHostViewGuest::GetSelectedRange() {
+  return platform_view_->GetSelectedRange();
+}
+
 void RenderWidgetHostViewGuest::SetNeedsBeginFrames(bool needs_begin_frames) {
   if (platform_view_)
     platform_view_->SetNeedsBeginFrames(needs_begin_frames);
@@ -366,25 +373,33 @@ void RenderWidgetHostViewGuest::SetTooltipText(
     const base::string16& tooltip_text) {
   RenderWidgetHostViewBase* root_view = GetRootView(this);
   if (root_view)
-    root_view->SetTooltipText(tooltip_text);
+    root_view->GetCursorManager()->SetTooltipTextForView(this, tooltip_text);
 }
 
-void RenderWidgetHostViewGuest::SendSurfaceInfoToEmbedderImpl(
+void RenderWidgetHostViewGuest::FirstSurfaceActivation(
     const viz::SurfaceInfo& surface_info) {
   if (guest_ && !guest_->is_in_destruction())
-    guest_->SetChildFrameSurface(surface_info);
+    guest_->FirstSurfaceActivation(surface_info);
+}
+
+void RenderWidgetHostViewGuest::OnDidUpdateVisualPropertiesComplete(
+    const cc::RenderFrameMetadata& metadata) {
+  if (guest_)
+    guest_->DidUpdateVisualProperties(metadata);
+  host()->SynchronizeVisualProperties();
 }
 
 void RenderWidgetHostViewGuest::OnAttached() {
   RegisterFrameSinkId();
 #if defined(USE_AURA)
-  if (base::FeatureList::IsEnabled(::features::kMash)) {
+  if (!features::IsAshInBrowserProcess()) {
     aura::Env::GetInstance()->ScheduleEmbed(
         GetWindowTreeClientFromRenderer(),
         base::BindOnce(&RenderWidgetHostViewGuest::OnGotEmbedToken,
                        weak_ptr_factory_.GetWeakPtr()));
   }
 #endif
+  SendSurfaceInfoToEmbedder();
 }
 
 bool RenderWidgetHostViewGuest::OnMessageReceived(const IPC::Message& msg) {
@@ -552,10 +567,18 @@ void RenderWidgetHostViewGuest::UnlockMouse() {
   platform_view_->UnlockMouse();
 }
 
-viz::LocalSurfaceId RenderWidgetHostViewGuest::GetLocalSurfaceId() const {
+viz::FrameSinkId RenderWidgetHostViewGuest::GetRootFrameSinkId() {
+  RenderWidgetHostViewBase* root_rwhv = GetRootView(this);
+  if (root_rwhv)
+    return root_rwhv->GetRootFrameSinkId();
+  return viz::FrameSinkId();
+}
+
+const viz::LocalSurfaceId& RenderWidgetHostViewGuest::GetLocalSurfaceId()
+    const {
   if (guest_)
     return guest_->local_surface_id();
-  return viz::LocalSurfaceId();
+  return viz::ParentLocalSurfaceIdAllocator::InvalidLocalSurfaceId();
 }
 
 void RenderWidgetHostViewGuest::DidCreateNewRendererCompositorFrameSink(
@@ -572,25 +595,13 @@ void RenderWidgetHostViewGuest::SetActive(bool active) {
 }
 
 void RenderWidgetHostViewGuest::ShowDefinitionForSelection() {
-  if (!guest_)
-    return;
-
-  gfx::Rect guest_bounds = GetViewBounds();
-  RenderWidgetHostView* rwhv = guest_->GetOwnerRenderWidgetHostView();
-  gfx::Rect embedder_bounds;
-  if (rwhv)
-    embedder_bounds = rwhv->GetViewBounds();
-
-  gfx::Vector2d guest_offset = gfx::Vector2d(
-      // Horizontal offset of guest from embedder.
-      guest_bounds.x() - embedder_bounds.x(),
-      // Vertical offset from guest's top to embedder's bottom edge.
-      embedder_bounds.bottom() - guest_bounds.y());
-
-  RenderWidgetHostViewMacDictionaryHelper helper(platform_view_.get());
-  helper.SetTargetView(rwhv);
-  helper.set_offset(guest_offset);
-  helper.ShowDefinitionForSelection();
+  // Note that if there were a dictionary overlay, that dictionary overlay
+  // would target |guest_|. This path does not actually support getting the
+  // attributed string and its point on the page, so it will not create an
+  // overlay (it will open Dictionary.app), so the target NSView need not be
+  // specified.
+  // https://crbug.com/152438
+  platform_view_->ShowDefinitionForSelection();
 }
 
 void RenderWidgetHostViewGuest::SpeakSelection() {
@@ -621,13 +632,11 @@ void RenderWidgetHostViewGuest::MaybeSendSyntheticTapGesture(
         GetOwnerRenderWidgetHostView()->GetBoundsInRootWindow().origin();
     blink::WebGestureEvent gesture_tap_event(
         blink::WebGestureEvent::kGestureTapDown,
-        blink::WebInputEvent::kNoModifiers,
-        ui::EventTimeStampToSeconds(ui::EventTimeForNow()));
-    gesture_tap_event.source_device = blink::kWebGestureDeviceTouchscreen;
-    gesture_tap_event.x = position.x + offset.x();
-    gesture_tap_event.y = position.y + offset.y();
-    gesture_tap_event.global_x = screenPosition.x;
-    gesture_tap_event.global_y = screenPosition.y;
+        blink::WebInputEvent::kNoModifiers, ui::EventTimeForNow(),
+        blink::kWebGestureDeviceTouchscreen);
+    gesture_tap_event.SetPositionInWidget(
+        blink::WebFloatPoint(position.x + offset.x(), position.y + offset.y()));
+    gesture_tap_event.SetPositionInScreen(screenPosition);
     GetOwnerRenderWidgetHostView()->ProcessGestureEvent(
         gesture_tap_event, ui::LatencyInfo(ui::SourceEventType::TOUCH));
 
@@ -662,6 +671,25 @@ void RenderWidgetHostViewGuest::GestureEventAck(
              event.GetType() == blink::WebInputEvent::kGestureScrollBegin) {
     GetOwnerRenderWidgetHostView()->GestureEventAck(event, ack_result);
   }
+
+  if (blink::WebInputEvent::IsPinchGestureEventType(event.GetType()))
+    ProcessTouchpadPinchAckInRoot(event, ack_result);
+}
+
+void RenderWidgetHostViewGuest::ProcessTouchpadPinchAckInRoot(
+    const blink::WebGestureEvent& event,
+    InputEventAckState ack_result) {
+  DCHECK(blink::WebInputEvent::IsPinchGestureEventType(event.GetType()));
+
+  RenderWidgetHostViewBase* root_rwhv = GetRootView(this);
+  if (!root_rwhv)
+    return;
+
+  blink::WebGestureEvent pinch_event(event);
+  const gfx::PointF root_point =
+      TransformPointToRootCoordSpaceF(event.PositionInWidget());
+  pinch_event.SetPositionInWidget(root_point);
+  root_rwhv->GestureEventAck(pinch_event, ack_result);
 }
 
 InputEventAckState RenderWidgetHostViewGuest::FilterInputEvent(
@@ -695,16 +723,23 @@ void RenderWidgetHostViewGuest::GetScreenInfo(ScreenInfo* screen_info) const {
     RenderWidgetHostViewBase::GetScreenInfo(screen_info);
 }
 
-viz::ScopedSurfaceIdAllocator RenderWidgetHostViewGuest::ResizeDueToAutoResize(
-    const gfx::Size& new_size,
-    uint64_t sequence_number) {
-  // TODO(cblume): This doesn't currently suppress allocation.
-  // It maintains existing behavior while using the suppression style.
-  // This will be addressed in a follow-up patch.
-  // See https://crbug.com/805073
-  base::OnceCallback<void()> allocation_task =
-      base::BindOnce(&BrowserPluginGuest::ResizeDueToAutoResize, guest_,
-                     new_size, sequence_number);
+void RenderWidgetHostViewGuest::EnableAutoResize(const gfx::Size& min_size,
+                                                 const gfx::Size& max_size) {
+  if (guest_)
+    guest_->EnableAutoResize(min_size, max_size);
+}
+
+void RenderWidgetHostViewGuest::DisableAutoResize(const gfx::Size& new_size) {
+  if (guest_)
+    guest_->DisableAutoResize();
+}
+
+viz::ScopedSurfaceIdAllocator
+RenderWidgetHostViewGuest::DidUpdateVisualProperties(
+    const cc::RenderFrameMetadata& metadata) {
+  base::OnceCallback<void()> allocation_task = base::BindOnce(
+      &RenderWidgetHostViewGuest::OnDidUpdateVisualPropertiesComplete,
+      weak_ptr_factory_.GetWeakPtr(), metadata);
   return viz::ScopedSurfaceIdAllocator(std::move(allocation_task));
 }
 
@@ -732,19 +767,19 @@ void RenderWidgetHostViewGuest::OnHandleInputEvent(
     rescaled_event.wheel_ticks_x /= current_device_scale_factor();
     rescaled_event.wheel_ticks_y /= current_device_scale_factor();
     ui::LatencyInfo latency_info(ui::SourceEventType::WHEEL);
-    host_->ForwardWheelEventWithLatencyInfo(rescaled_event, latency_info);
+    host()->ForwardWheelEventWithLatencyInfo(rescaled_event, latency_info);
     return;
   }
 
-  ScopedInputScaleDisabler disable(host_, current_device_scale_factor());
+  ScopedInputScaleDisabler disable(host(), current_device_scale_factor());
   if (blink::WebInputEvent::IsMouseEventType(event->GetType())) {
-    host_->ForwardMouseEvent(*static_cast<const blink::WebMouseEvent*>(event));
+    host()->ForwardMouseEvent(*static_cast<const blink::WebMouseEvent*>(event));
     return;
   }
 
   if (event->GetType() == blink::WebInputEvent::kMouseWheel) {
     ui::LatencyInfo latency_info(ui::SourceEventType::WHEEL);
-    host_->ForwardWheelEventWithLatencyInfo(
+    host()->ForwardWheelEventWithLatencyInfo(
         *static_cast<const blink::WebMouseWheelEvent*>(event), latency_info);
     return;
   }
@@ -752,7 +787,7 @@ void RenderWidgetHostViewGuest::OnHandleInputEvent(
   if (blink::WebInputEvent::IsKeyboardEventType(event->GetType())) {
     NativeWebKeyboardEvent keyboard_event(
         *static_cast<const blink::WebKeyboardEvent*>(event), GetNativeView());
-    host_->ForwardKeyboardEvent(keyboard_event);
+    host()->ForwardKeyboardEvent(keyboard_event);
     return;
   }
 
@@ -762,7 +797,7 @@ void RenderWidgetHostViewGuest::OnHandleInputEvent(
       embedder->GetView()->Focus();
     }
     ui::LatencyInfo latency_info(ui::SourceEventType::TOUCH);
-    host_->ForwardTouchEventWithLatencyInfo(
+    host()->ForwardTouchEventWithLatencyInfo(
         *static_cast<const blink::WebTouchEvent*>(event), latency_info);
     return;
   }
@@ -784,13 +819,9 @@ void RenderWidgetHostViewGuest::OnHandleInputEvent(
             blink::WebGestureEvent::kMomentumPhase) {
       return;
     }
-    host_->ForwardGestureEvent(gesture_event);
+    host()->ForwardGestureEvent(gesture_event);
     return;
   }
-}
-
-bool RenderWidgetHostViewGuest::HasEmbedderChanged() {
-  return guest_ && guest_->has_attached_since_surface_set();
 }
 
 #if defined(USE_AURA)

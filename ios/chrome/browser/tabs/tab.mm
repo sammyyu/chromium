@@ -15,7 +15,6 @@
 #include "base/ios/block_types.h"
 #include "base/json/string_escape.h"
 #include "base/logging.h"
-#include "base/mac/bind_objc_block.h"
 #include "base/mac/foundation_util.h"
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
@@ -41,10 +40,9 @@
 #include "components/url_formatter/url_formatter.h"
 #import "ios/chrome/browser/app_launcher/app_launcher_tab_helper.h"
 #include "ios/chrome/browser/application_context.h"
-#import "ios/chrome/browser/autofill/form_input_accessory_view_controller.h"
-#import "ios/chrome/browser/autofill/form_suggestion_tab_helper.h"
 #include "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ios/chrome/browser/chrome_url_constants.h"
+#import "ios/chrome/browser/download/download_manager_tab_helper.h"
 #include "ios/chrome/browser/experimental_flags.h"
 #import "ios/chrome/browser/find_in_page/find_in_page_controller.h"
 #include "ios/chrome/browser/history/history_service_factory.h"
@@ -60,14 +58,12 @@
 #import "ios/chrome/browser/snapshots/snapshot_tab_helper.h"
 #import "ios/chrome/browser/tabs/legacy_tab_helper.h"
 #import "ios/chrome/browser/tabs/tab_dialog_delegate.h"
-#import "ios/chrome/browser/tabs/tab_headers_delegate.h"
 #import "ios/chrome/browser/tabs/tab_helper_util.h"
 #import "ios/chrome/browser/tabs/tab_model.h"
 #import "ios/chrome/browser/tabs/tab_private.h"
 #include "ios/chrome/browser/translate/chrome_ios_translate_client.h"
 #import "ios/chrome/browser/u2f/u2f_controller.h"
 #import "ios/chrome/browser/ui/commands/open_new_tab_command.h"
-#import "ios/chrome/browser/ui/commands/open_url_command.h"
 #import "ios/chrome/browser/ui/commands/show_signin_command.h"
 #import "ios/chrome/browser/ui/open_in_controller.h"
 #import "ios/chrome/browser/ui/overscroll_actions/overscroll_actions_controller.h"
@@ -165,7 +161,6 @@ NSString* const kTabUrlKey = @"url";
 @synthesize overscrollActionsControllerDelegate =
     overscrollActionsControllerDelegate_;
 @synthesize dialogDelegate = dialogDelegate_;
-@synthesize tabHeadersDelegate = tabHeadersDelegate_;
 
 #pragma mark - Initializers
 
@@ -205,9 +200,18 @@ NSString* const kTabUrlKey = @"url";
 #pragma mark - Properties
 
 - (NSString*)title {
-  base::string16 title = self.webState->GetTitle();
-  if (title.empty())
-    title = l10n_util::GetStringUTF16(IDS_DEFAULT_TAB_TITLE);
+  base::string16 title;
+
+  web::WebState* webState = self.webState;
+  if (!webState->GetNavigationManager()->GetVisibleItem() &&
+      DownloadManagerTabHelper::FromWebState(webState)->has_download_task()) {
+    title = l10n_util::GetStringUTF16(IDS_DOWNLOAD_TAB_TITLE);
+  } else {
+    title = webState->GetTitle();
+    if (title.empty())
+      title = l10n_util::GetStringUTF16(IDS_DEFAULT_TAB_TITLE);
+  }
+
   return base::SysUTF16ToNSString(title);
 }
 
@@ -363,6 +367,16 @@ NSString* const kTabUrlKey = @"url";
   [_overscrollActionsController clear];
 }
 
+- (void)notifyTabOfUrlMayStartLoading:(const GURL&)url {
+  NSString* urlString = base::SysUTF8ToNSString(url.spec());
+  if ([urlString length]) {
+    [[NSNotificationCenter defaultCenter]
+        postNotificationName:kTabUrlMayStartLoadingNotificationForCrashReporting
+                      object:self
+                    userInfo:@{kTabUrlKey : urlString}];
+  }
+}
+
 #pragma mark - Public API (relatinge to User agent)
 
 - (BOOL)usesDesktopUserAgent {
@@ -392,6 +406,10 @@ NSString* const kTabUrlKey = @"url";
 
 - (void)webState:(web::WebState*)webState
     didStartNavigation:(web::NavigationContext*)navigation {
+  // Notify tab of Url may start loading, this notification is not sent in cases
+  // of app launching, history api navigations, and hash change navigations.
+  [self notifyTabOfUrlMayStartLoading:navigation->GetUrl()];
+
   [self.dialogDelegate cancelDialogForTab:self];
   [_openInController disable];
 }
@@ -492,43 +510,6 @@ NSString* const kTabUrlKey = @"url";
   return NO;
 }
 
-- (BOOL)webController:(CRWWebController*)webController
-        shouldOpenURL:(const GURL&)url
-      mainDocumentURL:(const GURL&)mainDocumentURL {
-  // chrome:// URLs are only allowed if the mainDocumentURL is also a chrome://
-  // URL.
-  if (url.SchemeIs(kChromeUIScheme) &&
-      !mainDocumentURL.SchemeIs(kChromeUIScheme)) {
-    return NO;
-  }
-
-  // Always allow frame loads.
-  BOOL isFrameLoad = (url != mainDocumentURL);
-  if (isFrameLoad)
-    return YES;
-
-  // TODO(crbug.com/546402): If this turns out to be useful, find a less hacky
-  // hook point to send this from.
-  NSString* urlString = base::SysUTF8ToNSString(url.spec());
-  if ([urlString length]) {
-    [[NSNotificationCenter defaultCenter]
-        postNotificationName:kTabUrlMayStartLoadingNotificationForCrashReporting
-                      object:self
-                    userInfo:@{kTabUrlKey : urlString}];
-  }
-
-  return YES;
-}
-
-- (BOOL)webController:(CRWWebController*)webController
-    shouldOpenExternalURL:(const GURL&)URL {
-  return YES;
-}
-
-- (CGFloat)headerHeightForWebController:(CRWWebController*)webController {
-  return [self.tabHeadersDelegate tabHeaderHeightForTab:self];
-}
-
 #pragma mark - Private methods
 
 - (OpenInController*)openInController {
@@ -536,6 +517,7 @@ NSString* const kTabUrlKey = @"url";
     _openInController = [[OpenInController alloc]
         initWithRequestContext:_browserState->GetRequestContext()
                  webController:self.webController];
+    _openInController.baseView = self.view;
   }
   return _openInController;
 }

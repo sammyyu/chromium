@@ -5,6 +5,8 @@
 #include <stddef.h>
 #include <sys/types.h>
 
+#include "ash/public/cpp/ash_pref_names.h"
+#include "ash/public/cpp/ash_switches.h"
 #include "base/command_line.h"
 #include "base/macros.h"
 #include "chrome/browser/browser_process.h"
@@ -63,7 +65,6 @@ class PreferencesTest : public LoginManagerTest {
   // |variant| value. For opposite |variant| values all preferences receive
   // different values.
   void SetPrefs(PrefService* prefs, bool variant) {
-    prefs->SetBoolean(prefs::kTapToClickEnabled, variant);
     prefs->SetBoolean(prefs::kPrimaryMouseButtonRight, !variant);
     prefs->SetBoolean(prefs::kMouseReverseScroll, variant);
     prefs->SetBoolean(prefs::kEnableTouchpadThreeFingerClick, !variant);
@@ -79,8 +80,6 @@ class PreferencesTest : public LoginManagerTest {
   }
 
   void CheckSettingsCorrespondToPrefs(PrefService* prefs) {
-    EXPECT_EQ(prefs->GetBoolean(prefs::kTapToClickEnabled),
-              input_settings_->current_touchpad_settings().GetTapToClick());
     EXPECT_EQ(prefs->GetBoolean(prefs::kPrimaryMouseButtonRight),
               input_settings_->current_mouse_settings()
                   .GetPrimaryButtonRight());
@@ -109,8 +108,8 @@ class PreferencesTest : public LoginManagerTest {
 
   void CheckLocalStateCorrespondsToPrefs(PrefService* prefs) {
     PrefService* local_state = g_browser_process->local_state();
-    EXPECT_EQ(local_state->GetBoolean(prefs::kOwnerTapToClickEnabled),
-              prefs->GetBoolean(prefs::kTapToClickEnabled));
+    EXPECT_EQ(local_state->GetBoolean(ash::prefs::kOwnerTapToClickEnabled),
+              prefs->GetBoolean(ash::prefs::kTapToClickEnabled));
     EXPECT_EQ(local_state->GetBoolean(prefs::kOwnerPrimaryMouseButtonRight),
               prefs->GetBoolean(prefs::kPrimaryMouseButtonRight));
   }
@@ -124,13 +123,28 @@ class PreferencesTest : public LoginManagerTest {
   DISALLOW_COPY_AND_ASSIGN(PreferencesTest);
 };
 
-IN_PROC_BROWSER_TEST_F(PreferencesTest, PRE_MultiProfiles) {
+class PreferencesTestForceWebUiLogin : public PreferencesTest {
+ public:
+  PreferencesTestForceWebUiLogin() = default;
+  ~PreferencesTestForceWebUiLogin() override = default;
+
+  // PreferencesTest:
+  void SetUpCommandLine(base::CommandLine* command_line) override {
+    PreferencesTest::SetUpCommandLine(command_line);
+    command_line->AppendSwitch(ash::switches::kShowWebUiLogin);
+  }
+
+ private:
+  DISALLOW_COPY_AND_ASSIGN(PreferencesTestForceWebUiLogin);
+};
+
+IN_PROC_BROWSER_TEST_F(PreferencesTestForceWebUiLogin, PRE_MultiProfiles) {
   RegisterUser(test_users_[0]);
   RegisterUser(test_users_[1]);
   chromeos::StartupUtils::MarkOobeCompleted();
 }
 
-IN_PROC_BROWSER_TEST_F(PreferencesTest, MultiProfiles) {
+IN_PROC_BROWSER_TEST_F(PreferencesTestForceWebUiLogin, MultiProfiles) {
   user_manager::UserManager* user_manager = user_manager::UserManager::Get();
 
   // Add first user and init its preferences. Check that corresponding
@@ -187,11 +201,11 @@ IN_PROC_BROWSER_TEST_F(PreferencesTest, MultiProfiles) {
   // state prefs and vice versa.
   EXPECT_EQ(user_manager->GetOwnerAccountId(), test_users_[0]);
   CheckLocalStateCorrespondsToPrefs(prefs1);
-  prefs2->SetBoolean(prefs::kTapToClickEnabled,
-                     !prefs1->GetBoolean(prefs::kTapToClickEnabled));
+  prefs2->SetBoolean(ash::prefs::kTapToClickEnabled,
+                     !prefs1->GetBoolean(ash::prefs::kTapToClickEnabled));
   CheckLocalStateCorrespondsToPrefs(prefs1);
-  prefs1->SetBoolean(prefs::kTapToClickEnabled,
-                     !prefs1->GetBoolean(prefs::kTapToClickEnabled));
+  prefs1->SetBoolean(ash::prefs::kTapToClickEnabled,
+                     !prefs1->GetBoolean(ash::prefs::kTapToClickEnabled));
   CheckLocalStateCorrespondsToPrefs(prefs1);
 
   // Switch user back.

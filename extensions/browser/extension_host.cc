@@ -64,12 +64,11 @@ ExtensionHost::ExtensionHost(const Extension* extension,
       document_element_available_(false),
       initial_url_(url),
       extension_host_type_(host_type) {
-  // Not used for panels, see PanelHost.
   DCHECK(host_type == VIEW_TYPE_EXTENSION_BACKGROUND_PAGE ||
          host_type == VIEW_TYPE_EXTENSION_DIALOG ||
          host_type == VIEW_TYPE_EXTENSION_POPUP);
-  host_contents_.reset(WebContents::Create(
-      WebContents::CreateParams(browser_context_, site_instance))),
+  host_contents_ = WebContents::Create(
+      WebContents::CreateParams(browser_context_, site_instance)),
   content::WebContentsObserver::Observe(host_contents_.get());
   host_contents_->SetDelegate(this);
   SetViewType(host_contents_.get(), host_type);
@@ -132,7 +131,8 @@ bool ExtensionHost::IsRenderViewLive() const {
 }
 
 void ExtensionHost::CreateRenderViewSoon() {
-  if (render_process_host() && render_process_host()->HasConnection()) {
+  if (render_process_host() &&
+      render_process_host()->IsInitializedAndNotDead()) {
     // If the process is already started, go ahead and initialize the RenderView
     // synchronously. The process creation is the real meaty part that we want
     // to defer.
@@ -389,7 +389,7 @@ content::JavaScriptDialogManager* ExtensionHost::GetJavaScriptDialogManager(
 }
 
 void ExtensionHost::AddNewContents(WebContents* source,
-                                   WebContents* new_contents,
+                                   std::unique_ptr<WebContents> new_contents,
                                    WindowOpenDisposition disposition,
                                    const gfx::Rect& initial_rect,
                                    bool user_gesture,
@@ -409,16 +409,16 @@ void ExtensionHost::AddNewContents(WebContents* source,
             new_contents->GetBrowserContext()) {
       WebContentsDelegate* delegate = associated_contents->GetDelegate();
       if (delegate) {
-        delegate->AddNewContents(
-            associated_contents, new_contents, disposition, initial_rect,
-            user_gesture, was_blocked);
+        delegate->AddNewContents(associated_contents, std::move(new_contents),
+                                 disposition, initial_rect, user_gesture,
+                                 was_blocked);
         return;
       }
     }
   }
 
-  delegate_->CreateTab(
-      new_contents, extension_id_, disposition, initial_rect, user_gesture);
+  delegate_->CreateTab(std::move(new_contents), extension_id_, disposition,
+                       initial_rect, user_gesture);
 }
 
 void ExtensionHost::RenderViewReady() {
@@ -431,9 +431,9 @@ void ExtensionHost::RenderViewReady() {
 void ExtensionHost::RequestMediaAccessPermission(
     content::WebContents* web_contents,
     const content::MediaStreamRequest& request,
-    const content::MediaResponseCallback& callback) {
-  delegate_->ProcessMediaAccessRequest(
-      web_contents, request, callback, extension());
+    content::MediaResponseCallback callback) {
+  delegate_->ProcessMediaAccessRequest(web_contents, request,
+                                       std::move(callback), extension());
 }
 
 bool ExtensionHost::CheckMediaAccessPermission(

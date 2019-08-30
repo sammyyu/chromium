@@ -133,6 +133,8 @@ QuickViewController.LOCAL_VOLUME_TYPES_ = [
   VolumeManagerCommon.VolumeType.ARCHIVE,
   VolumeManagerCommon.VolumeType.DOWNLOADS,
   VolumeManagerCommon.VolumeType.REMOVABLE,
+  VolumeManagerCommon.VolumeType.ANDROID_FILES,
+  VolumeManagerCommon.VolumeType.CROSTINI,
 ];
 
 /**
@@ -172,12 +174,11 @@ QuickViewController.prototype.init_ = function(quickView) {
  */
 QuickViewController.prototype.createQuickView_ = function() {
   return new Promise(function(resolve, reject) {
-    Polymer.Base.importHref(
-        'foreground/elements/files_quick_view.html', function() {
-          var quickView = document.querySelector('#quick-view');
-          i18nTemplate.process(quickView, loadTimeData);
-          resolve(quickView);
-        }, reject);
+    Polymer.Base.importHref(constants.FILES_QUICK_VIEW_HTML, function() {
+      var quickView = document.querySelector('#quick-view');
+      i18nTemplate.process(quickView, loadTimeData);
+      resolve(quickView);
+    }, reject);
   });
 };
 
@@ -276,7 +277,7 @@ QuickViewController.prototype.onFileSelectionChanged_ = function(event) {
 
 /**
  * @param {!FileEntry} entry
- * @return {!Promise<!Array<!FileTask>>}
+ * @return {!Promise<!Array<!chrome.fileManagerPrivate.FileTask>>}
  * @private
  */
 QuickViewController.prototype.getAvailableTasks_ = function(entry) {
@@ -313,7 +314,8 @@ QuickViewController.prototype.updateQuickView_ = function() {
       ])
       .then(function(values) {
         var items = (/**@type{Array<MetadataItem>}*/ (values[0]));
-        var tasks = (/**@type{!Array<!FileTask>}*/ (values[1]));
+        var tasks = (/**@type{!Array<!chrome.fileManagerPrivate.FileTask>}*/ (
+            values[1]));
         return this.onMetadataLoaded_(entry, items, tasks);
       }.bind(this))
       .catch(console.error);
@@ -324,7 +326,7 @@ QuickViewController.prototype.updateQuickView_ = function() {
  *
  * @param {!FileEntry} entry
  * @param {Array<MetadataItem>} items
- * @param {!Array<!FileTask>} tasks
+ * @param {!Array<!chrome.fileManagerPrivate.FileTask>} tasks
  * @private
  */
 QuickViewController.prototype.onMetadataLoaded_ = function(
@@ -360,7 +362,7 @@ var QuickViewParams;
 /**
  * @param {!FileEntry} entry
  * @param {Array<MetadataItem>} items
- * @param {!Array<!FileTask>} tasks
+ * @param {!Array<!chrome.fileManagerPrivate.FileTask>} tasks
  * @return !Promise<!QuickViewParams>
  *
  * @private
@@ -458,6 +460,8 @@ QuickViewController.prototype.getQuickViewParameters_ = function(
         });
         params.browsable = browsable;
         params.contentUrl = browsable ? URL.createObjectURL(file) : '';
+        if (params.subtype == 'PDF')
+          params.contentUrl += '#view=FitH';
         return params;
       }.bind(this))
       .catch(function(e) {

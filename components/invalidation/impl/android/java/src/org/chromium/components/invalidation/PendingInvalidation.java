@@ -77,13 +77,13 @@ public class PendingInvalidation {
      */
     public String encodeToString() {
         assert mObjectSource != 0;
-        Invalidation invalidation = Invalidation.newBuilder()
-                                            .setObjectSource(mObjectSource)
-                                            .setObjectId(mObjectId)
-                                            .setVersion(mVersion)
-                                            .setPayload(mPayload)
-                                            .build();
-        return Base64.encodeToString(invalidation.toByteArray(), Base64.DEFAULT);
+        Invalidation.Builder invalidationBuilder =
+                Invalidation.newBuilder().setObjectSource(mObjectSource);
+        // The following setters update internal state of |invalidationBuilder|.
+        if (mObjectId != null) invalidationBuilder.setObjectId(mObjectId);
+        if (mVersion != 0L) invalidationBuilder.setVersion(mVersion);
+        if (mPayload != null) invalidationBuilder.setPayload(mPayload);
+        return Base64.encodeToString(invalidationBuilder.build().toByteArray(), Base64.DEFAULT);
     }
 
     /**

@@ -11,30 +11,27 @@
 
 #include <string>
 
-#include "chrome_elf/third_party_dlls/packed_list_format.h"
+#include "chrome_elf/third_party_dlls/logging_api.h"
+#include "chrome_elf/third_party_dlls/status_codes.h"
 
 namespace third_party_dlls {
 
-// "static_cast<int>(LogStatus::value)" to access underlying value.
-enum class LogStatus { kSuccess = 0, kCreateMutexFailure = 1, COUNT };
-
 // Adds a module load attempt to the internal load log.
 // - |log_type| indicates the type of logging.
-// - |basename_hash| and |code_id_hash| must each point to a 20-byte buffer
-//   holding a SHA-1 digest (of the module's basename and code identifier,
-//   respectively).
-// - For loads that are allowed, |full_image_path| indicates the full path of
-//   the loaded image.
+// - |image_size| and |time_date_stamp| from the PE headers.
+// - |full_image_path| indicates the full path of the loaded image.
+// - Note: if there was any failure retrieving the full path, pass at least the
+//   basename for |full_image_path|.
 void LogLoadAttempt(LogType log_type,
-                    const uint8_t* basename_hash,
-                    const uint8_t* code_id_hash,
-                    const char* full_image_path);
+                    uint32_t image_size,
+                    uint32_t time_date_stamp,
+                    const std::string& full_image_path);
 
 // Initialize internal logs.
-LogStatus InitLogs();
+ThirdPartyStatus InitLogs();
 
-// Removes initialization for use by tests.
-void DeinitLogsForTesting();
+// Removes initialization for use by tests, or cleanup on failure.
+void DeinitLogs();
 
 }  // namespace third_party_dlls
 

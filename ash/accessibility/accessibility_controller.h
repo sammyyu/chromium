@@ -7,11 +7,11 @@
 
 #include <memory>
 
-#include "ash/ash_constants.h"
 #include "ash/ash_export.h"
-#include "ash/public/cpp/accessibility_types.h"
+#include "ash/public/cpp/ash_constants.h"
 #include "ash/public/interfaces/accessibility_controller.mojom.h"
 #include "ash/session/session_observer.h"
+#include "ash/wm/tablet_mode/tablet_mode_observer.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
 #include "base/time/time.h"
@@ -32,12 +32,18 @@ class AccessibilityHighlightController;
 class AccessibilityObserver;
 class ScopedBacklightsForcedOff;
 
+enum AccessibilityNotificationVisibility {
+  A11Y_NOTIFICATION_NONE,
+  A11Y_NOTIFICATION_SHOW,
+};
+
 // The controller for accessibility features in ash. Features can be enabled
 // in chrome's webui settings or the system tray menu (see TrayAccessibility).
 // Uses preferences to communicate with chrome to support mash.
 class ASH_EXPORT AccessibilityController
     : public mojom::AccessibilityController,
-      public SessionObserver {
+      public SessionObserver,
+      public TabletModeObserver {
  public:
   explicit AccessibilityController(service_manager::Connector* connector);
   ~AccessibilityController() override;
@@ -51,6 +57,18 @@ class ASH_EXPORT AccessibilityController
   // Binds the mojom::AccessibilityController interface to this object.
   void BindRequest(mojom::AccessibilityControllerRequest request);
 
+  // The following functions read and write to their associated preference.
+  // These values are then used to determine whether the accelerator
+  // confirmation dialog for the respective preference has been accepted before.
+  void SetHighContrastAcceleratorDialogAccepted();
+  bool HasHighContrastAcceleratorDialogBeenAccepted() const;
+  void SetScreenMagnifierAcceleratorDialogAccepted();
+  bool HasScreenMagnifierAcceleratorDialogBeenAccepted() const;
+  void SetDockedMagnifierAcceleratorDialogAccepted();
+  bool HasDockedMagnifierAcceleratorDialogBeenAccepted() const;
+  void SetDictationAcceleratorDialogAccepted();
+  bool HasDictationAcceleratorDialogBeenAccepted() const;
+
   void SetAutoclickEnabled(bool enabled);
   bool IsAutoclickEnabled() const;
 
@@ -60,8 +78,13 @@ class ASH_EXPORT AccessibilityController
   void SetCursorHighlightEnabled(bool enabled);
   bool IsCursorHighlightEnabled() const;
 
+  void SetDictationEnabled(bool enabled);
+  bool IsDictationEnabled() const;
+
   void SetFocusHighlightEnabled(bool enabled);
   bool IsFocusHighlightEnabled() const;
+
+  void SetFullscreenMagnifierEnabled(bool enabled);
 
   void SetHighContrastEnabled(bool enabled);
   bool IsHighContrastEnabled() const;
@@ -79,16 +102,17 @@ class ASH_EXPORT AccessibilityController
   void SetSelectToSpeakEnabled(bool enabled);
   bool IsSelectToSpeakEnabled() const;
 
+  void RequestSelectToSpeakStateChange();
+  mojom::SelectToSpeakState GetSelectToSpeakState() const;
+
   void SetStickyKeysEnabled(bool enabled);
   bool IsStickyKeysEnabled() const;
-
-  void SetTapDraggingEnabled(bool enabled);
-  bool IsTapDraggingEnabled() const;
 
   void SetVirtualKeyboardEnabled(bool enabled);
   bool IsVirtualKeyboardEnabled() const;
 
-  bool braille_display_connected() const { return braille_display_connected_; }
+  bool IsDictationActive() const;
+  void SetDictationActive(bool is_active);
 
   // Triggers an accessibility alert to give the user feedback.
   void TriggerAccessibilityAlert(mojom::AccessibilityAlert alert);
@@ -129,10 +153,9 @@ class ASH_EXPORT AccessibilityController
   // countdown.
   void PlaySpokenFeedbackToggleCountdown(int tick_count);
 
-  // Public because a11y features like screen magnifier and tap dragging are
-  // managed outside of this controller.
-  void NotifyAccessibilityStatusChanged(
-      AccessibilityNotificationVisibility notify);
+  // Public because a11y features like screen magnifier are managed outside of
+  // this controller.
+  void NotifyAccessibilityStatusChanged();
 
   // mojom::AccessibilityController:
   void SetClient(mojom::AccessibilityControllerClientPtr client) override;
@@ -140,6 +163,7 @@ class ASH_EXPORT AccessibilityController
   void BrailleDisplayStateChanged(bool connected) override;
   void SetFocusHighlightRect(const gfx::Rect& bounds_in_screen) override;
   void SetAccessibilityPanelFullscreen(bool fullscreen) override;
+  void SetSelectToSpeakState(mojom::SelectToSpeakState state) override;
 
   // SessionObserver:
   void OnSigninScreenPrefServiceInitialized(PrefService* prefs) override;
@@ -149,6 +173,10 @@ class ASH_EXPORT AccessibilityController
   void FlushMojoForTest();
 
  private:
+  // TabletModeObserver:
+  void OnTabletModeStarted() override;
+  void OnTabletModeEnded() override;
+
   // Observes either the signin screen prefs or active user prefs and loads
   // initial settings.
   void ObservePrefs(PrefService* prefs);
@@ -157,6 +185,7 @@ class ASH_EXPORT AccessibilityController
   void UpdateAutoclickDelayFromPref();
   void UpdateCaretHighlightFromPref();
   void UpdateCursorHighlightFromPref();
+  void UpdateDictationFromPref();
   void UpdateFocusHighlightFromPref();
   void UpdateHighContrastFromPref();
   void UpdateLargeCursorFromPref();
@@ -168,6 +197,11 @@ class ASH_EXPORT AccessibilityController
   void UpdateAccessibilityHighlightingFromPrefs();
 
   service_manager::Connector* connector_ = nullptr;
+
+  // The pref service of the currently active user or the signin profile before
+  // user logs in. Can be null in ash_unittests.
+  PrefService* active_user_prefs_ = nullptr;
+
   std::unique_ptr<PrefChangeRegistrar> pref_change_registrar_;
 
   // Binding for mojom::AccessibilityController interface.
@@ -180,6 +214,7 @@ class ASH_EXPORT AccessibilityController
   base::TimeDelta autoclick_delay_;
   bool caret_highlight_enabled_ = false;
   bool cursor_highlight_enabled_ = false;
+  bool dictation_enabled_ = false;
   bool focus_highlight_enabled_ = false;
   bool high_contrast_enabled_ = false;
   bool large_cursor_enabled_ = false;
@@ -189,12 +224,10 @@ class ASH_EXPORT AccessibilityController
   bool select_to_speak_enabled_ = false;
   bool sticky_keys_enabled_ = false;
   bool virtual_keyboard_enabled_ = false;
-  bool braille_display_connected_ = false;
+  bool dictation_active_ = false;
 
-  // TODO(warx): consider removing this and replacing it with a more reliable
-  // way (https://crbug.com/800270).
-  AccessibilityNotificationVisibility spoken_feedback_notification_ =
-      A11Y_NOTIFICATION_NONE;
+  mojom::SelectToSpeakState select_to_speak_state_ =
+      mojom::SelectToSpeakState::kSelectToSpeakStateInactive;
 
   // Used to control the highlights of caret, cursor and focus.
   std::unique_ptr<AccessibilityHighlightController>

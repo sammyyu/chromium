@@ -121,23 +121,28 @@ static constexpr float kYShadowOffset = 0.03f;
 
 Shadow::Shadow() {
   set_bounds_contain_children(true);
+  set_bounds_contain_padding(false);
 }
 
 Shadow::~Shadow() {}
 
 void Shadow::Render(UiElementRenderer* renderer,
                     const CameraModel& camera_model) const {
+  DCHECK_EQ(left_padding(), right_padding());
+  DCHECK_EQ(top_padding(), bottom_padding());
   renderer->DrawShadow(
       camera_model.view_proj_matrix * world_space_transform(), size(),
-      x_padding(), y_padding(),
+      left_padding(), right_padding(),
       gfx::Tween::FloatValueBetween(depth_, 0.0f, 1.0f), SK_ColorBLACK,
       computed_opacity() * kShadowOpacity * intensity_, corner_radius());
 }
 
-void Shadow::LayOutChildren() {
-  DCHECK(!children().empty());
+void Shadow::LayOutContributingChildren() {
+  DCHECK(shadow_caster_ || !children().empty());
+  UiElement* shadow_caster =
+      shadow_caster_ ? shadow_caster_ : children().back().get();
   gfx::Point3F p;
-  children().front()->LocalTransform().TransformPoint(&p);
+  shadow_caster->LocalTransform().TransformPoint(&p);
   DCHECK_GE(kMaximumChildDepth, p.z());
   depth_ = base::ClampToRange(p.z() / kMaximumChildDepth, 0.0f, 1.0f);
   // This is an arbitrary function that quickly accelerates from 0 toward 1.
@@ -145,14 +150,8 @@ void Shadow::LayOutChildren() {
                                             kXMaxShadowGradientFactor),
               gfx::Tween::FloatValueBetween(depth_, kYMinShadowGradientFactor,
                                             kYMaxShadowGradientFactor));
-  if (children().size() == 1u)
-    set_corner_radius(children().front()->corner_radii().MaxRadius());
-}
-
-gfx::SizeF Shadow::ContributedSize() const {
-  gfx::RectF bounds(size());
-  bounds.Inset(x_padding(), y_padding());
-  return bounds.size();
+  if (shadow_caster_ || children().size() == 1u)
+    set_corner_radius(shadow_caster->corner_radii().MaxRadius());
 }
 
 Shadow::Renderer::Renderer()

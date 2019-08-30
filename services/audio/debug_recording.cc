@@ -13,15 +13,17 @@
 namespace audio {
 
 DebugRecording::DebugRecording(mojom::DebugRecordingRequest request,
-                               media::AudioManager* audio_manager)
-    : binding_(this, std::move(request)),
-      audio_manager_(audio_manager),
+                               media::AudioManager* audio_manager,
+                               TracedServiceRef service_ref)
+    : audio_manager_(audio_manager),
+      binding_(this, std::move(request)),
+      service_ref_(std::move(service_ref)),
       weak_factory_(this) {
   DCHECK(audio_manager_ != nullptr);
   DCHECK(audio_manager_->GetTaskRunner()->BelongsToCurrentThread());
 
-  // On connection error debug recording is disabled, but object is not
-  // destroyed, it will be cleaned-up by service either on next bind request on
+  // On connection error debug recording is disabled, but the object is not
+  // destroyed. It will be cleaned-up by service either on next bind request
   // or when service is shut down.
   binding_.set_connection_error_handler(
       base::BindOnce(&DebugRecording::Disable, base::Unretained(this)));
@@ -44,8 +46,14 @@ void DebugRecording::Enable(
       &DebugRecording::CreateWavFile, weak_factory_.GetWeakPtr()));
 }
 
+TracedServiceRef DebugRecording::ReleaseServiceRef() {
+  return std::move(service_ref_);
+}
+
 void DebugRecording::Disable() {
   DCHECK(audio_manager_->GetTaskRunner()->BelongsToCurrentThread());
+  // Client connection is lost, resetting the reference.
+  service_ref_ = TracedServiceRef();
   if (!IsEnabled())
     return;
   file_provider_.reset();

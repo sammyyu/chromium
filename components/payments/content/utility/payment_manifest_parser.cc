@@ -10,7 +10,6 @@
 #include "base/bind.h"
 #include "base/bind_helpers.h"
 #include "base/logging.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/scoped_refptr.h"
 #include "base/strings/string_number_conversions.h"
@@ -450,7 +449,7 @@ void PaymentManifestParser::OnWebAppParseInstallationInfo(
     std::unique_ptr<base::Value> value) {
   // TODO(crbug.com/782270): Move this function into a static function for unit
   // test.
-  if (value->FindKey({kServiceWorker}) == nullptr) {
+  if (!value || value->FindKey({kServiceWorker}) == nullptr) {
     return std::move(callback).Run(nullptr, nullptr);
   }
 

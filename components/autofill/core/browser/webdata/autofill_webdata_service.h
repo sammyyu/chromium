@@ -99,6 +99,7 @@ class AutofillWebDataService : public AutofillWebData,
   void MaskServerCreditCard(const std::string& id) override;
 
   void ClearAllServerData();
+  void ClearAllLocalData();
 
   void UpdateServerCardMetadata(const CreditCard& credit_card) override;
   void UpdateServerAddressMetadata(const AutofillProfile& profile) override;
@@ -107,6 +108,8 @@ class AutofillWebDataService : public AutofillWebData,
                                          const base::Time& delete_end) override;
   void RemoveOriginURLsModifiedBetween(const base::Time& delete_begin,
                                        const base::Time& delete_end) override;
+
+  void RemoveOrphanAutofillTableRows() override;
 
   void AddObserver(AutofillWebDataServiceObserverOnDBSequence* observer);
   void RemoveObserver(AutofillWebDataServiceObserverOnDBSequence* observer);

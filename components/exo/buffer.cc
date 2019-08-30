@@ -15,7 +15,6 @@
 #include "base/callback_helpers.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
@@ -24,6 +23,7 @@
 #include "components/exo/layer_tree_frame_sink_holder.h"
 #include "components/viz/common/gpu/context_provider.h"
 #include "components/viz/common/resources/resource_format.h"
+#include "components/viz/common/resources/resource_format_utils.h"
 #include "components/viz/common/resources/single_release_callback.h"
 #include "gpu/command_buffer/client/context_support.h"
 #include "gpu/command_buffer/client/gles2_interface.h"
@@ -81,14 +81,6 @@ unsigned CreateGLTexture(gpu::gles2::GLES2Interface* gles2, GLenum target) {
   gles2->TexParameteri(target, GL_TEXTURE_WRAP_S, GL_CLAMP_TO_EDGE);
   gles2->TexParameteri(target, GL_TEXTURE_WRAP_T, GL_CLAMP_TO_EDGE);
   return texture_id;
-}
-
-void CreateGLMailbox(gpu::gles2::GLES2Interface* gles2,
-                     unsigned texture_id,
-                     GLenum target,
-                     gpu::Mailbox* mailbox) {
-  gles2->GenMailboxCHROMIUM(mailbox->name);
-  gles2->ProduceTextureDirectCHROMIUM(texture_id, mailbox->name);
 }
 
 }  // namespace
@@ -179,7 +171,7 @@ Buffer::Texture::Texture(ui::ContextFactory* context_factory,
   gpu::gles2::GLES2Interface* gles2 = context_provider_->ContextGL();
   texture_id_ = CreateGLTexture(gles2, texture_target_);
   // Generate a crypto-secure random mailbox name.
-  CreateGLMailbox(gles2, texture_id_, texture_target_, &mailbox_);
+  gles2->ProduceTextureDirectCHROMIUM(texture_id_, mailbox_.name);
   // Provides a notification when |context_provider_| is lost.
   context_factory_->AddObserver(this);
 }
@@ -256,7 +248,7 @@ gpu::SyncToken Buffer::Texture::BindTexImage() {
     gles2->BindTexImage2DCHROMIUM(texture_target_, image_id_);
     // Generate a crypto-secure random mailbox name if not already done.
     if (mailbox_.IsZero())
-      CreateGLMailbox(gles2, texture_id_, texture_target_, &mailbox_);
+      gles2->ProduceTextureDirectCHROMIUM(texture_id_, mailbox_.name);
     // Create and return a sync token that can be used to ensure that the
     // BindTexImage2DCHROMIUM call is processed before issuing any commands
     // that will read from the texture on a different context.
@@ -467,7 +459,7 @@ bool Buffer::ProduceTransferableResource(
     resource->mailbox_holder = gpu::MailboxHolder(contents_texture->mailbox(),
                                                   sync_token, texture_target_);
     resource->is_overlay_candidate = is_overlay_candidate_;
-    resource->buffer_format = gpu_memory_buffer_->GetFormat();
+    resource->format = viz::GetResourceFormat(gpu_memory_buffer_->GetFormat());
 
     // The contents texture will be released when no longer used by the
     // compositor.

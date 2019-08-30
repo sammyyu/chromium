@@ -11,7 +11,6 @@
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/base/ui_base_types.h"
 
-class GURL;
 class Tab;
 class TabStrip;
 
@@ -83,12 +82,12 @@ class TabStripController {
   // Notifies controller of a drop index update.
   virtual void OnDropIndexUpdate(int index, bool drop_before) = 0;
 
-  // Performs a drop at the specified location.
-  virtual void PerformDrop(bool drop_before, int index, const GURL& url) = 0;
-
   // Return true if this tab strip is compatible with the provided tab strip.
   // Compatible tab strips can transfer tabs during drag and drop.
   virtual bool IsCompatibleWith(TabStrip* other) const = 0;
+
+  // Returns the position of the new tab button within the strip.
+  virtual NewTabButtonPosition GetNewTabButtonPosition() const = 0;
 
   // Creates the new tab.
   virtual void CreateNewTab() = 0;
@@ -106,6 +105,9 @@ class TabStripController {
   // Invoked if the stacked layout (on or off) might have changed.
   virtual void StackedLayoutMaybeChanged() = 0;
 
+  // Whether the special painting mode for one tab is allowed.
+  virtual bool IsSingleTabModeAvailable() = 0;
+
   // Notifies controller that the user started dragging this tabstrip's tabs.
   virtual void OnStartedDraggingTabs() = 0;
 
@@ -114,13 +116,20 @@ class TabStripController {
   // from this tabstrip but the user is still dragging the tabs.
   virtual void OnStoppedDraggingTabs() = 0;
 
-  // Determines if the file type of the URL is supported. Should invoke
-  // TabStrip::FileSupported to report the result.
-  virtual void CheckFileSupported(const GURL& url) = 0;
-
   // Returns COLOR_TOOLBAR_TOP_SEPARATOR[,_INACTIVE] depending on the activation
   // state of the window.
   virtual SkColor GetToolbarTopSeparatorColor() const = 0;
+
+  // Under Refresh, returns the color of the separator between the tabs.
+  virtual SkColor GetTabSeparatorColor() const = 0;
+
+  // Returns the tab background color based on both the |state| of the tab and
+  // the activation state of the window.
+  virtual SkColor GetTabBackgroundColor(TabState state) const = 0;
+
+  // Returns the tab foreground color of the the text based on both the |state|
+  // of the tab and the activation state of the window.
+  virtual SkColor GetTabForegroundColor(TabState state) const = 0;
 
   // Returns the accessible tab name.
   virtual base::string16 GetAccessibleTabName(const Tab* tab) const = 0;

@@ -7,7 +7,6 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
@@ -45,7 +44,7 @@ class MockLanguageModel : public language::LanguageModel {
 
 class TranslateUIDelegateTest : public ::testing::Test {
  public:
-  TranslateUIDelegateTest() : ::testing::Test() {}
+  TranslateUIDelegateTest() {}
 
   void SetUp() override {
     pref_service_.reset(new sync_preferences::TestingPrefServiceSyncable());

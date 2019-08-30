@@ -129,9 +129,9 @@ class MarkerSerializer {
       // Recompute the current active marker and the next check point
       this.activeMarkerRanges_[type] = null;
       /** @type {number} */
-      const markerCount = window.internals.markerCountForNode(node, type);
+      const markerCount = internals.markerCountForNode(node, type);
       for (let i = 0; i < markerCount; ++i) {
-        const marker = window.internals.markerRangeForNode(node, type, i);
+        const marker = internals.markerRangeForNode(node, type, i);
         assert_equals(
             marker.startContainer, node,
             'Internal error: marker range not starting in the annotated node.');
@@ -386,6 +386,8 @@ add_result_callback(testObj => {
 
     if (shouldRemoveSample)
       testObj.sample.remove();
+    else
+      testObj.sample.keep();
 
     // This is the earliest timing when a new spellcheck_test can be started.
     spellcheckTestRunning = false;
@@ -442,8 +444,8 @@ function spellcheckTest(input, tester, expectedText, opt_args) {
 }
 
 if (window.testRunner) {
-  window.testRunner.setMockSpellCheckerEnabled(true);
-  window.testRunner.setSpellCheckResolvedCallback(() => {
+  testRunner.setMockSpellCheckerEnabled(true);
+  testRunner.setSpellCheckResolvedCallback(() => {
     if (verificationForCurrentTest)
       verificationForCurrentTest();
   });

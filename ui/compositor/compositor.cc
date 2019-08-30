@@ -11,7 +11,6 @@
 
 #include "base/bind.h"
 #include "base/command_line.h"
-#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
@@ -29,6 +28,7 @@
 #include "cc/trees/latency_info_swap_promise.h"
 #include "cc/trees/layer_tree_host.h"
 #include "cc/trees/layer_tree_settings.h"
+#include "components/viz/common/features.h"
 #include "components/viz/common/frame_sinks/begin_frame_args.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 #include "components/viz/common/gpu/context_provider.h"
@@ -40,6 +40,7 @@
 #include "components/viz/host/renderer_settings_creation.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
 #include "third_party/skia/include/core/SkBitmap.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/compositor/compositor_observer.h"
 #include "ui/compositor/compositor_switches.h"
@@ -48,6 +49,7 @@
 #include "ui/compositor/external_begin_frame_client.h"
 #include "ui/compositor/layer.h"
 #include "ui/compositor/layer_animator_collection.h"
+#include "ui/compositor/overscroll/scroll_input_handler.h"
 #include "ui/compositor/scoped_animation_duration_scale_mode.h"
 #include "ui/display/display_switches.h"
 #include "ui/gfx/icc_profile.h"
@@ -96,6 +98,8 @@ Compositor::Compositor(const viz::FrameSinkId& frame_sink_id,
   settings.use_occlusion_for_tile_prioritization = true;
   refresh_rate_ = context_factory_->GetRefreshRate();
   settings.main_frame_before_activation_enabled = false;
+  settings.delegated_sync_points_required =
+      context_factory_->SyncTokensRequiredForDisplayCompositor();
 
   // Disable edge anti-aliasing in order to increase support for HW overlays.
   settings.enable_edge_anti_aliasing = false;
@@ -152,6 +156,7 @@ Compositor::Compositor(const viz::FrameSinkId& frame_sink_id,
   settings.initial_debug_state.SetRecordRenderingStats(
       command_line->HasSwitch(cc::switches::kEnableGpuBenchmarking));
   settings.enable_surface_synchronization = enable_surface_synchronization;
+  settings.build_hit_test_data = features::IsVizHitTestingSurfaceLayerEnabled();
 
   settings.use_zero_copy = IsUIZeroCopyEnabled();
 
@@ -162,14 +167,17 @@ Compositor::Compositor(const viz::FrameSinkId& frame_sink_id,
   // doesn't currently support partial raster.
   settings.use_partial_raster = !settings.use_zero_copy;
 
-  if (command_line->HasSwitch(switches::kUIEnableRGBA4444Textures))
-    settings.preferred_tile_format = viz::RGBA_4444;
+  settings.gpu_rasterization_forced = features::IsUiGpuRasterizationEnabled();
+
+  settings.use_rgba_4444 =
+      command_line->HasSwitch(switches::kUIEnableRGBA4444Textures);
 
 #if defined(OS_MACOSX)
   // Using CoreAnimation to composite requires using GpuMemoryBuffers, which
   // require zero copy.
   settings.resource_settings.use_gpu_memory_buffer_resources =
       settings.use_zero_copy;
+  settings.enable_elastic_overscroll = true;
 #endif
 
   settings.memory_policy.bytes_limit_when_visible = 512 * 1024 * 1024;
@@ -187,8 +195,6 @@ Compositor::Compositor(const viz::FrameSinkId& frame_sink_id,
   settings.always_request_presentation_time =
       command_line->HasSwitch(cc::switches::kAlwaysRequestPresentationTime);
 
-  base::TimeTicks before_create = base::TimeTicks::Now();
-
   animation_host_ = cc::AnimationHost::CreateMainInstance();
 
   cc::LayerTreeHost::InitParams params;
@@ -198,8 +204,12 @@ Compositor::Compositor(const viz::FrameSinkId& frame_sink_id,
   params.main_task_runner = task_runner_;
   params.mutator_host = animation_host_.get();
   host_ = cc::LayerTreeHost::CreateSingleThreaded(this, &params);
-  UMA_HISTOGRAM_TIMES("GPU.CreateBrowserCompositor",
-                      base::TimeTicks::Now() - before_create);
+
+  if (base::FeatureList::IsEnabled(features::kUiCompositorScrollWithLayers) &&
+      host_->GetInputHandler()) {
+    scroll_input_handler_.reset(
+        new ScrollInputHandler(host_->GetInputHandler()));
+  }
 
   animation_timeline_ =
       cc::AnimationTimeline::Create(cc::AnimationIdProvider::NextTimelineId());
@@ -246,10 +256,6 @@ Compositor::~Compositor() {
   }
 }
 
-bool Compositor::IsForSubframe() {
-  return false;
-}
-
 void Compositor::AddFrameSink(const viz::FrameSinkId& frame_sink_id) {
   if (!context_factory_private_)
     return;
@@ -272,7 +278,7 @@ void Compositor::RemoveFrameSink(const viz::FrameSinkId& frame_sink_id) {
 
 void Compositor::SetLocalSurfaceId(
     const viz::LocalSurfaceId& local_surface_id) {
-  host_->SetLocalSurfaceId(local_surface_id);
+  host_->SetLocalSurfaceIdFromParent(local_surface_id);
 }
 
 void Compositor::SetLayerTreeFrameSink(
@@ -336,7 +342,14 @@ void Compositor::ScheduleRedrawRect(const gfx::Rect& damage_rect) {
 }
 
 void Compositor::DisableSwapUntilResize() {
-  context_factory_private_->ResizeDisplay(this, gfx::Size());
+  DCHECK(context_factory_private_);
+  context_factory_private_->DisableSwapUntilResize(this);
+  disabled_swap_until_resize_ = true;
+}
+
+void Compositor::ReenableSwap() {
+  DCHECK(context_factory_private_);
+  context_factory_private_->ResizeDisplay(this, size_);
 }
 
 void Compositor::SetLatencyInfo(const ui::LatencyInfo& latency_info) {
@@ -352,13 +365,22 @@ void Compositor::SetScaleAndSize(float scale,
   bool device_scale_factor_changed = device_scale_factor_ != scale;
   device_scale_factor_ = scale;
 
+  if (size_ != size_in_pixel && local_surface_id.is_valid()) {
+    // A new LocalSurfaceId must be set when the compositor size changes.
+    DCHECK_NE(local_surface_id, host_->local_surface_id_from_parent());
+  }
+
   if (!size_in_pixel.IsEmpty()) {
+    bool size_changed = size_ != size_in_pixel;
     size_ = size_in_pixel;
     host_->SetViewportSizeAndScale(size_in_pixel, scale, local_surface_id);
     root_web_layer_->SetBounds(size_in_pixel);
     // TODO(fsamuel): Get rid of ContextFactoryPrivate.
-    if (context_factory_private_)
+    if (context_factory_private_ &&
+        (size_changed || disabled_swap_until_resize_)) {
       context_factory_private_->ResizeDisplay(this, size_in_pixel);
+      disabled_swap_until_resize_ = false;
+    }
   }
   if (device_scale_factor_changed) {
     if (is_pixel_canvas())
@@ -412,12 +434,15 @@ bool Compositor::IsVisible() {
 }
 
 bool Compositor::ScrollLayerTo(int layer_id, const gfx::ScrollOffset& offset) {
-  return host_->GetInputHandler()->ScrollLayerTo(layer_id, offset);
+  auto input_handler = host_->GetInputHandler();
+  return input_handler && input_handler->ScrollLayerTo(layer_id, offset);
 }
 
 bool Compositor::GetScrollOffsetForLayer(int layer_id,
                                          gfx::ScrollOffset* offset) const {
-  return host_->GetInputHandler()->GetScrollOffsetForLayer(layer_id, offset);
+  auto input_handler = host_->GetInputHandler();
+  return input_handler &&
+         input_handler->GetScrollOffsetForLayer(layer_id, offset);
 }
 
 void Compositor::SetAuthoritativeVSyncInterval(

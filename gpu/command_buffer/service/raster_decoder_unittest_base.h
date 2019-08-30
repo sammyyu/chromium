@@ -9,7 +9,10 @@
 #include <stdint.h>
 
 #include <array>
+#include <initializer_list>
 #include <memory>
+#include <string>
+#include <vector>
 
 #include "base/message_loop/message_loop.h"
 #include "gpu/command_buffer/client/client_test_helper.h"
@@ -20,7 +23,6 @@
 #include "gpu/command_buffer/service/decoder_client.h"
 #include "gpu/command_buffer/service/framebuffer_manager.h"
 #include "gpu/command_buffer/service/gl_context_mock.h"
-#include "gpu/command_buffer/service/gpu_preferences.h"
 #include "gpu/command_buffer/service/gpu_tracer.h"
 #include "gpu/command_buffer/service/image_manager.h"
 #include "gpu/command_buffer/service/mailbox_manager_impl.h"
@@ -31,6 +33,7 @@
 #include "gpu/command_buffer/service/test_helper.h"
 #include "gpu/command_buffer/service/texture_manager.h"
 #include "gpu/config/gpu_driver_bug_workarounds.h"
+#include "gpu/config/gpu_preferences.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/gl/gl_mock.h"
 #include "ui/gl/gl_surface_stub.h"
@@ -39,7 +42,8 @@
 namespace gpu {
 
 namespace gles2 {
-class MemoryTracker;
+class ImageManager;
+class MockCopyTextureResourceManager;
 }  // namespace gles2
 
 namespace raster {
@@ -56,6 +60,8 @@ class RasterDecoderTestBase : public ::testing::TestWithParam<bool>,
   bool OnWaitSyncToken(const gpu::SyncToken&) override;
   void OnDescheduleUntilFinished() override;
   void OnRescheduleAfterFinished() override;
+  void OnSwapBuffers(uint64_t swap_id, uint32_t flags) override;
+  void ScheduleGrContextCleanup() override {}
 
   // Template to call glGenXXX functions.
   template <typename T>
@@ -128,8 +134,21 @@ class RasterDecoderTestBase : public ::testing::TestWithParam<bool>,
                            GLsizei count_in_header,
                            char str_end);
 
-  void InitDecoderWithWorkarounds();
+  void AddExpectationsForVertexAttribManager();
+  void AddExpectationsForBindVertexArrayOES();
+  void AddExpectationsForRestoreAttribState(GLuint attrib);
 
+  struct InitState {
+    InitState();
+    ~InitState();
+
+    std::vector<std::string> extensions = {"GL_ARB_sync"};
+    bool lose_context_when_out_of_memory = false;
+    gpu::GpuDriverBugWorkarounds workarounds;
+    std::string gl_version = "2.1";
+  };
+
+  void InitDecoder(const InitState& init);
   void ResetDecoder();
 
   const gles2::ContextGroup& group() const { return *group_.get(); }
@@ -147,11 +166,18 @@ class RasterDecoderTestBase : public ::testing::TestWithParam<bool>,
   }
 
   RasterDecoder* GetDecoder() const { return decoder_.get(); }
+  gles2::ImageManager* GetImageManagerForTest() {
+    return decoder_->GetImageManagerForTest();
+  }
 
   typedef gles2::TestHelper::AttribInfo AttribInfo;
   typedef gles2::TestHelper::UniformInfo UniformInfo;
 
+  void SetupInitCapabilitiesExpectations(bool es3_capable);
   void SetupInitStateExpectations(bool es3_capable);
+  void SetupInitStateManualExpectations(bool es3_capable);
+  void SetupInitStateManualExpectationsForDoLineWidth(GLfloat width);
+  void ExpectEnableDisable(GLenum cap, bool enable);
 
   void SetupTexture();
 
@@ -165,15 +191,39 @@ class RasterDecoderTestBase : public ::testing::TestWithParam<bool>,
 
   void DoBindTexture(GLenum target, GLuint client_id, GLuint service_id);
   void DoDeleteTexture(GLuint client_id, GLuint service_id);
+  void SetScopedTextureBinderExpectations(GLenum target);
+  void DoTexStorage2D(GLuint client_id,
+                      GLsizei width,
+                      GLsizei height);
+
+  void SetupClearTextureExpectations(GLuint service_id,
+                                     GLuint old_service_id,
+                                     GLenum bind_target,
+                                     GLenum target,
+                                     GLint level,
+                                     GLenum format,
+                                     GLenum type,
+                                     GLint xoffset,
+                                     GLint yoffset,
+                                     GLsizei width,
+                                     GLsizei height,
+                                     GLuint bound_pixel_unpack_buffer);
 
   GLvoid* BufferOffset(unsigned i) { return static_cast<int8_t*>(NULL) + (i); }
 
  protected:
   static const GLint kMaxTextureSize = 2048;
   static const GLint kNumTextureUnits = 8;
+  static const GLint kNumVertexAttribs = 16;
+
+  static const GLint kViewportX = 0;
+  static const GLint kViewportY = 0;
+  static const GLint kViewportWidth = 1;
+  static const GLint kViewportHeight = 1;
 
   static const GLuint kServiceBufferId = 301;
   static const GLuint kServiceTextureId = 304;
+  static const GLuint kServiceVertexArrayId = 310;
 
   static const size_t kSharedBufferSize = 2048;
   static const uint32_t kSharedMemoryOffset = 132;
@@ -195,7 +245,6 @@ class RasterDecoderTestBase : public ::testing::TestWithParam<bool>,
   gles2::TraceOutputter outputter_;
   std::unique_ptr<MockRasterDecoder> mock_decoder_;
   std::unique_ptr<RasterDecoder> decoder_;
-  gles2::MemoryTracker* memory_tracker_;
 
   GLuint client_texture_id_;
 
@@ -217,6 +266,15 @@ class RasterDecoderTestBase : public ::testing::TestWithParam<bool>,
   ServiceDiscardableManager discardable_manager_;
   scoped_refptr<gles2::ContextGroup> group_;
   base::MessageLoop message_loop_;
+  gles2::MockCopyTextureResourceManager* copy_texture_manager_;  // not owned
+};
+
+class RasterDecoderManualInitTest : public RasterDecoderTestBase {
+ public:
+  RasterDecoderManualInitTest() = default;
+
+  // Override default setup so nothing gets setup.
+  void SetUp() override {}
 };
 
 }  // namespace raster

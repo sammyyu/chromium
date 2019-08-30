@@ -52,7 +52,7 @@ public class PaymentRequestServiceWorkerPaymentAppTest {
             final ServiceWorkerPaymentApp.Capabilities[] capabilities, final boolean withName,
             final boolean withIcon) {
         PaymentAppFactory.getInstance().addAdditionalFactory(
-                (webContents, methodNames, callback) -> {
+                (webContents, methodNames, mayCrawlUnused, callback) -> {
                     ChromeActivity activity = ChromeActivity.fromWebContents(webContents);
                     BitmapDrawable icon = withIcon
                             ? new BitmapDrawable(activity.getResources(),
@@ -64,7 +64,8 @@ public class PaymentRequestServiceWorkerPaymentAppTest {
                             UriUtils.parseUriFromString("https://bobpay.com") /* scope */,
                             withName ? "BobPay" : null /* name */, "test@bobpay.com" /* userHint */,
                             "https://bobpay.com" /* origin */, icon /* icon */,
-                            supportedMethodNames /* methodNames */, capabilities /* capabilities */,
+                            supportedMethodNames /* methodNames */, true /* explicitlyVerified */,
+                            capabilities /* capabilities */,
                             new String[0] /* preferredRelatedApplicationIds */));
                     callback.onAllPaymentAppsCreated();
                 });

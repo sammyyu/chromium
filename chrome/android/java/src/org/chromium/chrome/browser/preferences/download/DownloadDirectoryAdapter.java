@@ -5,22 +5,23 @@
 package org.chromium.chrome.browser.preferences.download;
 
 import android.content.Context;
-import android.os.Build;
-import android.os.Environment;
 import android.support.annotation.NonNull;
 import android.support.annotation.Nullable;
-import android.text.format.Formatter;
+import android.support.v4.widget.TextViewCompat;
 import android.view.LayoutInflater;
 import android.view.View;
 import android.view.ViewGroup;
+import android.view.ViewGroup.LayoutParams;
 import android.widget.ArrayAdapter;
 import android.widget.TextView;
 
 import org.chromium.chrome.R;
+import org.chromium.chrome.browser.download.DirectoryOption;
+import org.chromium.chrome.browser.download.DownloadDirectoryProvider;
+import org.chromium.chrome.browser.download.DownloadUtils;
 import org.chromium.chrome.browser.preferences.PrefServiceBridge;
 import org.chromium.chrome.browser.widget.TintedImageView;
 
-import java.io.File;
 import java.util.ArrayList;
 import java.util.List;
 
@@ -30,69 +31,59 @@ import java.util.List;
  */
 public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
     /**
-     * Denotes a given option for directory selection; includes name, location, and space.
+     * Delegate to handle directory options results and observe data changes.
      */
-    public static class DirectoryOption {
-        private String mName;
-        private File mLocation;
-        private String mAvailableSpace;
-
-        DirectoryOption(String directoryName, File directoryLocation, String availableSpace) {
-            mName = directoryName;
-            mLocation = directoryLocation;
-            mAvailableSpace = availableSpace;
-        }
+    public interface Delegate {
+        /**
+         * Called when available download directories are changed, like SD card removal. App level
+         * UI logic should update to match the new backend data.
+         */
+        void onDirectoryOptionsUpdated();
 
         /**
-         * @return File location associated with this directory option.
+         * Called after the user selected another download directory option.
          */
-        public File getLocation() {
-            return mLocation;
-        }
-
-        /**
-         * @return Name associated with this directory option.
-         */
-        public String getName() {
-            return mName;
-        }
-
-        /**
-         * @return Amount of available space in this directory option.
-         */
-        String getAvailableSpace() {
-            return mAvailableSpace;
-        }
+        void onDirectorySelectionChanged();
     }
+
+    public static int NO_SELECTED_ITEM_ID = -1;
+    public static int SELECTED_ITEM_NOT_INITIALIZED = -2;
+
+    protected int mSelectedPosition = SELECTED_ITEM_NOT_INITIALIZED;
 
     private Context mContext;
     private LayoutInflater mLayoutInflater;
+    protected Delegate mDelegate;
 
     private List<DirectoryOption> mCanonicalOptions = new ArrayList<>();
     private List<DirectoryOption> mAdditionalOptions = new ArrayList<>();
+    private List<DirectoryOption> mErrorOptions = new ArrayList<>();
 
-    public DownloadDirectoryAdapter(@NonNull Context context) {
+    public DownloadDirectoryAdapter(@NonNull Context context, Delegate delegate) {
         super(context, android.R.layout.simple_spinner_item);
 
         mContext = context;
+        mDelegate = delegate;
         mLayoutInflater = LayoutInflater.from(context);
-
-        refreshData();
     }
 
     @Override
     public int getCount() {
-        return mCanonicalOptions.size() + mAdditionalOptions.size();
+        return mCanonicalOptions.size() + mAdditionalOptions.size() + mErrorOptions.size();
     }
 
     @Nullable
     @Override
     public Object getItem(int position) {
-        if (position < mCanonicalOptions.size()) {
-            return mCanonicalOptions.get(position);
-        } else {
-            return mAdditionalOptions.get(position - mCanonicalOptions.size());
+        if (!mErrorOptions.isEmpty()) {
+            assert position == 0;
+            assert getCount() == 1;
+            return mErrorOptions.get(position);
         }
+
+        return position < mCanonicalOptions.size()
+                ? mCanonicalOptions.get(position)
+                : mAdditionalOptions.get(position - mCanonicalOptions.size());
     }
 
     @Override
@@ -103,10 +94,9 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
     @NonNull
     @Override
     public View getView(int position, @Nullable View convertView, @NonNull ViewGroup parent) {
-        View view = convertView;
-        if (view == null) {
-            view = mLayoutInflater.inflate(R.layout.download_location_spinner_item, null);
-        }
+        View view = convertView != null
+                ? convertView
+                : mLayoutInflater.inflate(R.layout.download_location_spinner_item, null);
 
         view.setTag(position);
 
@@ -114,18 +104,23 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
         if (directoryOption == null) return view;
 
         TextView titleText = (TextView) view.findViewById(R.id.text);
-        titleText.setText(directoryOption.getName());
+        titleText.setText(directoryOption.name);
 
+        // ModalDialogView may do a measure pass on the view hierarchy to limit the layout inside
+        // certain area, where LayoutParams cannot be null.
+        if (view.getLayoutParams() == null) {
+            view.setLayoutParams(
+                    new LayoutParams(LayoutParams.MATCH_PARENT, LayoutParams.WRAP_CONTENT));
+        }
         return view;
     }
 
     @Override
     public View getDropDownView(
             int position, @Nullable View convertView, @NonNull ViewGroup parent) {
-        View view = convertView;
-        if (view == null) {
-            view = mLayoutInflater.inflate(R.layout.download_location_spinner_dropdown_item, null);
-        }
+        View view = convertView != null
+                ? convertView
+                : mLayoutInflater.inflate(R.layout.download_location_spinner_dropdown_item, null);
 
         view.setTag(position);
 
@@ -133,10 +128,23 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
         if (directoryOption == null) return view;
 
         TextView titleText = (TextView) view.findViewById(R.id.title);
-        titleText.setText(directoryOption.getName());
+        titleText.setText(directoryOption.name);
 
         TextView summaryText = (TextView) view.findViewById(R.id.description);
-        summaryText.setText(directoryOption.getAvailableSpace());
+        if (isEnabled(position)) {
+            TextViewCompat.setTextAppearance(titleText, R.style.BlackTitle1);
+            TextViewCompat.setTextAppearance(summaryText, R.style.BlackBody);
+            summaryText.setText(DownloadUtils.getStringForAvailableBytes(
+                    mContext, directoryOption.availableSpace));
+        } else {
+            TextViewCompat.setTextAppearance(titleText, R.style.BlackDisabledText1);
+            TextViewCompat.setTextAppearance(summaryText, R.style.BlackDisabledText3);
+            if (mErrorOptions.isEmpty()) {
+                summaryText.setText(mContext.getText(R.string.download_location_not_enough_space));
+            } else {
+                summaryText.setVisibility(View.GONE);
+            }
+        }
 
         TintedImageView imageView = (TintedImageView) view.findViewById(R.id.icon_view);
         imageView.setVisibility(View.GONE);
@@ -144,67 +152,124 @@ public class DownloadDirectoryAdapter extends ArrayAdapter<Object> {
         return view;
     }
 
+    @Override
+    public boolean isEnabled(int position) {
+        DirectoryOption directoryOption = (DirectoryOption) getItem(position);
+        return directoryOption != null && directoryOption.availableSpace != 0;
+    }
+
     /**
-     * @return Id of the directory option that matches the default download location.
+     * @return  ID of the directory option that matches the default download location.
      */
     public int getSelectedItemId() {
-        String location = PrefServiceBridge.getInstance().getDownloadDefaultDirectory();
+        return mSelectedPosition;
+    }
+
+    private void initSelectedIdFromPref() {
+        if (!mErrorOptions.isEmpty()) return;
+
+        int selectedId = NO_SELECTED_ITEM_ID;
+
+        String defaultLocation = PrefServiceBridge.getInstance().getDownloadDefaultDirectory();
         for (int i = 0; i < getCount(); i++) {
             DirectoryOption option = (DirectoryOption) getItem(i);
             if (option == null) continue;
-            if (location.equals(option.getLocation().getAbsolutePath())) return i;
-        }
-        throw new AssertionError("No selected item ID.");
-    }
-
-    private void refreshData() {
-        setCanonicalDirectoryOptions();
-        setAdditionalDirectoryOptions();
-    }
-
-    private void setCanonicalDirectoryOptions() {
-        mCanonicalOptions.clear();
-        File directoryLocation =
-                Environment.getExternalStoragePublicDirectory(Environment.DIRECTORY_DOWNLOADS);
-        mCanonicalOptions.add(new DirectoryOption(mContext.getString(R.string.menu_downloads),
-                directoryLocation, getAvailableBytesString(directoryLocation)));
-    }
-
-    private void setAdditionalDirectoryOptions() {
-        mAdditionalOptions.clear();
-
-        // TODO(jming): Is there any way to do this for API < 19????
-        if (Build.VERSION.SDK_INT < Build.VERSION_CODES.KITKAT) return;
-
-        File[] externalDirs = mContext.getExternalFilesDirs(Environment.DIRECTORY_DOWNLOADS);
-
-        // If there are no more additional directories, it is only the primary storage available.
-        if (externalDirs.length <= 1) return;
-
-        int numOtherAdditionalDirectories = 0;
-        for (File dir : externalDirs) {
-            if (dir == null) continue;
-
-            // Skip the directory that is in primary storage.
-            if (dir.getAbsolutePath().contains(
-                        Environment.getExternalStorageDirectory().getAbsolutePath())) {
-                continue;
+            if (defaultLocation.equals(option.location)) {
+                selectedId = i;
+                break;
             }
-
-            // Add index (ie. SD Card 2) if there is more than one secondary storage option.
-            String directoryName = (numOtherAdditionalDirectories > 0)
-                    ? mContext.getString(
-                              org.chromium.chrome.R.string.downloads_location_sd_card_number,
-                              numOtherAdditionalDirectories + 1)
-                    : mContext.getString(org.chromium.chrome.R.string.downloads_location_sd_card);
-            String availableBytes = getAvailableBytesString(dir);
-
-            mAdditionalOptions.add(new DirectoryOption(directoryName, dir, availableBytes));
-            numOtherAdditionalDirectories++;
         }
+        mSelectedPosition = selectedId;
     }
 
-    private String getAvailableBytesString(File file) {
-        return Formatter.formatFileSize(mContext, file.getUsableSpace());
+    /**
+     * In the case that there is no selected item ID/the selected item ID is invalid (ie. there is
+     * not enough space), select either the default or the next valid item ID. Set the default to be
+     * this item and return the ID.
+     *
+     * @return  ID of the first valid, selectable item and the new default location.
+     */
+    public int useFirstValidSelectableItemId() {
+        for (int i = 0; i < getCount(); i++) {
+            DirectoryOption option = (DirectoryOption) getItem(i);
+            if (option == null) continue;
+            if (option.availableSpace > 0) {
+                PrefServiceBridge.getInstance().setDownloadAndSaveFileDefaultDirectory(
+                        option.location);
+                mSelectedPosition = i;
+                return i;
+            }
+        }
+
+        // Display an option that says there are no available download locations.
+        adjustErrorDirectoryOption();
+        return 0;
+    }
+
+    boolean hasAvailableLocations() {
+        return mErrorOptions.isEmpty();
+    }
+
+    /**
+     * Update the list of items.
+     */
+    public void update() {
+        mCanonicalOptions.clear();
+        mAdditionalOptions.clear();
+        mErrorOptions.clear();
+
+        // Retrieve all download directories.
+        DownloadDirectoryProvider.getInstance().getAllDirectoriesOptions(
+                (ArrayList<DirectoryOption> dirs) -> { onDirectoryOptionsRetrieved(dirs); });
+    }
+
+    private void onDirectoryOptionsRetrieved(ArrayList<DirectoryOption> dirs) {
+        int numOtherAdditionalDirectories = 0;
+        for (DirectoryOption dir : dirs) {
+            DirectoryOption directory = (DirectoryOption) dir.clone();
+            switch (directory.type) {
+                case DirectoryOption.DownloadLocationDirectoryType.DEFAULT:
+                    directory.name = mContext.getString(R.string.menu_downloads);
+                    mCanonicalOptions.add(directory);
+                    break;
+                case DirectoryOption.DownloadLocationDirectoryType.ADDITIONAL:
+                    String directoryName = (numOtherAdditionalDirectories > 0)
+                            ? mContext.getString(org.chromium.chrome.R.string
+                                                         .downloads_location_sd_card_number,
+                                      numOtherAdditionalDirectories + 1)
+                            : mContext.getString(
+                                      org.chromium.chrome.R.string.downloads_location_sd_card);
+                    directory.name = directoryName;
+                    mAdditionalOptions.add(directory);
+                    numOtherAdditionalDirectories++;
+                    break;
+                case DirectoryOption.DownloadLocationDirectoryType.ERROR:
+                    directory.name =
+                            mContext.getString(R.string.download_location_no_available_locations);
+                    mErrorOptions.add(directory);
+                    break;
+                default:
+                    break;
+            }
+        }
+
+        // Setup the selection.
+        initSelectedIdFromPref();
+
+        // Update lower Android level UI widgets.
+        notifyDataSetChanged();
+
+        // Update higher app level UI logic.
+        if (mDelegate != null) mDelegate.onDirectoryOptionsUpdated();
+    }
+
+    private void adjustErrorDirectoryOption() {
+        if ((mCanonicalOptions.size() + mAdditionalOptions.size()) > 0) {
+            mErrorOptions.clear();
+        } else {
+            mErrorOptions.add(new DirectoryOption(
+                    mContext.getString(R.string.download_location_no_available_locations), null, 0,
+                    0, DirectoryOption.DownloadLocationDirectoryType.ERROR));
+        }
     }
 }

@@ -26,5 +26,10 @@ public class MockRenderFrameHost implements RenderFrameHost {
     }
 
     @Override
-    public void setHasReceivedUserGesture() {}
+    public void notifyUserActivation() {}
+
+    @Override
+    public boolean isIncognito() {
+        return false;
+    }
 }

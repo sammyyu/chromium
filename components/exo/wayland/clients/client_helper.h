@@ -14,7 +14,7 @@
 #include <memory>
 
 #include "base/scoped_generic.h"
-#include "components/exo/wayland/aura-shell-client-protocol.h"
+#include "components/exo/wayland/public/aura-shell-client-protocol.h"
 
 #if defined(USE_GBM)
 #include <gbm.h>
@@ -38,6 +38,7 @@ DEFAULT_DELETER_FDECL(wl_compositor)
 DEFAULT_DELETER_FDECL(wl_display)
 DEFAULT_DELETER_FDECL(wl_pointer)
 DEFAULT_DELETER_FDECL(wl_region)
+DEFAULT_DELETER_FDECL(wl_registry)
 DEFAULT_DELETER_FDECL(wl_seat)
 DEFAULT_DELETER_FDECL(wl_shell)
 DEFAULT_DELETER_FDECL(wl_shell_surface)

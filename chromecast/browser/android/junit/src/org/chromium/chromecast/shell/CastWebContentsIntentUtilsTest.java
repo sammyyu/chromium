@@ -5,9 +5,7 @@
 package org.chromium.chromecast.shell;
 
 import android.app.Activity;
-import android.app.Application;
 import android.content.BroadcastReceiver;
-import android.content.Context;
 import android.content.Intent;
 import android.net.Uri;
 
@@ -21,38 +19,22 @@ import org.mockito.MockitoAnnotations;
 import org.robolectric.Robolectric;
 import org.robolectric.annotation.Config;
 
-import org.chromium.base.ContextUtils;
+import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.content_public.browser.WebContents;
-import org.chromium.testing.local.LocalRobolectricTestRunner;
 
 /**
  * Tests for CastWebContentsComponent.
  */
-@RunWith(LocalRobolectricTestRunner.class)
-@Config(manifest = Config.NONE, application = CastWebContentsComponentTest.FakeApplication.class)
+@RunWith(BaseRobolectricTestRunner.class)
+@Config(manifest = Config.NONE)
 public class CastWebContentsIntentUtilsTest {
-    public static class FakeApplication extends Application {
-        @Override
-        protected void attachBaseContext(Context base) {
-            super.attachBaseContext(base);
-            ContextUtils.initApplicationContextForTests(this);
-        }
-    }
-
     private static final String INSTANCE_ID = "1";
-
     private static final String EXPECTED_URI = "cast://webcontents/1";
-
     private static final String APP_ID = "app";
-
     private static final int VISIBILITY_PRIORITY = 2;
 
-    @Mock
-    private WebContents mWebContents;
-
-    @Mock
-    private BroadcastReceiver mReceiver;
-
+    private @Mock WebContents mWebContents;
+    private @Mock BroadcastReceiver mReceiver;
     private Activity mActivity;
 
     @Before
@@ -79,6 +61,14 @@ public class CastWebContentsIntentUtilsTest {
         int type = CastWebContentsIntentUtils.getGestureType(in);
         Assert.assertEquals(1, type);
         Assert.assertTrue(CastWebContentsIntentUtils.isIntentOfGesturing(in));
+
+        in = CastWebContentsIntentUtils.onGestureWithUriString(EXPECTED_URI, 2);
+        uri = in.getDataString();
+        Assert.assertNotNull(uri);
+        Assert.assertEquals(EXPECTED_URI, uri);
+        type = CastWebContentsIntentUtils.getGestureType(in);
+        Assert.assertEquals(2, type);
+        Assert.assertTrue(CastWebContentsIntentUtils.isIntentOfGesturing(in));
     }
 
     @Test
@@ -94,13 +84,21 @@ public class CastWebContentsIntentUtilsTest {
 
     @Test
     public void testOnVisibilityChange() {
-        Intent in = CastWebContentsIntentUtils.onVisiblityChange(INSTANCE_ID, 3);
+        Intent in = CastWebContentsIntentUtils.onVisibilityChange(INSTANCE_ID, 3);
         String uri = in.getDataString();
         Assert.assertNotNull(uri);
         Assert.assertEquals(EXPECTED_URI, uri);
         int type = CastWebContentsIntentUtils.getVisibilityType(in);
         Assert.assertEquals(3, type);
-        Assert.assertTrue(CastWebContentsIntentUtils.isIntentOfVisiblityChange(in));
+        Assert.assertTrue(CastWebContentsIntentUtils.isIntentOfVisibilityChange(in));
+
+        in = CastWebContentsIntentUtils.onVisibilityChangeWithUriString(EXPECTED_URI, 2);
+        uri = in.getDataString();
+        Assert.assertNotNull(uri);
+        Assert.assertEquals(EXPECTED_URI, uri);
+        type = CastWebContentsIntentUtils.getVisibilityType(in);
+        Assert.assertEquals(2, type);
+        Assert.assertTrue(CastWebContentsIntentUtils.isIntentOfVisibilityChange(in));
     }
 
     @Test
@@ -134,8 +132,7 @@ public class CastWebContentsIntentUtilsTest {
         int type = CastWebContentsIntentUtils.getGestureType(in);
         Assert.assertEquals(1, type);
         Assert.assertTrue(CastWebContentsIntentUtils.isGestureConsumed(in));
-        Assert.assertEquals(CastWebContentsIntentUtils.ACTION_GESTURE_CONSUMED,
-            in.getAction());
+        Assert.assertEquals(CastWebContentsIntentUtils.ACTION_GESTURE_CONSUMED, in.getAction());
 
         in = CastWebContentsIntentUtils.gestureConsumed(INSTANCE_ID, 2, false);
         Assert.assertNull(in.getData());
@@ -195,6 +192,26 @@ public class CastWebContentsIntentUtilsTest {
         String uri = CastWebContentsIntentUtils.getUriString(in);
         Assert.assertNotNull(uri);
         Assert.assertEquals(EXPECTED_URI, uri);
+    }
+
+    @Test
+    public void testEnableTouchInputTrue() {
+        Intent in = CastWebContentsIntentUtils.enableTouchInput(INSTANCE_ID, true);
+        String uri = CastWebContentsIntentUtils.getUriString(in);
+        Assert.assertNotNull(uri);
+        Assert.assertEquals(EXPECTED_URI, uri);
+        Assert.assertEquals(CastWebContentsIntentUtils.ACTION_ENABLE_TOUCH_INPUT, in.getAction());
+        Assert.assertTrue(CastWebContentsIntentUtils.isTouchable(in));
+    }
+
+    @Test
+    public void testEnableTouchInputFalse() {
+        Intent in = CastWebContentsIntentUtils.enableTouchInput(INSTANCE_ID, false);
+        String uri = CastWebContentsIntentUtils.getUriString(in);
+        Assert.assertNotNull(uri);
+        Assert.assertEquals(EXPECTED_URI, uri);
+        Assert.assertEquals(CastWebContentsIntentUtils.ACTION_ENABLE_TOUCH_INPUT, in.getAction());
+        Assert.assertFalse(CastWebContentsIntentUtils.isTouchable(in));
     }
 
     @Test

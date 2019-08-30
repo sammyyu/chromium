@@ -9,7 +9,7 @@
 #include "base/message_loop/message_loop.h"
 #include "build/build_config.h"
 #include "content/public/renderer/media_stream_audio_sink.h"
-#include "content/renderer/media/mock_audio_device_factory.h"
+#include "content/renderer/media/audio/mock_audio_device_factory.h"
 #include "content/renderer/media/stream/media_stream_audio_processor_options.h"
 #include "content/renderer/media/stream/media_stream_audio_track.h"
 #include "content/renderer/media/stream/processed_local_audio_source.h"
@@ -18,8 +18,8 @@
 #include "media/base/audio_parameters.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/public/platform/WebMediaConstraints.h"
-#include "third_party/WebKit/public/web/WebHeap.h"
+#include "third_party/blink/public/platform/web_media_constraints.h"
+#include "third_party/blink/public/web/web_heap.h"
 
 using ::testing::_;
 using ::testing::AtLeast;
@@ -168,7 +168,7 @@ TEST_F(ProcessedLocalAudioSourceTest, VerifyAudioFlowWithoutAudioProcessing) {
   // Connect the track, and expect the MockCapturerSource to be initialized and
   // started by ProcessedLocalAudioSource.
   EXPECT_CALL(*mock_audio_device_factory()->mock_capturer_source(),
-              Initialize(_, capture_source_callback(), -1))
+              Initialize(_, capture_source_callback()))
       .WillOnce(WithArg<0>(Invoke(this, &ThisTest::CheckSourceFormatMatches)));
   EXPECT_CALL(*mock_audio_device_factory()->mock_capturer_source(),
               SetAutomaticGainControl(true));

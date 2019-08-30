@@ -6,9 +6,13 @@
 
 #include <stddef.h>
 
+#include <tuple>
+
+#include "base/run_loop.h"
 #include "components/viz/common/constants.h"
 #include "components/viz/common/frame_sinks/begin_frame_source.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
+#include "components/viz/service/display_embedder/server_shared_bitmap_manager.h"
 #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
 #include "components/viz/test/begin_frame_source_test.h"
 #include "components/viz/test/compositor_frame_helpers.h"
@@ -52,7 +56,9 @@ struct RootCompositorFrameSinkData {
 class FrameSinkManagerTest : public testing::Test {
  public:
   FrameSinkManagerTest()
-      : manager_(kDefaultActivationDeadlineInFrames, &provider) {}
+      : manager_(&shared_bitmap_manager_,
+                 kDefaultActivationDeadlineInFrames,
+                 &display_provider_) {}
   ~FrameSinkManagerTest() override = default;
 
   std::unique_ptr<CompositorFrameSinkSupport> CreateCompositorFrameSinkSupport(
@@ -78,10 +84,14 @@ class FrameSinkManagerTest : public testing::Test {
 
     // Make sure test cleans up all [Root]CompositorFrameSinkImpls.
     EXPECT_TRUE(manager_.support_map_.empty());
+
+    // Make sure test has invalidated all registered FrameSinkIds.
+    EXPECT_TRUE(manager_.frame_sink_data_.empty());
   }
 
  protected:
-  TestDisplayProvider provider;
+  ServerSharedBitmapManager shared_bitmap_manager_;
+  TestDisplayProvider display_provider_;
   FrameSinkManagerImpl manager_;
 };
 
@@ -113,6 +123,33 @@ TEST_F(FrameSinkManagerTest, CreateCompositorFrameSink) {
   // Invalidating should destroy the CompositorFrameSinkImpl.
   manager_.InvalidateFrameSinkId(kFrameSinkIdA);
   EXPECT_FALSE(CompositorFrameSinkExists(kFrameSinkIdA));
+}
+
+TEST_F(FrameSinkManagerTest, CompositorFrameSinkConnectionLost) {
+  manager_.RegisterFrameSinkId(kFrameSinkIdA);
+
+  // Create a CompositorFrameSinkImpl.
+  MockCompositorFrameSinkClient compositor_frame_sink_client;
+  mojom::CompositorFrameSinkPtr compositor_frame_sink;
+  manager_.CreateCompositorFrameSink(
+      kFrameSinkIdA, MakeRequest(&compositor_frame_sink),
+      compositor_frame_sink_client.BindInterfacePtr());
+  EXPECT_TRUE(CompositorFrameSinkExists(kFrameSinkIdA));
+
+  // Close the connection from the renderer.
+  compositor_frame_sink.reset();
+
+  // Closing the connection will destroy the CompositorFrameSinkImpl along with
+  // the mojom::CompositorFrameSinkClient binding.
+  base::RunLoop run_loop;
+  compositor_frame_sink_client.set_connection_error_handler(
+      run_loop.QuitClosure());
+  run_loop.Run();
+
+  // Check that the CompositorFrameSinkImpl was destroyed.
+  EXPECT_FALSE(CompositorFrameSinkExists(kFrameSinkIdA));
+
+  manager_.InvalidateFrameSinkId(kFrameSinkIdA);
 }
 
 TEST_F(FrameSinkManagerTest, SingleClients) {
@@ -401,6 +438,19 @@ TEST_F(FrameSinkManagerTest, EvictSurfaces) {
   EXPECT_FALSE(manager_.surface_manager()->GetSurfaceForId(surface_id2));
 }
 
+// Verify that setting debug label works and that debug labels are cleared when
+// FrameSinkId is invalidated.
+TEST_F(FrameSinkManagerTest, DebugLabel) {
+  const std::string label = "Test Label";
+
+  manager_.RegisterFrameSinkId(kFrameSinkIdA);
+  manager_.SetFrameSinkDebugLabel(kFrameSinkIdA, label);
+  EXPECT_EQ(label, manager_.GetFrameSinkDebugLabel(kFrameSinkIdA));
+
+  manager_.InvalidateFrameSinkId(kFrameSinkIdA);
+  EXPECT_EQ("", manager_.GetFrameSinkDebugLabel(kFrameSinkIdA));
+}
+
 namespace {
 
 enum RegisterOrder { REGISTER_HIERARCHY_FIRST, REGISTER_CLIENTS_FIRST };
@@ -529,7 +579,7 @@ class FrameSinkManagerOrderingTest : public FrameSinkManagerTest {
 class FrameSinkManagerOrderingParamTest
     : public FrameSinkManagerOrderingTest,
       public ::testing::WithParamInterface<
-          std::tr1::tuple<RegisterOrder, UnregisterOrder, BFSOrder>> {};
+          std::tuple<RegisterOrder, UnregisterOrder, BFSOrder>> {};
 
 TEST_P(FrameSinkManagerOrderingParamTest, Ordering) {
   // Test the four permutations of client/hierarchy setting/unsetting and test
@@ -537,9 +587,9 @@ TEST_P(FrameSinkManagerOrderingParamTest, Ordering) {
   // client/hierarchy are less related, so BFS is tested independently instead
   // of every permutation of BFS setting and unsetting.
   // The register/unregister functions themselves test most of the state.
-  RegisterOrder register_order = std::tr1::get<0>(GetParam());
-  UnregisterOrder unregister_order = std::tr1::get<1>(GetParam());
-  BFSOrder bfs_order = std::tr1::get<2>(GetParam());
+  RegisterOrder register_order = std::get<0>(GetParam());
+  UnregisterOrder unregister_order = std::get<1>(GetParam());
+  BFSOrder bfs_order = std::get<2>(GetParam());
 
   // Attach everything up in the specified order.
   if (bfs_order == BFS_FIRST)

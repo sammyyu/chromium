@@ -24,7 +24,9 @@ bool ShouldSendOnIO(const std::string& method) {
          method == "Debugger.setBreakpointByUrl" ||
          method == "Debugger.removeBreakpoint" ||
          method == "Debugger.setBreakpointsActive" ||
-         method == "Performance.getMetrics" || method == "Page.crash";
+         method == "Performance.getMetrics" || method == "Page.crash" ||
+         method == "Runtime.terminateExecution" ||
+         method == "Emulation.setScriptExecutionDisabled";
 }
 
 }  // namespace
@@ -44,6 +46,13 @@ DevToolsSession::DevToolsSession(DevToolsAgentHostImpl* agent_host,
 }
 
 DevToolsSession::~DevToolsSession() {
+  // It is Ok for session to be deleted without the dispose -
+  // it can be kicked out by an extension connect / disconnect.
+  if (dispatcher_)
+    Dispose();
+}
+
+void DevToolsSession::Dispose() {
   dispatcher_.reset();
   for (auto& pair : handlers_)
     pair.second->Disable();
@@ -114,28 +123,19 @@ void DevToolsSession::MojoConnectionDestroyed() {
   io_session_ptr_.reset();
 }
 
-void DevToolsSession::DispatchProtocolMessage(const std::string& message) {
-  std::unique_ptr<base::Value> value = base::JSONReader::Read(message);
-
+void DevToolsSession::DispatchProtocolMessage(
+    const std::string& message,
+    base::DictionaryValue* parsed_message) {
   DevToolsManagerDelegate* delegate =
       DevToolsManager::GetInstance()->delegate();
-  if (value && value->is_dict() && delegate) {
-    base::DictionaryValue* dict_value =
-        static_cast<base::DictionaryValue*>(value.get());
-
-    if (delegate->HandleCommand(agent_host_, client_, dict_value))
-      return;
-
-    if (delegate->HandleAsyncCommand(agent_host_, client_, dict_value,
-                                     base::Bind(&DevToolsSession::SendResponse,
-                                                weak_factory_.GetWeakPtr()))) {
-      return;
-    }
+  if (delegate && parsed_message &&
+      delegate->HandleCommand(agent_host_, client_, parsed_message)) {
+    return;
   }
 
   int call_id;
   std::string method;
-  if (dispatcher_->dispatch(protocol::toProtocolValue(value.get(), 1000),
+  if (dispatcher_->dispatch(protocol::toProtocolValue(parsed_message, 1000),
                             &call_id,
                             &method) != protocol::Response::kFallThrough) {
     return;
@@ -211,7 +211,11 @@ void DevToolsSession::DispatchProtocolResponse(
   // |this| may be deleted at this point.
 }
 
-void DevToolsSession::DispatchProtocolNotification(const std::string& message) {
+void DevToolsSession::DispatchProtocolNotification(
+    const std::string& message,
+    const base::Optional<std::string>& state) {
+  if (state.has_value())
+    state_cookie_ = state.value();
   client_->DispatchProtocolMessage(agent_host_, message);
   // |this| may be deleted at this point.
 }

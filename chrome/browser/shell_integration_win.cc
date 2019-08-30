@@ -23,9 +23,7 @@
 #include "base/files/file_enumerator.h"
 #include "base/files/file_util.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/metrics/user_metrics_action.h"
@@ -42,7 +40,8 @@
 #include "base/win/windows_version.h"
 #include "chrome/browser/policy/policy_path_parser.h"
 #include "chrome/browser/shell_integration.h"
-#include "chrome/browser/web_applications/web_app.h"
+#include "chrome/browser/web_applications/components/web_app_helpers.h"
+#include "chrome/browser/web_applications/extensions/web_app_extension_helpers.h"
 #include "chrome/browser/win/settings_app_monitor.h"
 #include "chrome/common/chrome_constants.h"
 #include "chrome/common/chrome_paths_internal.h"
@@ -152,11 +151,11 @@ void MigrateTaskbarPinsCallback() {
 
   // Get full path of chrome.
   base::FilePath chrome_exe;
-  if (!PathService::Get(base::FILE_EXE, &chrome_exe))
+  if (!base::PathService::Get(base::FILE_EXE, &chrome_exe))
     return;
 
   base::FilePath pins_path;
-  if (!PathService::Get(base::DIR_TASKBAR_PINS, &pins_path)) {
+  if (!base::PathService::Get(base::DIR_TASKBAR_PINS, &pins_path)) {
     NOTREACHED();
     return;
   }
@@ -535,7 +534,7 @@ bool SetAsDefaultBrowser() {
   base::AssertBlockingAllowed();
 
   base::FilePath chrome_exe;
-  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+  if (!base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
     LOG(ERROR) << "Error getting app exe path";
     return false;
   }
@@ -559,7 +558,7 @@ bool SetAsDefaultProtocolClient(const std::string& protocol) {
     return false;
 
   base::FilePath chrome_exe;
-  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+  if (!base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
     LOG(ERROR) << "Error getting app exe path";
     return false;
   }
@@ -639,7 +638,7 @@ bool SetAsDefaultBrowserUsingIntentPicker() {
   base::AssertBlockingAllowed();
 
   base::FilePath chrome_exe;
-  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+  if (!base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
     NOTREACHED() << "Error getting app exe path";
     return false;
   }
@@ -659,7 +658,7 @@ void SetAsDefaultBrowserUsingSystemSettings(
   base::AssertBlockingAllowed();
 
   base::FilePath chrome_exe;
-  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+  if (!base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
     NOTREACHED() << "Error getting app exe path";
     on_finished_callback.Run();
     return;
@@ -686,7 +685,7 @@ bool SetAsDefaultProtocolClientUsingIntentPicker(const std::string& protocol) {
   base::AssertBlockingAllowed();
 
   base::FilePath chrome_exe;
-  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+  if (!base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
     NOTREACHED() << "Error getting app exe path";
     return false;
   }
@@ -709,7 +708,7 @@ void SetAsDefaultProtocolClientUsingSystemSettings(
   base::AssertBlockingAllowed();
 
   base::FilePath chrome_exe;
-  if (!PathService::Get(base::FILE_EXE, &chrome_exe)) {
+  if (!base::PathService::Get(base::FILE_EXE, &chrome_exe)) {
     NOTREACHED() << "Error getting app exe path";
     on_finished_callback.Run();
     return;

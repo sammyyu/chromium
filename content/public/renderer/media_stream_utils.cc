@@ -18,9 +18,9 @@
 #include "content/renderer/media/stream/media_stream_video_track.h"
 #include "media/base/audio_capturer_source.h"
 #include "media/capture/video_capturer_source.h"
-#include "third_party/WebKit/public/platform/WebMediaStream.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamSource.h"
-#include "third_party/WebKit/public/web/WebMediaStreamRegistry.h"
+#include "third_party/blink/public/platform/web_media_stream.h"
+#include "third_party/blink/public/platform/web_media_stream_source.h"
+#include "third_party/blink/public/web/web_media_stream_registry.h"
 
 namespace content {
 
@@ -71,7 +71,7 @@ bool AddAudioTrackToMediaStream(
 
   const media::AudioParameters params(
       media::AudioParameters::AUDIO_PCM_LOW_LATENCY, channel_layout,
-      sample_rate, sizeof(int16_t) * 8, frames_per_buffer);
+      sample_rate, frames_per_buffer);
   if (!params.IsValid()) {
     DLOG(ERROR) << "Invalid audio parameters.";
     return false;
@@ -92,6 +92,8 @@ bool AddAudioTrackToMediaStream(
   blink::WebMediaStreamSource::Capabilities capabilities;
   capabilities.device_id = track_id;
   capabilities.echo_cancellation = std::vector<bool>({false});
+  capabilities.auto_gain_control = std::vector<bool>({false});
+  capabilities.noise_suppression = std::vector<bool>({false});
   web_media_stream_source.SetCapabilities(capabilities);
 
   blink::WebMediaStreamTrack web_media_stream_track;

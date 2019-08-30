@@ -54,9 +54,11 @@ class LoginDisplayHostWebUI : public LoginDisplayHostCommon,
   ~LoginDisplayHostWebUI() override;
 
   // LoginDisplayHost:
-  LoginDisplay* CreateLoginDisplay(LoginDisplay::Delegate* delegate) override;
+  LoginDisplay* GetLoginDisplay() override;
+  ExistingUserController* GetExistingUserController() override;
   gfx::NativeWindow GetNativeWindow() const override;
   OobeUI* GetOobeUI() const override;
+  content::WebContents* GetOobeWebContents() const override;
   WebUILoginView* GetWebUILoginView() const override;
   void OnFinalize() override;
   void SetStatusAreaVisible(bool visible) override;
@@ -71,12 +73,18 @@ class LoginDisplayHostWebUI : public LoginDisplayHostCommon,
   bool IsVoiceInteractionOobe() override;
   void StartVoiceInteractionOobe() override;
   void OnBrowserCreated() override;
-  void UpdateGaiaDialogVisibility(bool visible) override;
-  void UpdateGaiaDialogSize(int width, int height) override;
+  void ShowGaiaDialog(
+      bool can_close,
+      const base::Optional<AccountId>& prefilled_account) override;
+  void HideOobeDialog() override;
+  void UpdateOobeDialogSize(int width, int height) override;
   const user_manager::UserList GetUsers() override;
+  void ShowFeedback() override;
+  void ShowDialogForCaptivePortal() override;
+  void HideDialogForCaptivePortal() override;
+  void UpdateAddUserButtonStatus() override;
 
-  // Creates WizardController instance.
-  WizardController* CreateWizardController();
+  void OnCancelPasswordChangedFlow() override;
 
   // Trace id for ShowLoginWebUI event (since there exists at most one login
   // WebUI at a time).
@@ -172,6 +180,9 @@ class LoginDisplayHostWebUI : public LoginDisplayHostCommon,
   // Called when login-prompt-visible signal is caught.
   void OnLoginPromptVisible();
 
+  // Creates or recreates |existing_user_controller_|.
+  void CreateExistingUserController();
+
   // Sign in screen controller.
   std::unique_ptr<ExistingUserController> existing_user_controller_;
 
@@ -193,7 +204,7 @@ class LoginDisplayHostWebUI : public LoginDisplayHostCommon,
   WebUILoginView* login_view_ = nullptr;
 
   // Login display we are using.
-  LoginDisplayWebUI* login_display_ = nullptr;
+  std::unique_ptr<LoginDisplayWebUI> login_display_;
 
   // True if the login display is the current screen.
   bool is_showing_login_ = false;

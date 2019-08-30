@@ -21,9 +21,11 @@ MockPacFileFetcher::MockPacFileFetcher()
 MockPacFileFetcher::~MockPacFileFetcher() = default;
 
 // PacFileFetcher implementation.
-int MockPacFileFetcher::Fetch(const GURL& url,
-                              base::string16* text,
-                              const CompletionCallback& callback) {
+int MockPacFileFetcher::Fetch(
+    const GURL& url,
+    base::string16* text,
+    CompletionOnceCallback callback,
+    const NetworkTrafficAnnotationTag traffic_annotation) {
   DCHECK(!has_pending_request());
 
   if (waiting_for_fetch_)
@@ -34,7 +36,7 @@ int MockPacFileFetcher::Fetch(const GURL& url,
 
   // Save the caller's information, and have them wait.
   pending_request_url_ = url;
-  pending_request_callback_ = callback;
+  pending_request_callback_ = std::move(callback);
   pending_request_text_ = text;
 
   return ERR_IO_PENDING;

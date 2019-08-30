@@ -11,7 +11,7 @@
 #include "storage/browser/quota/quota_client.h"
 #include "storage/browser/quota/quota_manager_proxy.h"
 #include "storage/browser/test/mock_quota_manager.h"
-#include "third_party/WebKit/public/mojom/quota/quota_types.mojom.h"
+#include "third_party/blink/public/mojom/quota/quota_types.mojom.h"
 #include "url/gurl.h"
 
 using storage::QuotaManagerProxy;
@@ -28,7 +28,7 @@ class MockQuotaManagerProxy : public QuotaManagerProxy {
 
   void RegisterClient(QuotaClient* client) override;
 
-  void SimulateQuotaManagerDestroyed();
+  virtual void SimulateQuotaManagerDestroyed();
 
   // We don't mock them.
   void NotifyOriginInUse(const url::Origin& origin) override {}

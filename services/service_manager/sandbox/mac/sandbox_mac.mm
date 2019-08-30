@@ -62,6 +62,7 @@ struct SandboxTypeToResourceIDMapping {
 // Mapping from sandbox process types to resource IDs containing the sandbox
 // profile for all process types known to service_manager.
 // TODO(tsepez): Implement profile for SANDBOX_TYPE_NETWORK.
+// TODO(https://crbug.com/850878): Implement profile for SANDBOX_TYPE_AUDIO.
 SandboxTypeToResourceIDMapping kDefaultSandboxTypeToResourceIDMapping[] = {
     {SANDBOX_TYPE_NO_SANDBOX, nullptr},
     {SANDBOX_TYPE_RENDERER, kSeatbeltPolicyString_renderer},
@@ -73,6 +74,7 @@ SandboxTypeToResourceIDMapping kDefaultSandboxTypeToResourceIDMapping[] = {
     {SANDBOX_TYPE_NACL_LOADER, kSeatbeltPolicyString_nacl_loader},
     {SANDBOX_TYPE_PDF_COMPOSITOR, kSeatbeltPolicyString_ppapi},
     {SANDBOX_TYPE_PROFILING, kSeatbeltPolicyString_utility},
+    {SANDBOX_TYPE_AUDIO, nullptr},
 };
 
 static_assert(arraysize(kDefaultSandboxTypeToResourceIDMapping) ==
@@ -165,8 +167,11 @@ void SandboxMac::Warmup(SandboxType sandbox_type) {
     CFTimeZoneCopySystem();
   }
 
-  if (sandbox_type == SANDBOX_TYPE_PPAPI) {
-    // Preload AppKit color spaces used for Flash/ppapi. http://crbug.com/348304
+  if (sandbox_type == SANDBOX_TYPE_PPAPI ||
+      sandbox_type == SANDBOX_TYPE_PDF_COMPOSITOR) {
+    // Preload AppKit color spaces used for ppapi(https://crbug.com/348304),
+    // as well as pdf compositor service likely on version 10.10 or
+    // older(https://crbug.com/822218).
     NSColor* color = [NSColor controlTextColor];
     [color colorUsingColorSpaceName:NSCalibratedRGBColorSpace];
   }

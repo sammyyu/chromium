@@ -8,18 +8,17 @@
 #include <utility>
 
 #include "base/bind.h"
-#include "base/memory/ptr_util.h"
 #include "base/observer_list.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/default_clock.h"
+#include "components/download/public/common/mock_download_item.h"
 #include "components/ntp_snippets/category.h"
 #include "components/ntp_snippets/mock_content_suggestions_provider_observer.h"
 #include "components/ntp_snippets/offline_pages/offline_pages_test_utils.h"
 #include "components/offline_pages/core/client_namespace_constants.h"
 #include "components/prefs/testing_pref_service.h"
 #include "content/public/test/fake_download_item.h"
-#include "content/public/test/mock_download_item.h"
 #include "content/public/test/mock_download_manager.h"
 #include "content/public/test/test_browser_thread_bundle.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -324,7 +323,7 @@ class DownloadSuggestionsProviderTest : public testing::Test {
     DCHECK(provider_);
     offline_pages::OfflinePageModel::DeletedPageInfo info(
         item.offline_id, item.system_download_id, item.client_id,
-        item.request_origin);
+        item.request_origin, item.url);
     provider_->OfflinePageDeleted(info);
   }
 

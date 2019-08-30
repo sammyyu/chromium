@@ -8,8 +8,6 @@
 #include <memory>
 #include <string>
 
-#include "base/callback.h"
-#include "base/files/file_path.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/string16.h"
@@ -17,7 +15,8 @@
 #include "ui/shell_dialogs/select_file_dialog.h"
 
 namespace base {
-class RefCountedBytes;
+class FilePath;
+class RefCountedMemory;
 }
 
 namespace content {
@@ -56,7 +55,7 @@ class PdfPrinterHandler : public PrinterHandler,
                   const base::string16& job_title,
                   const std::string& ticket_json,
                   const gfx::Size& page_size,
-                  const scoped_refptr<base::RefCountedBytes>& print_data,
+                  const scoped_refptr<base::RefCountedMemory>& print_data,
                   PrintCallback callback) override;
 
   // SelectFileDialog::Listener implementation.
@@ -108,7 +107,7 @@ class PdfPrinterHandler : public PrinterHandler,
   base::Closure pdf_file_saved_closure_;
 
   // The data to print
-  scoped_refptr<base::RefCountedBytes> print_data_;
+  scoped_refptr<base::RefCountedMemory> print_data_;
 
   // The callback to call when complete.
   PrintCallback print_callback_;

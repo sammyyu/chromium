@@ -11,7 +11,6 @@
 #include "base/callback.h"
 #include "base/files/file_util.h"
 #include "base/logging.h"  // For CHECK macros.
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/string_util.h"
 #include "base/synchronization/lock.h"
@@ -94,14 +93,10 @@ Status EvaluateScriptAndIgnoreResult(Session* session, std::string expression) {
 InitSessionParams::InitSessionParams(
     scoped_refptr<URLRequestContextGetter> context_getter,
     const SyncWebSocketFactory& socket_factory,
-    DeviceManager* device_manager,
-    PortServer* port_server,
-    PortManager* port_manager)
+    DeviceManager* device_manager)
     : context_getter(context_getter),
       socket_factory(socket_factory),
-      device_manager(device_manager),
-      port_server(port_server),
-      port_manager(port_manager) {}
+      device_manager(device_manager) {}
 
 InitSessionParams::InitSessionParams(const InitSessionParams& other) = default;
 
@@ -117,6 +112,9 @@ std::unique_ptr<base::DictionaryValue> CreateCapabilities(
   caps->SetString("version",
                   session->chrome->GetBrowserInfo()->browser_version);
   caps->SetString("chrome.chromedriverVersion", kChromeDriverVersion);
+  caps->SetString(
+      "goog:chromeOptions.debuggerAddress",
+      session->chrome->GetBrowserInfo()->debugger_address.ToString());
   caps->SetString("platform", session->chrome->GetOperatingSystemName());
   caps->SetString("pageLoadStrategy", session->chrome->page_load_strategy());
   caps->SetBoolean("javascriptEnabled", true);
@@ -269,7 +267,6 @@ Status InitSessionHelper(const InitSessionParams& bound_params,
   status =
       LaunchChrome(bound_params.context_getter.get(),
                    bound_params.socket_factory, bound_params.device_manager,
-                   bound_params.port_server, bound_params.port_manager,
                    capabilities, std::move(devtools_event_listeners),
                    &session->chrome, session->w3c_compliant);
   if (status.IsError())
@@ -420,11 +417,10 @@ Status ExecuteClose(Session* session,
   if (status.IsError())
     return status;
 
-  status = session->chrome->GetWebViewIds(&web_view_ids,
-                                          session->w3c_compliant);
+  status = ExecuteGetWindowHandles(session, base::DictionaryValue(), value);
   if ((status.code() == kChromeNotReachable && is_last_web_view) ||
-      (status.IsOk() && web_view_ids.empty())) {
-    // If no window is open, close is the equivalent of calling "quit".
+      (status.IsOk() && (*value)->GetList().empty())) {
+    // If the only open window was closed, close is the same as calling "quit".
     session->quit = true;
     return session->chrome->Quit();
   }
@@ -757,34 +753,21 @@ Status ExecuteSetNetworkConnection(Session* session,
   return Status(kOk);
 }
 
+// TODO(johnchen): There is no public method in Chrome or ChromeDesktopImpl to
+// get both size and position in one call. What we're doing now is kind of
+// wasteful, since both GetWindowPosition and GetWindowSize end up getting both
+// position and size, and then discard one of the two pieces.
 Status ExecuteGetWindowRect(Session* session,
                             const base::DictionaryValue& params,
                             std::unique_ptr<base::Value>* value) {
-  ChromeDesktopImpl* desktop = NULL;
-  Status status = session->chrome->GetAsDesktop(&desktop);
-  if (status.IsError())
-    return status;
-
   int x, y;
   int width, height;
 
-  if (desktop->GetBrowserInfo()->build_no >= kBrowserWindowDevtoolsBuildNo) {
-    status = desktop->GetWindowPosition(session->window, &x, &y);
-    if (status.IsError())
-      return status;
-    status = desktop->GetWindowSize(session->window, &width, &height);
-  } else {
-    AutomationExtension* extension = NULL;
-    status =
-        desktop->GetAutomationExtension(&extension, session->w3c_compliant);
-    if (status.IsError())
-      return status;
+  Status status = session->chrome->GetWindowPosition(session->window, &x, &y);
+  if (status.IsError())
+    return status;
+  status = session->chrome->GetWindowSize(session->window, &width, &height);
 
-    status = extension->GetWindowPosition(&x, &y);
-    if (status.IsError())
-      return status;
-    status = extension->GetWindowSize(&width, &height);
-  }
   if (status.IsError())
     return status;
 
@@ -800,24 +783,9 @@ Status ExecuteGetWindowRect(Session* session,
 Status ExecuteGetWindowPosition(Session* session,
                                 const base::DictionaryValue& params,
                                 std::unique_ptr<base::Value>* value) {
-  ChromeDesktopImpl* desktop = NULL;
-  Status status = session->chrome->GetAsDesktop(&desktop);
-  if (status.IsError())
-    return status;
-
   int x, y;
+  Status status = session->chrome->GetWindowPosition(session->window, &x, &y);
 
-  if (desktop->GetBrowserInfo()->build_no >= kBrowserWindowDevtoolsBuildNo) {
-    status = desktop->GetWindowPosition(session->window, &x, &y);
-  } else {
-    AutomationExtension* extension = NULL;
-    status =
-        desktop->GetAutomationExtension(&extension, session->w3c_compliant);
-    if (status.IsError())
-      return status;
-
-    status = extension->GetWindowPosition(&x, &y);
-  }
   if (status.IsError())
     return status;
 
@@ -857,24 +825,10 @@ Status ExecuteSetWindowPosition(Session* session,
 Status ExecuteGetWindowSize(Session* session,
                             const base::DictionaryValue& params,
                             std::unique_ptr<base::Value>* value) {
-  ChromeDesktopImpl* desktop = NULL;
-  Status status = session->chrome->GetAsDesktop(&desktop);
-  if (status.IsError())
-    return status;
-
   int width, height;
 
-  if (desktop->GetBrowserInfo()->build_no >= kBrowserWindowDevtoolsBuildNo) {
-    status = desktop->GetWindowSize(session->window, &width, &height);
-  } else {
-    AutomationExtension* extension = NULL;
-    status =
-        desktop->GetAutomationExtension(&extension, session->w3c_compliant);
-    if (status.IsError())
-      return status;
-
-    status = extension->GetWindowSize(&width, &height);
-  }
+  Status status =
+      session->chrome->GetWindowSize(session->window, &width, &height);
   if (status.IsError())
     return status;
 
@@ -964,6 +918,22 @@ Status ExecuteMaximizeWindow(Session* session,
     return status;
 
   return extension->MaximizeWindow();
+}
+
+Status ExecuteMinimizeWindow(Session* session,
+                             const base::DictionaryValue& params,
+                             std::unique_ptr<base::Value>* value) {
+  ChromeDesktopImpl* desktop = NULL;
+  Status status = session->chrome->GetAsDesktop(&desktop);
+  if (status.IsError())
+    return status;
+
+  status = desktop->MinimizeWindow(session->window);
+  if (status.IsError())
+    return status;
+
+  ExecuteGetWindowRect(session, params, value);
+  return Status(kOk);
 }
 
 Status ExecuteFullScreenWindow(Session* session,

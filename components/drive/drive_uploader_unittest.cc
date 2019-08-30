@@ -15,7 +15,6 @@
 
 #include "base/bind.h"
 #include "base/files/scoped_temp_dir.h"
-#include "base/memory/ptr_util.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -74,7 +73,7 @@ CancelCallback SendMultipartUploadResult(
   // MultipartUploadXXXFile is an asynchronous function, so don't callback
   // directly.
   std::unique_ptr<FileResource> entry;
-  entry.reset(new FileResource);
+  entry = std::make_unique<FileResource>();
   entry->set_md5_checksum(kTestDummyMd5);
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::BindOnce(callback, response_code, std::move(entry)));
@@ -220,7 +219,7 @@ class MockDriveServiceWithUploadExpectation : public DummyDriveService {
           HTTP_CREATED : HTTP_SUCCESS;
       response = UploadRangeResponse(response_code, -1, -1);
 
-      entry.reset(new FileResource);
+      entry = std::make_unique<FileResource>();
       entry->set_md5_checksum(kTestDummyMd5);
     } else {
       response = UploadRangeResponse(

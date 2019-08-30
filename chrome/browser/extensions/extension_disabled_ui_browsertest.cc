@@ -44,16 +44,17 @@ using extensions::ExtensionRegistry;
 using extensions::ExtensionPrefs;
 using extensions::ExtensionSyncData;
 
-class ExtensionDisabledGlobalErrorTest : public ExtensionBrowserTest {
+class ExtensionDisabledGlobalErrorTest
+    : public extensions::ExtensionBrowserTest {
  protected:
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ExtensionBrowserTest::SetUpCommandLine(command_line);
+    extensions::ExtensionBrowserTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII(switches::kAppsGalleryUpdateURL,
                                     "http://localhost/autoupdate/updates.xml");
   }
 
   void SetUpOnMainThread() override {
-    ExtensionBrowserTest::SetUpOnMainThread();
+    extensions::ExtensionBrowserTest::SetUpOnMainThread();
     EXPECT_TRUE(scoped_temp_dir_.CreateUniqueTempDir());
     service_ = extensions::ExtensionSystem::Get(profile())->extension_service();
     registry_ = ExtensionRegistry::Get(profile());
@@ -118,7 +119,7 @@ class ExtensionDisabledGlobalErrorTest : public ExtensionBrowserTest {
     return extension;
   }
 
-  ExtensionService* service_;
+  extensions::ExtensionService* service_;
   ExtensionRegistry* registry_;
   base::ScopedTempDir scoped_temp_dir_;
   base::FilePath path_v1_;

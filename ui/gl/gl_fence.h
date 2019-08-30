@@ -8,7 +8,6 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "ui/gfx/gpu_fence.h"
 #include "ui/gl/gl_export.h"
 
@@ -20,7 +19,7 @@ class GL_EXPORT GLFence {
   virtual ~GLFence();
 
   static bool IsSupported();
-  static GLFence* Create();
+  static std::unique_ptr<GLFence> Create();
 
   // GpuFenceHandle integration.
   static bool IsGpuFenceSupported();

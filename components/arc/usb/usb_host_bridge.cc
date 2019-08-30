@@ -19,8 +19,7 @@
 #include "device/usb/mojo/type_converters.h"
 #include "device/usb/usb_device_handle.h"
 #include "device/usb/usb_device_linux.h"
-#include "mojo/edk/embedder/embedder.h"
-#include "mojo/edk/embedder/scoped_platform_handle.h"
+#include "mojo/public/cpp/system/platform_handle.h"
 
 namespace arc {
 namespace {
@@ -51,18 +50,14 @@ void OnDeviceOpened(mojom::UsbHostHost::OpenDeviceCallback callback,
     std::move(callback).Run(mojo::ScopedHandle());
     return;
   }
-  mojo::edk::ScopedPlatformHandle platform_handle{
-      mojo::edk::PlatformHandle(fd.release())};
-  MojoHandle wrapped_handle;
-  MojoResult wrap_result = mojo::edk::CreatePlatformHandleWrapper(
-      std::move(platform_handle), &wrapped_handle);
-  if (wrap_result != MOJO_RESULT_OK) {
-    LOG(ERROR) << "Failed to wrap device FD. Closing: " << wrap_result;
+  mojo::ScopedHandle wrapped_handle =
+      mojo::WrapPlatformHandle(mojo::PlatformHandle(std::move(fd)));
+  if (!wrapped_handle.is_valid()) {
+    LOG(ERROR) << "Failed to wrap device FD. Closing.";
     std::move(callback).Run(mojo::ScopedHandle());
     return;
   }
-  mojo::ScopedHandle scoped_handle{mojo::Handle(wrapped_handle)};
-  std::move(callback).Run(std::move(scoped_handle));
+  std::move(callback).Run(std::move(wrapped_handle));
 }
 
 void OnDeviceOpenError(mojom::UsbHostHost::OpenDeviceCallback callback,
@@ -118,16 +113,21 @@ void ArcUsbHostBridge::RequestPermission(const std::string& guid,
                                          const std::string& package,
                                          bool interactive,
                                          RequestPermissionCallback callback) {
+  if (guid.empty()) {
+    HandleScanDeviceListRequest(package, std::move(callback));
+    return;
+  }
+
   VLOG(2) << "USB RequestPermission " << guid << " package " << package;
   // Permission already requested.
-  if (HasPermissionForDevice(guid)) {
+  if (HasPermissionForDevice(guid, package)) {
     std::move(callback).Run(true);
     return;
   }
 
   // The other side was just checking, fail without asking the user.
   if (!interactive) {
-    std::move(callback).Run(false);
+    std::move(callback).Run(HasPermissionForDevice(guid, package));
     return;
   }
 
@@ -136,8 +136,9 @@ void ArcUsbHostBridge::RequestPermission(const std::string& guid,
 }
 
 void ArcUsbHostBridge::OpenDevice(const std::string& guid,
+                                  const base::Optional<std::string>& package,
                                   OpenDeviceCallback callback) {
-  if (!usb_service_) {
+  if (!usb_service_ || !package) {
     std::move(callback).Run(mojo::ScopedHandle());
     return;
   }
@@ -150,7 +151,7 @@ void ArcUsbHostBridge::OpenDevice(const std::string& guid,
   }
 
   // The RequestPermission was never done, abort.
-  if (!HasPermissionForDevice(guid)) {
+  if (!HasPermissionForDevice(guid, package.value())) {
     std::move(callback).Run(mojo::ScopedHandle());
     return;
   }
@@ -209,9 +210,6 @@ void ArcUsbHostBridge::OnDeviceAdded(scoped_refptr<device::UsbDevice> device) {
 
 void ArcUsbHostBridge::OnDeviceRemoved(
     scoped_refptr<device::UsbDevice> device) {
-  if (ui_delegate_)
-    ui_delegate_->DeviceRemoved(device.get()->guid());
-
   mojom::UsbHostInstance* usb_host_instance = ARC_GET_INSTANCE_FOR_METHOD(
       arc_bridge_service_->usb_host(), OnDeviceAdded);
 
@@ -220,7 +218,11 @@ void ArcUsbHostBridge::OnDeviceRemoved(
     return;
   }
 
-  usb_host_instance->OnDeviceRemoved(device.get()->guid());
+  usb_host_instance->OnDeviceRemoved(device.get()->guid(),
+                                     GetEventReceiverPackages(device));
+
+  if (ui_delegate_)
+    ui_delegate_->DeviceRemoved(device.get()->guid());
 }
 
 // Notifies the observer that the UsbService it depends on is shutting down.
@@ -252,6 +254,23 @@ void ArcUsbHostBridge::SetUiDelegate(ArcUsbHostUiDelegate* ui_delegate) {
   ui_delegate_ = ui_delegate;
 }
 
+std::vector<std::string> ArcUsbHostBridge::GetEventReceiverPackages(
+    scoped_refptr<device::UsbDevice> device) {
+  if (!device) {
+    LOG(WARNING) << "Unknown USB device.";
+    return std::vector<std::string>();
+  }
+
+  if (!ui_delegate_)
+    return std::vector<std::string>();
+
+  std::unordered_set<std::string> receivers = ui_delegate_->GetEventPackageList(
+      device->guid(), device->serial_number(), device->vendor_id(),
+      device->product_id());
+
+  return std::vector<std::string>(receivers.begin(), receivers.end());
+}
+
 void ArcUsbHostBridge::OnDeviceChecked(const std::string& guid, bool allowed) {
   if (!base::FeatureList::IsEnabled(arc::kUsbHostFeature)) {
     VLOG(1) << "AndroidUSBHost: feature is disabled; ignoring";
@@ -264,10 +283,11 @@ void ArcUsbHostBridge::OnDeviceChecked(const std::string& guid, bool allowed) {
   mojom::UsbHostInstance* usb_host_instance = ARC_GET_INSTANCE_FOR_METHOD(
       arc_bridge_service_->usb_host(), OnDeviceAdded);
 
-  if (!usb_host_instance)
+  if (!usb_host_instance || !usb_service_)
     return;
 
-  usb_host_instance->OnDeviceAdded(guid);
+  usb_host_instance->OnDeviceAdded(
+      guid, GetEventReceiverPackages(usb_service_->GetDevice(guid)));
 }
 
 void ArcUsbHostBridge::DoRequestUserAuthorization(
@@ -297,10 +317,37 @@ void ArcUsbHostBridge::DoRequestUserAuthorization(
       std::move(callback));
 }
 
-bool ArcUsbHostBridge::HasPermissionForDevice(const std::string& guid) {
-  // TODO(lgcheng): implement permission settings
-  // fail close for now
-  return false;
+bool ArcUsbHostBridge::HasPermissionForDevice(const std::string& guid,
+                                              const std::string& package) {
+  if (!ui_delegate_)
+    return false;
+
+  if (!usb_service_)
+    return false;
+
+  scoped_refptr<device::UsbDevice> device = usb_service_->GetDevice(guid);
+  if (!device.get()) {
+    LOG(WARNING) << "Unknown USB device " << guid;
+    return false;
+  }
+
+  return ui_delegate_->HasUsbAccessPermission(
+      package, guid, device->serial_number(), device->vendor_id(),
+      device->product_id());
+}
+
+void ArcUsbHostBridge::HandleScanDeviceListRequest(
+    const std::string& package,
+    RequestPermissionCallback callback) {
+  if (!ui_delegate_) {
+    std::move(callback).Run(false);
+    return;
+  }
+
+  VLOG(2) << "USB Request USB scan devicelist permission "
+          << "package: " << package;
+  ui_delegate_->RequestUsbScanDeviceListPermission(package,
+                                                   std::move(callback));
 }
 
 }  // namespace arc

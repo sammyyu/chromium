@@ -20,12 +20,7 @@
         {
           "object": "LayoutBlockFlow (positioned) UL id='submenu'",
           "rect": [48, 94, 40, 20],
-          "reason": "disappeared"
-        },
-        {
-          "object": "LayoutBlockFlow (positioned) UL id='submenu'",
-          "rect": [70, 94, 7, 19],
-          "reason": "disappeared"
+          "reason": "chunk disappeared"
         }
       ]
     },
@@ -60,14 +55,6 @@
     },
     {
       "object": "LayoutBlockFlow (positioned) UL id='submenu'",
-      "reason": "geometry"
-    },
-    {
-      "object": "LayoutListItem LI",
-      "reason": "geometry"
-    },
-    {
-      "object": "RootInlineBox",
       "reason": "geometry"
     },
     {

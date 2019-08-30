@@ -4,8 +4,8 @@
 
 #include "extensions/browser/api/sockets_tcp/sockets_tcp_api.h"
 
-#include "base/memory/ptr_util.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/common/socket_permission_request.h"
 #include "extensions/browser/api/socket/tcp_socket.h"
@@ -344,7 +344,8 @@ bool SocketsTcpSendFunction::Prepare() {
   params_ = sockets_tcp::Send::Params::Create(*args_);
   EXTENSION_FUNCTION_VALIDATE(params_.get());
   io_buffer_size_ = params_->data.size();
-  io_buffer_ = new net::WrappedIOBuffer(params_->data.data());
+  io_buffer_ = new net::WrappedIOBuffer(
+      reinterpret_cast<const char*>(params_->data.data()));
   return true;
 }
 

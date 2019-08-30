@@ -13,7 +13,6 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -187,7 +186,7 @@ ShellDevToolsManagerDelegate::CreateNewTarget(const GURL& url) {
                                         url,
                                         nullptr,
                                         gfx::Size());
-  if (switches::IsRunLayoutTestSwitchPresent())
+  if (switches::IsRunWebTestsSwitchPresent())
     SecondaryTestWindowObserver::CreateForWebContents(shell->web_contents());
   return DevToolsAgentHost::GetOrCreateFor(shell->web_contents());
 }

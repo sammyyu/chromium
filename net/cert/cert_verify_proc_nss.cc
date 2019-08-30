@@ -19,6 +19,7 @@
 #include "base/macros.h"
 #include "base/memory/protected_memory.h"
 #include "base/memory/protected_memory_cfi.h"
+#include "base/stl_util.h"
 #include "build/build_config.h"
 #include "crypto/nss_util.h"
 #include "crypto/scoped_nss_types.h"
@@ -34,6 +35,7 @@
 #include "net/cert/known_roots_nss.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util_nss.h"
+#include "net/cert_net/nss_ocsp.h"
 
 #include <dlfcn.h>
 
@@ -383,10 +385,10 @@ SECStatus CheckChainRevocationWithCRLSet(void* is_chain_valid_arg,
 }
 
 // Forward declarations.
-SECStatus RetryPKIXVerifyCertWithWorkarounds(
-    CERTCertificate* cert_handle, int num_policy_oids,
-    bool cert_io_enabled, std::vector<CERTValInParam>* cvin,
-    CERTValOutParam* cvout);
+SECStatus RetryPKIXVerifyCertWithWorkarounds(CERTCertificate* cert_handle,
+                                             int num_policy_oids,
+                                             std::vector<CERTValInParam>* cvin,
+                                             CERTValOutParam* cvout);
 SECOidTag GetFirstCertPolicy(CERTCertificate* cert_handle);
 
 // Call CERT_PKIXVerifyCert for the cert_handle.
@@ -405,7 +407,6 @@ SECOidTag GetFirstCertPolicy(CERTCertificate* cert_handle);
 SECStatus PKIXVerifyCert(CERTCertificate* cert_handle,
                          bool check_revocation,
                          bool hard_fail,
-                         bool cert_io_enabled,
                          const SECOidTag* policy_oids,
                          int num_policy_oids,
                          CERTCertList* additional_trust_anchors,
@@ -461,19 +462,19 @@ SECStatus PKIXVerifyCert(CERTCertificate* cert_handle,
 
   CERTRevocationFlags revocation_flags;
   revocation_flags.leafTests.number_of_defined_methods =
-      arraysize(method_flags);
+      base::size(method_flags);
   revocation_flags.leafTests.cert_rev_flags_per_method = method_flags;
   revocation_flags.leafTests.number_of_preferred_methods =
-      arraysize(preferred_revocation_methods);
+      base::size(preferred_revocation_methods);
   revocation_flags.leafTests.preferred_methods = preferred_revocation_methods;
   revocation_flags.leafTests.cert_rev_method_independent_flags =
       revocation_method_independent_flags;
 
   revocation_flags.chainTests.number_of_defined_methods =
-      arraysize(method_flags);
+      base::size(method_flags);
   revocation_flags.chainTests.cert_rev_flags_per_method = method_flags;
   revocation_flags.chainTests.number_of_preferred_methods =
-      arraysize(preferred_revocation_methods);
+      base::size(preferred_revocation_methods);
   revocation_flags.chainTests.preferred_methods = preferred_revocation_methods;
   revocation_flags.chainTests.cert_rev_method_independent_flags =
       revocation_method_independent_flags;
@@ -510,8 +511,8 @@ SECStatus PKIXVerifyCert(CERTCertificate* cert_handle,
   SECStatus rv = CERT_PKIXVerifyCert(cert_handle, certificateUsageSSLServer,
                                      &cvin[0], cvout, NULL);
   if (rv != SECSuccess) {
-    rv = RetryPKIXVerifyCertWithWorkarounds(cert_handle, num_policy_oids,
-                                            cert_io_enabled, &cvin, cvout);
+    rv = RetryPKIXVerifyCertWithWorkarounds(cert_handle, num_policy_oids, &cvin,
+                                            cvout);
   }
   return rv;
 }
@@ -519,10 +520,10 @@ SECStatus PKIXVerifyCert(CERTCertificate* cert_handle,
 // PKIXVerifyCert calls this function to work around some bugs in
 // CERT_PKIXVerifyCert.  All the arguments of this function are either the
 // arguments or local variables of PKIXVerifyCert.
-SECStatus RetryPKIXVerifyCertWithWorkarounds(
-    CERTCertificate* cert_handle, int num_policy_oids,
-    bool cert_io_enabled, std::vector<CERTValInParam>* cvin,
-    CERTValOutParam* cvout) {
+SECStatus RetryPKIXVerifyCertWithWorkarounds(CERTCertificate* cert_handle,
+                                             int num_policy_oids,
+                                             std::vector<CERTValInParam>* cvin,
+                                             CERTValOutParam* cvout) {
   // We call this function when the first CERT_PKIXVerifyCert call in
   // PKIXVerifyCert failed,  so we initialize |rv| to SECFailure.
   SECStatus rv = SECFailure;
@@ -538,8 +539,7 @@ SECStatus RetryPKIXVerifyCertWithWorkarounds(
   // missing intermediate CA certificate, and  fail with the
   // SEC_ERROR_BAD_SIGNATURE error (NSS bug 524013), so we also retry with
   // cert_pi_useAIACertFetch on SEC_ERROR_BAD_SIGNATURE.
-  if (cert_io_enabled &&
-      (nss_error == SEC_ERROR_UNKNOWN_ISSUER ||
+  if ((nss_error == SEC_ERROR_UNKNOWN_ISSUER ||
        nss_error == SEC_ERROR_BAD_SIGNATURE)) {
     DCHECK_EQ(cvin->back().type,  cert_pi_end);
     cvin->pop_back();
@@ -755,7 +755,6 @@ bool VerifyEV(CERTCertificate* cert_handle,
       cert_handle,
       rev_checking_enabled,
       true, /* hard fail is implied in EV. */
-      flags & CertVerifier::VERIFY_CERT_IO_ENABLED,
       &ev_policy_oid,
       1,
       additional_trust_anchors,
@@ -815,10 +814,6 @@ bool CertVerifyProcNSS::SupportsAdditionalTrustAnchors() const {
   return true;
 }
 
-bool CertVerifyProcNSS::SupportsOCSPStapling() const {
-  return *ResolveCacheOCSPResponse() != nullptr;
-}
-
 int CertVerifyProcNSS::VerifyInternalImpl(
     X509Certificate* cert,
     const std::string& hostname,
@@ -828,6 +823,9 @@ int CertVerifyProcNSS::VerifyInternalImpl(
     const CertificateList& additional_trust_anchors,
     CERTChainVerifyCallback* chain_verify_callback,
     CertVerifyResult* verify_result) {
+  crypto::EnsureNSSInit();
+  EnsureNSSHttpIOInit();
+
   // Convert the whole input chain into NSS certificates. Even though only the
   // target cert is explicitly referred to in this function, creating NSS
   // certificates for the intermediates is required for PKIXVerifyCert to find
@@ -841,7 +839,7 @@ int CertVerifyProcNSS::VerifyInternalImpl(
   }
   CERTCertificate* cert_handle = input_chain[0].get();
 
-  if (!ocsp_response.empty() && SupportsOCSPStapling()) {
+  if (!ocsp_response.empty() && *ResolveCacheOCSPResponse() != nullptr) {
     // Note: NSS uses a thread-safe global hash table, so this call will
     // affect any concurrent verification operations on |cert| or copies of
     // the same certificate. This is an unavoidable limitation of NSS's OCSP
@@ -893,11 +891,8 @@ int CertVerifyProcNSS::VerifyInternalImpl(
   EVRootCAMetadata* metadata = EVRootCAMetadata::GetInstance();
   SECOidTag ev_policy_oid = SEC_OID_UNKNOWN;
   bool is_ev_candidate =
-      (flags & CertVerifier::VERIFY_EV_CERT) &&
       IsEVCandidate(metadata, cert_handle, &ev_policy_oid);
-  bool cert_io_enabled = flags & CertVerifier::VERIFY_CERT_IO_ENABLED;
   bool check_revocation =
-      cert_io_enabled &&
       (flags & CertVerifier::VERIFY_REV_CHECKING_ENABLED);
   if (check_revocation)
     verify_result->cert_status |= CERT_STATUS_REV_CHECKING_ENABLED;
@@ -909,8 +904,8 @@ int CertVerifyProcNSS::VerifyInternalImpl(
   }
 
   SECStatus status =
-      PKIXVerifyCert(cert_handle, check_revocation, false, cert_io_enabled,
-                     NULL, 0, trust_anchors.get(), &crlset_callback, cvout);
+      PKIXVerifyCert(cert_handle, check_revocation, false, NULL, 0,
+                     trust_anchors.get(), &crlset_callback, cvout);
 
   bool known_root = false;
   HashValueVector hashes;
@@ -929,7 +924,7 @@ int CertVerifyProcNSS::VerifyInternalImpl(
     // NSS tests for that feature.
     scoped_cvout.Clear();
     verify_result->cert_status |= CERT_STATUS_REV_CHECKING_ENABLED;
-    status = PKIXVerifyCert(cert_handle, true, true, cert_io_enabled, NULL, 0,
+    status = PKIXVerifyCert(cert_handle, true, true, NULL, 0,
                             trust_anchors.get(), &crlset_callback, cvout);
     if (status == SECSuccess) {
       AppendPublicKeyHashesAndTestKnownRoot(
@@ -998,11 +993,8 @@ int CertVerifyProcNSS::VerifyInternalImpl(
   if (IsCertStatusError(verify_result->cert_status))
     return MapCertStatusToNetError(verify_result->cert_status);
 
-  if ((flags & CertVerifier::VERIFY_EV_CERT) && is_ev_candidate) {
-    check_revocation |=
-        crl_set_result != kCRLSetOk &&
-        cert_io_enabled &&
-        (flags & CertVerifier::VERIFY_REV_CHECKING_ENABLED_EV_ONLY);
+  if (is_ev_candidate) {
+    check_revocation |= crl_set_result != kCRLSetOk;
     if (check_revocation)
       verify_result->cert_status |= CERT_STATUS_REV_CHECKING_ENABLED;
 

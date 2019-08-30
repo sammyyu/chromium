@@ -27,6 +27,7 @@
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/themes/browser_theme_pack.h"
 #include "chrome/browser/themes/custom_theme_supplier.h"
+#include "chrome/browser/themes/increased_contrast_theme_supplier.h"
 #include "chrome/browser/themes/theme_properties.h"
 #include "chrome/browser/themes/theme_service_factory.h"
 #include "chrome/browser/themes/theme_syncable_service.h"
@@ -152,6 +153,10 @@ bool ThemeService::BrowserThemeProvider::ShouldUseNativeFrame() const {
 
 bool ThemeService::BrowserThemeProvider::HasCustomImage(int id) const {
   return theme_service_.HasCustomImage(id);
+}
+
+bool ThemeService::BrowserThemeProvider::HasCustomColor(int id) const {
+  return theme_service_.HasCustomColor(id);
 }
 
 base::RefCountedMemory* ThemeService::BrowserThemeProvider::GetRawData(
@@ -293,7 +298,7 @@ void ThemeService::SetTheme(const Extension* extension) {
 
 void ThemeService::RevertToTheme(const Extension* extension) {
   DCHECK(extension->is_theme());
-  ExtensionService* service =
+  extensions::ExtensionService* service =
       extensions::ExtensionSystem::Get(profile_)->extension_service();
   DCHECK(!service->IsExtensionEnabled(extension->id()));
   // |extension| is disabled when reverting to the previous theme via an
@@ -311,6 +316,9 @@ void ThemeService::UseDefaultTheme() {
     return;
   }
 #endif
+  ui::NativeTheme* native_theme = ui::NativeTheme::GetInstanceForNativeUi();
+  if (native_theme && native_theme->UsesHighContrastColors())
+    SetCustomDefaultTheme(new IncreasedContrastThemeSupplier);
   ClearAllThemeData();
   NotifyThemeChanged();
 }
@@ -358,7 +366,7 @@ void ThemeService::RemoveUnusedThemes(bool ignore_infobars) {
   if (!ignore_infobars && number_of_infobars_ != 0)
     return;
 
-  ExtensionService* service =
+  extensions::ExtensionService* service =
       extensions::ExtensionSystem::Get(profile_)->extension_service();
   if (!service)
     return;
@@ -424,17 +432,10 @@ SkColor ThemeService::GetDefaultColor(int id, bool incognito) const {
   const int kNtpText = ThemeProperties::COLOR_NTP_TEXT;
   const int kLabelBackground =
       ThemeProperties::COLOR_SUPERVISED_USER_LABEL_BACKGROUND;
-  const bool is_touch =
-      ui::MaterialDesignController::IsTouchOptimizedUiEnabled();
+  const bool is_newer_material =
+      ui::MaterialDesignController::IsNewerMaterialUi();
   switch (id) {
     case ThemeProperties::COLOR_TOOLBAR_BUTTON_ICON:
-      // Touch-optimized UI uses different colors than gfx::kChromeIconGrey.
-      // They are two specific colors in normal and incognito modes which we
-      // can't get one from the other by HSLShift().
-      // TODO: This will break custom themes. https://crbug.com/820495.
-      if (is_touch)
-        break;
-
       return color_utils::HSLShift(
           gfx::kChromeIconGrey,
           GetTint(ThemeProperties::TINT_BUTTONS, incognito));
@@ -442,7 +443,7 @@ SkColor ThemeService::GetDefaultColor(int id, bool incognito) const {
       // The active color is overridden in GtkUi.
       return SkColorSetA(
           GetColor(ThemeProperties::COLOR_TOOLBAR_BUTTON_ICON, incognito),
-          is_touch ? 0x6E : 0x33);
+          is_newer_material ? 0x6E : 0x33);
     case ThemeProperties::COLOR_LOCATION_BAR_BORDER:
       return SkColorSetA(SK_ColorBLACK, 0x4D);
     case ThemeProperties::COLOR_TOOLBAR_TOP_SEPARATOR:
@@ -467,10 +468,11 @@ SkColor ThemeService::GetDefaultColor(int id, bool incognito) const {
           0x4D);
     }
     case ThemeProperties::COLOR_BACKGROUND_TAB: {
-      // Touch optimized color design uses different tab background colors.
-      // TODO(malaykeshav) - This will break custom themes on touch optimized
-      // UI. Use tint shift instead. https://crbug.com/820495.
-      if (is_touch)
+      // Touchable hardcodes the background tab color. This can break custom
+      // themes, but touchable is replaced by touchable refresh, which doesn't
+      // use the default background tab color at all, so this issue won't be
+      // fixed.
+      if (is_newer_material)
         break;
 
       // The tints here serve a different purpose than TINT_BACKGROUND_TAB.
@@ -501,7 +503,7 @@ SkColor ThemeService::GetDefaultColor(int id, bool incognito) const {
     case ThemeProperties::COLOR_DETACHED_BOOKMARK_BAR_SEPARATOR:
       // Use a faint version of the text color as the separator color.
       return SkColorSetA(
-          GetColor(ThemeProperties::COLOR_BOOKMARK_TEXT, incognito), 0x20);
+          GetColor(ThemeProperties::COLOR_BOOKMARK_TEXT, incognito), 0x26);
     case ThemeProperties::COLOR_NTP_TEXT_LIGHT:
       return IncreaseLightness(GetColor(kNtpText, incognito), 0.40);
     case ThemeProperties::COLOR_TAB_THROBBER_SPINNING:
@@ -566,7 +568,10 @@ void ThemeService::ClearAllThemeData() {
                             weak_ptr_factory_.GetWeakPtr(), true));
 }
 
+void ThemeService::FixInconsistentPreferencesIfNeeded() {}
+
 void ThemeService::LoadThemePrefs() {
+  FixInconsistentPreferencesIfNeeded();
   PrefService* prefs = profile_->GetPrefs();
 
   std::string current_id = GetThemeID();
@@ -770,6 +775,11 @@ int ThemeService::GetDisplayProperty(int id) const {
   }
 }
 
+bool ThemeService::HasCustomColor(int id) const {
+  SkColor color;
+  return theme_supplier_ && theme_supplier_->GetColor(id, &color);
+}
+
 base::RefCountedMemory* ThemeService::GetRawData(
     int id,
     ui::ScaleFactor scale_factor) const {
@@ -827,7 +837,7 @@ void ThemeService::OnExtensionServiceReady() {
 }
 
 void ThemeService::MigrateTheme() {
-  ExtensionService* service =
+  extensions::ExtensionService* service =
       extensions::ExtensionSystem::Get(profile_)->extension_service();
   const Extension* extension =
       service ? service->GetExtensionById(GetThemeID(), false) : nullptr;
@@ -892,7 +902,7 @@ void ThemeService::OnThemeBuiltFromExtension(
     return;
   }
 
-  ExtensionService* service =
+  extensions::ExtensionService* service =
       extensions::ExtensionSystem::Get(profile_)->extension_service();
   if (!service)
     return;

@@ -14,6 +14,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/time/time.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/net_export.h"
 #include "net/http/http_auth.h"
@@ -22,7 +23,8 @@
 #include "net/socket/client_socket_pool.h"
 #include "net/socket/client_socket_pool_base.h"
 #include "net/socket/ssl_client_socket.h"
-#include "net/spdy/chromium/spdy_session.h"
+#include "net/spdy/spdy_session.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 
 namespace net {
 
@@ -42,14 +44,14 @@ class TransportSocketParams;
 // types.  The other param must be NULL.  When using an HTTP proxy,
 // |transport_params| must be set.  When using an HTTPS proxy or QUIC proxy,
 // |ssl_params| must be set. Also, if using a QUIC proxy, |quic_version| must
-// not be QUIC_VERSION_UNSUPPORTED.
+// not be quic::QUIC_VERSION_UNSUPPORTED.
 class NET_EXPORT_PRIVATE HttpProxySocketParams
     : public base::RefCounted<HttpProxySocketParams> {
  public:
   HttpProxySocketParams(
       const scoped_refptr<TransportSocketParams>& transport_params,
       const scoped_refptr<SSLSocketParams>& ssl_params,
-      QuicTransportVersion quic_version,
+      quic::QuicTransportVersion quic_version,
       const std::string& user_agent,
       const HostPortPair& endpoint,
       HttpAuthCache* http_auth_cache,
@@ -57,7 +59,8 @@ class NET_EXPORT_PRIVATE HttpProxySocketParams
       SpdySessionPool* spdy_session_pool,
       QuicStreamFactory* quic_stream_factory,
       bool is_trusted_proxy,
-      bool tunnel);
+      bool tunnel,
+      const NetworkTrafficAnnotationTag traffic_annotation);
 
   const scoped_refptr<TransportSocketParams>& transport_params() const {
     return transport_params_;
@@ -65,7 +68,7 @@ class NET_EXPORT_PRIVATE HttpProxySocketParams
   const scoped_refptr<SSLSocketParams>& ssl_params() const {
     return ssl_params_;
   }
-  QuicTransportVersion quic_version() const { return quic_version_; }
+  quic::QuicTransportVersion quic_version() const { return quic_version_; }
   const std::string& user_agent() const { return user_agent_; }
   const HostPortPair& endpoint() const { return endpoint_; }
   HttpAuthCache* http_auth_cache() const { return http_auth_cache_; }
@@ -81,6 +84,9 @@ class NET_EXPORT_PRIVATE HttpProxySocketParams
   const HostResolver::RequestInfo& destination() const;
   bool is_trusted_proxy() const { return is_trusted_proxy_; }
   bool tunnel() const { return tunnel_; }
+  const NetworkTrafficAnnotationTag traffic_annotation() const {
+    return traffic_annotation_;
+  }
 
  private:
   friend class base::RefCounted<HttpProxySocketParams>;
@@ -88,7 +94,7 @@ class NET_EXPORT_PRIVATE HttpProxySocketParams
 
   const scoped_refptr<TransportSocketParams> transport_params_;
   const scoped_refptr<SSLSocketParams> ssl_params_;
-  QuicTransportVersion quic_version_;
+  quic::QuicTransportVersion quic_version_;
   SpdySessionPool* spdy_session_pool_;
   QuicStreamFactory* quic_stream_factory_;
   const std::string user_agent_;
@@ -97,6 +103,7 @@ class NET_EXPORT_PRIVATE HttpProxySocketParams
   HttpAuthHandlerFactory* const http_auth_handler_factory_;
   const bool is_trusted_proxy_;
   const bool tunnel_;
+  const NetworkTrafficAnnotationTag traffic_annotation_;
 
   DISALLOW_COPY_AND_ASSIGN(HttpProxySocketParams);
 };
@@ -165,14 +172,13 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocketPool
                     const SocketTag& socket_tag,
                     RespectLimits respect_limits,
                     ClientSocketHandle* handle,
-                    const CompletionCallback& callback,
+                    CompletionOnceCallback callback,
                     const NetLogWithSource& net_log) override;
 
   void RequestSockets(const std::string& group_name,
                       const void* params,
                       int num_sockets,
-                      const NetLogWithSource& net_log,
-                      HttpRequestInfo::RequestMotivation motivation) override;
+                      const NetLogWithSource& net_log) override;
 
   void SetPriority(const std::string& group_name,
                    ClientSocketHandle* handle,

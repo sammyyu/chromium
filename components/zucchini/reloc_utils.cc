@@ -81,7 +81,7 @@ RelocRvaReaderWin32::RelocRvaReaderWin32(
   offset_t cur_reloc_units_offset = cur_reloc_units_.begin() - image_.begin();
   if (lo > cur_reloc_units_offset) {
     offset_t delta =
-        ceil<offset_t>(lo - cur_reloc_units_offset, kRelocUnitSize);
+        AlignCeil<offset_t>(lo - cur_reloc_units_offset, kRelocUnitSize);
     cur_reloc_units_.Skip(delta);
   }
 }
@@ -118,7 +118,10 @@ bool RelocRvaReaderWin32::LoadRelocBlock(
   const auto& header = header_buf.read<pe::RelocHeader>(0);
   rva_hi_bits_ = header.rva_hi;
   uint32_t block_size = header.size;
-  DCHECK_GE(block_size, sizeof(pe::RelocHeader));
+  if (block_size < sizeof(pe::RelocHeader))
+    return false;
+  if ((block_size - sizeof(pe::RelocHeader)) % kRelocUnitSize != 0)
+    return false;
   cur_reloc_units_ = BufferSource(block_begin, block_size);
   cur_reloc_units_.Skip(sizeof(pe::RelocHeader));
   return true;
@@ -146,15 +149,10 @@ base::Optional<Reference> RelocReaderWin32::GetNext() {
     offset_t target = entry_rva_to_offset_.Convert(unit->target_rva);
     if (target == kInvalidOffset)
       continue;
-    offset_t location = unit->location;
-    if (IsMarked(target)) {
-      LOG(WARNING) << "Warning: Skipping mark-aliased reloc target: "
-                   << AsHex<8>(location) << " -> " << AsHex<8>(target) << ".";
-      continue;
-    }
     // Ensures the target (abs32 reference) lies entirely within the image.
     if (target >= offset_bound_)
       continue;
+    offset_t location = unit->location;
     return Reference{location, target};
   }
   return base::nullopt;
@@ -184,10 +182,12 @@ void RelocWriterWin32::PutNext(Reference ref) {
   --block_it;
   rva_t rva_hi_bits = image_.read<pe::RelocHeader>(*block_it).rva_hi;
   rva_t target_rva = target_offset_to_rva_.Convert(ref.target);
-  rva_t rva_lo_bits = target_rva - rva_hi_bits;
-  DCHECK_EQ(rva_lo_bits & 0xFFF, rva_lo_bits);
-  image_.write<uint16_t>(ref.location,
-                         (rva_lo_bits & 0xFFF) | (reloc_type_ << 12));
+  rva_t rva_lo_bits = (target_rva - rva_hi_bits) & 0xFFF;
+  if (target_rva != rva_hi_bits + rva_lo_bits) {
+    LOG(ERROR) << "Invalid RVA at " << AsHex<8>(ref.location) << ".";
+    return;
+  }
+  image_.write<uint16_t>(ref.location, rva_lo_bits | (reloc_type_ << 12));
 }
 
 }  // namespace zucchini

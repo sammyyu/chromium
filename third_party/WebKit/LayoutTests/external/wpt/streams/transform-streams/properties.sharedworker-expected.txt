@@ -8,7 +8,7 @@ PASS TransformStream.prototype.writable should have standard properties
 PASS TransformStream.prototype.writable should be a getter
 PASS TransformStream.prototype should have exactly the expected properties
 PASS TransformStreamDefaultController.prototype.constructor should have standard properties
-FAIL TransformStreamDefaultController.prototype.constructor should be a constructor assert_equals: constructor should take 0 arguments expected 0 but got 1
+PASS TransformStreamDefaultController.prototype.constructor should be a constructor
 PASS TransformStreamDefaultController.prototype.desiredSize should have standard properties
 PASS TransformStreamDefaultController.prototype.desiredSize should be a getter
 PASS TransformStreamDefaultController.prototype.enqueue should have standard properties
@@ -20,12 +20,12 @@ PASS TransformStreamDefaultController.prototype.terminate should be a method
 PASS TransformStreamDefaultController.prototype should have exactly the expected properties
 PASS transformer method start should be called with the right number of arguments
 PASS transformer method start should be called even when it's located on the prototype chain
-FAIL unexpected properties should not be accessed when calling transformer method start assert_array_equals: expected properties should be got lengths differ, expected 5 got 3
+FAIL unexpected properties should not be accessed when calling transformer method start assert_array_equals: expected properties should be got property 0, expected "writableType" but got "readableType"
 PASS transformer method transform should be called with the right number of arguments
 PASS transformer method transform should be called even when it's located on the prototype chain
-FAIL unexpected properties should not be accessed when calling transformer method transform assert_array_equals: expected properties should be got lengths differ, expected 5 got 3
+FAIL unexpected properties should not be accessed when calling transformer method transform assert_array_equals: expected properties should be got property 0, expected "writableType" but got "readableType"
 PASS transformer method flush should be called with the right number of arguments
 PASS transformer method flush should be called even when it's located on the prototype chain
-FAIL unexpected properties should not be accessed when calling transformer method flush assert_array_equals: expected properties should be got lengths differ, expected 5 got 3
+FAIL unexpected properties should not be accessed when calling transformer method flush assert_array_equals: expected properties should be got property 0, expected "writableType" but got "readableType"
 Harness: the test ran to completion.
 

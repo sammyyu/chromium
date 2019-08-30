@@ -16,8 +16,8 @@
 #include "media/base/video_util.h"
 #include "media/formats/mp4/es_descriptor.h"
 #include "media/formats/mp4/rcheck.h"
-#include "media/media_features.h"
-#include "third_party/libaom/av1_features.h"
+#include "media/media_buildflags.h"
+#include "third_party/libaom/av1_buildflags.h"
 
 #if BUILDFLAG(USE_PROPRIETARY_CODECS)
 #include "media/formats/mp4/avc.h"
@@ -341,14 +341,23 @@ bool ProtectionSchemeInfo::Parse(BoxReader* reader) {
 }
 
 bool ProtectionSchemeInfo::HasSupportedScheme() const {
-  FourCC fourCC = type.type;
-  if (fourCC == FOURCC_CENC)
+  FourCC four_cc = type.type;
+  if (four_cc == FOURCC_CENC)
     return true;
 #if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
-  if (fourCC == FOURCC_CBCS)
+  if (four_cc == FOURCC_CBCS)
     return true;
 #endif
   return false;
+}
+
+bool ProtectionSchemeInfo::IsCbcsEncryptionScheme() const {
+#if BUILDFLAG(ENABLE_CBCS_ENCRYPTION_SCHEME)
+  FourCC four_cc = type.type;
+  return (four_cc == FOURCC_CBCS);
+#else
+  return false;
+#endif
 }
 
 MovieHeader::MovieHeader()
@@ -386,7 +395,7 @@ bool MovieHeader::Parse(BoxReader* reader) {
   RCHECK(reader->Read4s(&rate) &&
          reader->Read2s(&volume) &&
          reader->SkipBytes(10) &&  // reserved
-         reader->SkipBytes(36) &&  // matrix
+         reader->ReadDisplayMatrix(display_matrix) &&
          reader->SkipBytes(24) &&  // predefined zero
          reader->Read4(&next_track_id));
   return true;
@@ -427,7 +436,7 @@ bool TrackHeader::Parse(BoxReader* reader) {
          reader->Read2s(&alternate_group) &&
          reader->Read2s(&volume) &&
          reader->SkipBytes(2) &&  // reserved
-         reader->SkipBytes(36) &&  // matrix
+         reader->ReadDisplayMatrix(display_matrix) &&
          reader->Read4(&width) &&
          reader->Read4(&height));
 
@@ -681,6 +690,92 @@ bool VPCodecConfigurationRecord::Parse(BoxReader* reader) {
   return true;
 }
 
+#if BUILDFLAG(ENABLE_AV1_DECODER)
+AV1CodecConfigurationRecord::AV1CodecConfigurationRecord()
+    : profile(VIDEO_CODEC_PROFILE_UNKNOWN) {}
+
+AV1CodecConfigurationRecord::AV1CodecConfigurationRecord(
+    const AV1CodecConfigurationRecord& other) = default;
+
+AV1CodecConfigurationRecord::~AV1CodecConfigurationRecord() = default;
+
+FourCC AV1CodecConfigurationRecord::BoxType() const {
+  return FOURCC_AV1C;
+}
+
+bool AV1CodecConfigurationRecord::Parse(BoxReader* reader) {
+  RCHECK(reader->ReadFullBoxHeader());
+
+  // Skip over unused parts of the configuration record.
+  RCHECK(reader->SkipBytes(1));
+
+  // We need to scan through the OBUs to find the profile.
+  while (profile == VIDEO_CODEC_PROFILE_UNKNOWN) {
+    // Zero or more OBUs are allowed, when none are present assume main profile.
+    if (!reader->HasBytes(1)) {
+      DVLOG(2) << "No OBU_SEQUENCE_HEADER is present, assuming main profile.";
+      profile = AV1PROFILE_PROFILE_MAIN;
+      return true;
+    }
+
+    uint8_t obu_header;
+    RCHECK(reader->Read1(&obu_header));
+
+    // Skip over the extension header if needed.
+    if (obu_header & 0b100 /* obu_extension_flag */)
+      RCHECK(reader->SkipBytes(1));
+
+    // Low overhead bitstream OBUs, when contained within configOBUs, are
+    // required to have a size field.
+    DCHECK(obu_header & 0b10 /* obu_has_size_field */);
+
+    // Read the size out in LEB128 format. Per spec this must always fit in a
+    // uint32_t, but since the max shift below is 49 (7*7), use a uint64_t to
+    // avoid any undefined behavior.
+    uint64_t obu_size = 0u;
+    for (int i = 0; i < 8; ++i) {
+      uint8_t leb128_byte;
+      RCHECK(reader->Read1(&leb128_byte));
+      obu_size |= static_cast<uint64_t>(leb128_byte & 0x7f) << (i * 7);
+      if (!(leb128_byte & 0x80))
+        break;
+    }
+    RCHECK(reader->HasBytes(obu_size));
+
+    // Clear out everything except for the obu_type.
+    const uint8_t obu_type = (obu_header >> 3) & 0b1111;
+
+    // We only want to look at OBUs of type OBU_SEQUENCE_HEADER.
+    if (obu_type != 1 /* OBU_SEQUENCE_HEADER */) {
+      RCHECK(reader->SkipBytes(obu_size));
+      continue;
+    }
+
+    // Read enough of the sequence header to parse |seq_profile|.
+    uint8_t sequence_header;
+    RCHECK(reader->Read1(&sequence_header));
+
+    const uint8_t seq_profile = sequence_header >> 5;
+    switch (seq_profile) {
+      case 0:
+        profile = AV1PROFILE_PROFILE_MAIN;
+        break;
+      case 1:
+        profile = AV1PROFILE_PROFILE_HIGH;
+        break;
+      case 2:
+        profile = AV1PROFILE_PROFILE_PRO;
+        break;
+      default:
+        MEDIA_LOG(ERROR, reader->media_log())
+            << "Unsupported AV1 profile: 0x" << std::hex << seq_profile;
+        return false;
+    }
+  }
+  return true;
+}
+#endif  // BUILDFLAG(ENABLE_AV1_DECODER)
+
 PixelAspectRatioBox::PixelAspectRatioBox() : h_spacing(1), v_spacing(1) {}
 PixelAspectRatioBox::PixelAspectRatioBox(const PixelAspectRatioBox& other) =
     default;
@@ -833,20 +928,19 @@ bool VideoSampleEntry::Parse(BoxReader* reader) {
 #if BUILDFLAG(ENABLE_AV1_DECODER)
     case FOURCC_AV01: {
       DVLOG(2) << __func__ << " reading AV1 configuration.";
-      // TODO(dalecurtis): AV1 profiles are not finalized, this needs updating
-      // to read the actual profile and configuration before enabling for
-      // release. http://crbug.com/784993
+      AV1CodecConfigurationRecord av1_config;
+      RCHECK(reader->ReadChild(&av1_config));
       frame_bitstream_converter = nullptr;
       video_codec = kCodecAV1;
-      video_codec_profile = AV1PROFILE_PROFILE0;
+      video_codec_profile = av1_config.profile;
       break;
     }
 #endif
     default:
       // Unknown/unsupported format
-      MEDIA_LOG(ERROR, reader->media_log()) << __func__
-                                            << " unsupported video format "
-                                            << FourCCToString(actual_format);
+      MEDIA_LOG(ERROR, reader->media_log())
+          << "Unsupported VisualSampleEntry type "
+          << FourCCToString(actual_format);
       return false;
   }
 
@@ -1031,10 +1125,6 @@ bool AudioSampleEntry::Parse(BoxReader* reader) {
   // Read the FLACSpecificBox, even if CENC is signalled.
   if (format == FOURCC_FLAC ||
       (format == FOURCC_ENCA && sinf.format.format == FOURCC_FLAC)) {
-    RCHECK_MEDIA_LOGGED(base::FeatureList::IsEnabled(kMseFlacInIsobmff),
-                        reader->media_log(),
-                        "MSE support for FLAC in MP4 is not enabled.");
-
     RCHECK_MEDIA_LOGGED(reader->ReadChild(&dfla), reader->media_log(),
                         "Failure parsing FLACSpecificBox (dfLa)");
 

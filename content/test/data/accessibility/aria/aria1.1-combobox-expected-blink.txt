@@ -2,13 +2,13 @@ rootWebArea
 ++genericContainer
 ++++staticText name='State'
 ++++++inlineTextBox name='State'
-++comboBoxGrouping haspopup name='State'
+++comboBoxGrouping name='State' haspopup=listbox
 ++++textField activedescendantId=listBoxOption controlsIds=listBox
 ++listBox
-++++listBoxOption selectable name='Alabama'
-++++listBoxOption selectable selected name='Alaska'
-++comboBoxGrouping haspopup name='State'
+++++listBoxOption name='Alabama' selected=false
+++++listBoxOption name='Alaska' selected=true
+++comboBoxGrouping name='State' haspopup=listbox
 ++++textField activedescendantId=listBoxOption controlsIds=listBox
 ++listBox
-++++listBoxOption selectable name='Alabama'
-++++listBoxOption selectable name='Alaska'
+++++listBoxOption name='Alabama' selected=false
+++++listBoxOption name='Alaska' selected=false

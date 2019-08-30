@@ -19,6 +19,7 @@
 #include "components/sync/model/model_type_change_processor.h"
 #include "components/sync/model/model_type_store.h"
 #include "components/sync/model/mutable_data_batch.h"
+#include "components/sync/model_impl/client_tag_based_model_type_processor.h"
 #include "components/sync/protocol/model_type_state.pb.h"
 #include "components/sync/protocol/sync.pb.h"
 
@@ -26,13 +27,14 @@ namespace chromeos {
 
 namespace {
 
+using syncer::ClientTagBasedModelTypeProcessor;
 using syncer::ConflictResolution;
 using syncer::EntityChange;
 using syncer::EntityChangeList;
 using syncer::EntityData;
+using syncer::MetadataChangeList;
 using syncer::ModelTypeChangeProcessor;
 using syncer::ModelTypeStore;
-using syncer::MetadataChangeList;
 
 std::unique_ptr<EntityData> CopyToEntityData(
     const sync_pb::PrinterSpecifics& specifics) {
@@ -71,6 +73,7 @@ class PrintersSyncBridge::StoreProxy {
     store_->CommitWriteBatch(
         std::move(batch),
         base::BindOnce(&StoreProxy::OnCommit, weak_ptr_factory_.GetWeakPtr()));
+    owner_->NotifyPrintersUpdated();
   }
 
  private:
@@ -149,9 +152,9 @@ class PrintersSyncBridge::StoreProxy {
 PrintersSyncBridge::PrintersSyncBridge(
     syncer::OnceModelTypeStoreFactory callback,
     const base::RepeatingClosure& error_callback)
-    : ModelTypeSyncBridge(base::BindRepeating(&ModelTypeChangeProcessor::Create,
-                                              error_callback),
-                          syncer::PRINTERS),
+    : ModelTypeSyncBridge(
+          std::make_unique<ClientTagBasedModelTypeProcessor>(syncer::PRINTERS,
+                                                             error_callback)),
       store_delegate_(std::make_unique<StoreProxy>(this, std::move(callback))),
       observers_(new base::ObserverListThreadSafe<Observer>()) {}
 
@@ -255,7 +258,7 @@ void PrintersSyncBridge::GetData(StorageKeyList storage_keys,
   std::move(callback).Run(std::move(batch));
 }
 
-void PrintersSyncBridge::GetAllData(DataCallback callback) {
+void PrintersSyncBridge::GetAllDataForDebugging(DataCallback callback) {
   auto batch = std::make_unique<syncer::MutableDataBatch>();
   {
     base::AutoLock lock(data_lock_);

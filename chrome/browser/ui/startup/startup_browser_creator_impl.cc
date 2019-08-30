@@ -22,7 +22,7 @@
 #include "base/strings/string_util.h"
 #include "base/task_scheduler/post_task.h"
 #include "build/build_config.h"
-#include "chrome/browser/apps/install_chrome_app.h"
+#include "chrome/browser/apps/platform_apps/install_chrome_app.h"
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry.h"
 #include "chrome/browser/custom_handlers/protocol_handler_registry_factory.h"
@@ -36,7 +36,6 @@
 #include "chrome/browser/profiles/profile_io_data.h"
 #include "chrome/browser/sessions/session_service.h"
 #include "chrome/browser/sessions/session_service_factory.h"
-#include "chrome/browser/ui/app_list/app_list_service.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_list.h"
@@ -72,7 +71,7 @@
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_set.h"
 #include "google_apis/google_api_keys.h"
-#include "rlz/features/features.h"
+#include "rlz/buildflags/buildflags.h"
 #include "ui/base/ui_features.h"
 
 #if defined(OS_MACOSX)
@@ -88,9 +87,9 @@
 
 #if defined(OS_WIN)
 #include "base/win/windows_version.h"
-#include "chrome/browser/apps/app_launch_for_metro_restart_win.h"
+#include "chrome/browser/apps/platform_apps/app_launch_for_metro_restart_win.h"
 #if defined(GOOGLE_CHROME_BUILD)
-#include "chrome/browser/conflicts/problematic_programs_updater_win.h"
+#include "chrome/browser/conflicts/incompatible_applications_updater_win.h"
 #endif  // defined(GOOGLE_CHROME_BUILD)
 #include "chrome/browser/notifications/notification_platform_bridge_win.h"
 #include "chrome/browser/search_engines/template_url_service_factory.h"
@@ -374,8 +373,18 @@ bool StartupBrowserCreatorImpl::Launch(Profile* profile,
   DCHECK(profile);
   profile_ = profile;
 
-  if (AppListService::HandleLaunchCommandLine(command_line_, profile))
-    return true;
+#if defined(OS_WIN)
+  // If the command line has the kNotificationLaunchId switch, then this
+  // Launch() call is from notification_helper.exe to process toast activation.
+  // Delegate to the notification system; do not open a browser window here.
+  if (command_line_.HasSwitch(switches::kNotificationLaunchId)) {
+    if (NotificationPlatformBridgeWin::HandleActivation(command_line_)) {
+      RecordLaunchModeHistogram(LM_WIN_PLATFORM_NOTIFICATION);
+      return true;
+    }
+    return false;
+  }
+#endif  // defined(OS_WIN)
 
   if (command_line_.HasSwitch(switches::kAppId)) {
     std::string app_id = command_line_.GetSwitchValueASCII(switches::kAppId);
@@ -393,19 +402,6 @@ bool StartupBrowserCreatorImpl::Launch(Profile* profile,
       return true;
     }
   }
-
-#if defined(OS_WIN)
-  // If the command line has the kNotificationLaunchId switch, then this
-  // Launch() call is from notification_helper.exe to process toast activation.
-  // Delegate to the notification system; do not open a browser window here.
-  if (command_line_.HasSwitch(switches::kNotificationLaunchId)) {
-    if (NotificationPlatformBridgeWin::HandleActivation()) {
-      RecordLaunchModeHistogram(LM_WIN_PLATFORM_NOTIFICATION);
-      return true;
-    }
-    return false;
-  }
-#endif  // defined(OS_WIN)
 
   // Open the required browser windows and tabs. First, see if
   // we're being run as an application window. If so, the user
@@ -683,19 +679,35 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
     // Check if there are any incompatible applications cached from the last
     // Chrome run.
     has_incompatible_applications =
-        ProblematicProgramsUpdater::HasCachedPrograms();
+        IncompatibleApplicationsUpdater::IsWarningEnabled() &&
+        IncompatibleApplicationsUpdater::HasCachedApplications();
   }
 #endif
-  const auto session_startup_pref =
-      StartupBrowserCreator::GetSessionStartupPref(command_line_, profile_);
-  // Both mandatory and recommended startup policies should skip promo pages.
-  bool are_startup_urls_managed =
-      session_startup_pref.TypeIsManaged(profile_->GetPrefs()) ||
-      session_startup_pref.TypeIsRecommended(profile_->GetPrefs());
+
+  // Presentation of promotional and/or educational tabs may be controlled via
+  // administrative policy.
+  bool promotional_tabs_enabled = true;
+  const PrefService::Preference* enabled_pref = nullptr;
+#if !defined(OS_CHROMEOS)
+  PrefService* local_state = g_browser_process->local_state();
+  if (local_state)
+    enabled_pref = local_state->FindPreference(prefs::kPromotionalTabsEnabled);
+#endif  // !defined(OS_CHROMEOS)
+  if (enabled_pref && enabled_pref->IsManaged()) {
+    // Presentation is managed; obey the policy setting.
+    promotional_tabs_enabled = enabled_pref->GetValue()->GetBool();
+  } else {
+    // Presentation is not managed. Infer an intent to disable if any value for
+    // the RestoreOnStartup policy is mandatory or recommended.
+    promotional_tabs_enabled =
+        !SessionStartupPref::TypeIsManaged(profile_->GetPrefs()) &&
+        !SessionStartupPref::TypeHasRecommendedValue(profile_->GetPrefs());
+  }
+
   StartupTabs tabs = DetermineStartupTabs(
       StartupTabProviderImpl(), cmd_line_tabs, process_startup,
       is_incognito_or_guest, is_post_crash_launch,
-      has_incompatible_applications, are_startup_urls_managed);
+      has_incompatible_applications, promotional_tabs_enabled);
 
   // Return immediately if we start an async restore, since the remainder of
   // that process is self-contained.
@@ -712,8 +724,9 @@ void StartupBrowserCreatorImpl::DetermineURLsAndLaunch(
   if (!cmd_line_tabs.empty())
     behavior_options |= HAS_CMD_LINE_TABS;
 
-  BrowserOpenBehavior behavior =
-      DetermineBrowserOpenBehavior(session_startup_pref, behavior_options);
+  BrowserOpenBehavior behavior = DetermineBrowserOpenBehavior(
+      StartupBrowserCreator::GetSessionStartupPref(command_line_, profile_),
+      behavior_options);
 
   SessionRestore::BehaviorBitmask restore_options = 0;
   if (behavior == BrowserOpenBehavior::SYNCHRONOUS_RESTORE) {
@@ -745,7 +758,7 @@ StartupTabs StartupBrowserCreatorImpl::DetermineStartupTabs(
     bool is_incognito_or_guest,
     bool is_post_crash_launch,
     bool has_incompatible_applications,
-    bool are_startup_urls_managed) {
+    bool promotional_tabs_enabled) {
   // Only the New Tab Page or command line URLs may be shown in incognito mode.
   // A similar policy exists for crash recovery launches, to prevent getting the
   // user stuck in a crash loop.
@@ -782,8 +795,7 @@ StartupTabs StartupBrowserCreatorImpl::DetermineStartupTabs(
     return distribution_tabs;
 
   StartupTabs onboarding_tabs;
-  // Only do promos if the startup pref is not managed.
-  if (!are_startup_urls_managed) {
+  if (promotional_tabs_enabled) {
     // This is a launch from a prompt presented to an inactive user who chose to
     // open Chrome and is being brought to a specific URL for this one launch.
     // Launch the browser with the desired welcome back URL in the foreground
@@ -902,8 +914,10 @@ void StartupBrowserCreatorImpl::AddInfoBarsIfNecessary(
     chrome::ShowBadFlagsPrompt(web_contents);
     InfoBarService* infobar_service =
         InfoBarService::FromWebContents(web_contents);
-    if (!google_apis::HasKeysConfigured())
+    if (!google_apis::HasAPIKeyConfigured() ||
+        !google_apis::HasOAuthClientConfigured()) {
       GoogleApiKeysInfoBarDelegate::Create(infobar_service);
+    }
     if (ObsoleteSystem::IsObsoleteNowOrSoon()) {
       PrefService* local_state = g_browser_process->local_state();
       if (!local_state ||

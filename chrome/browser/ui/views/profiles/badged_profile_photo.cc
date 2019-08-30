@@ -67,6 +67,12 @@ gfx::ImageSkia ImageForBadgeType(BadgedProfilePhoto::BadgeType badge_type) {
     case BadgedProfilePhoto::BADGE_TYPE_SYNC_ERROR:
       return gfx::CreateVectorIcon(kSyncErrorCircleIcon, kBadgeIconSize,
                                    gfx::kGoogleRed700);
+    case BadgedProfilePhoto::BADGE_TYPE_SYNC_PAUSED:
+      return gfx::CreateVectorIcon(kSyncPausedCircleIcon, kBadgeIconSize,
+                                   gfx::kGoogleBlue500);
+    case BadgedProfilePhoto::BADGE_TYPE_SYNC_DISABLED:
+      return gfx::CreateVectorIcon(kSyncCircleIcon, kBadgeIconSize,
+                                   gfx::kGoogleGrey400);
     case BadgedProfilePhoto::BADGE_TYPE_NONE:
       NOTREACHED();
       return gfx::ImageSkia();

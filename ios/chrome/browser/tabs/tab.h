@@ -17,7 +17,6 @@
 @class AutofillController;
 @class CastController;
 @class ExternalAppLauncher;
-@class FormInputAccessoryViewController;
 class GURL;
 @class OpenInController;
 @class OverscrollActionsController;
@@ -27,7 +26,6 @@ class GURL;
 @class FormSuggestionController;
 @protocol TabDialogDelegate;
 @class Tab;
-@protocol TabHeadersDelegate;
 @class TabModel;
 
 namespace ios {
@@ -90,7 +88,6 @@ extern NSString* const kProxyPassthroughHeaderValue;
 
 @property(nonatomic, readonly) BOOL canGoBack;
 @property(nonatomic, readonly) BOOL canGoForward;
-@property(nonatomic, weak) id<TabHeadersDelegate> tabHeadersDelegate;
 
 @property(nonatomic, readonly)
     OverscrollActionsController* overscrollActionsController;
@@ -165,6 +162,8 @@ extern NSString* const kProxyPassthroughHeaderValue;
 // Evaluates U2F result.
 - (void)evaluateU2FResultFromURL:(const GURL&)url;
 
+// Sends a notification to indicate that |url| is going to start loading.
+- (void)notifyTabOfUrlMayStartLoading:(const GURL&)url;
 @end
 
 #endif  // IOS_CHROME_BROWSER_TABS_TAB_H_

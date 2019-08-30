@@ -15,6 +15,7 @@
 #include "base/bind.h"
 #include "base/location.h"
 #include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_current.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_tokenizer.h"
 #include "base/threading/thread.h"
@@ -37,6 +38,7 @@
 namespace net {
 
 using base::Thread;
+using TimeRange = CookieDeletionInfo::TimeRange;
 
 const int kTimeout = 1000;
 
@@ -47,8 +49,8 @@ const char kValidCookieLine[] = "A=B; path=/";
 //   // Factory function. Will be called at most once per test.
 //   static std::unique_ptr<CookieStore> Create();
 //
-//   // Drains the run loop(s) involved in the test.
-//   static void RunUntilIdle();
+//   // Drains the run loop(s) used to deliver cookie change notifications.
+//   static void DeliverChangeNotifications();
 //
 //   // The cookie store supports cookies with the exclude_httponly() option.
 //   static const bool supports_http_only;
@@ -86,6 +88,16 @@ const char kValidCookieLine[] = "A=B; path=/";
 //   // The cookie store supports more than one callback per cookie change type.
 //   static const bool supports_multiple_tracking_callbacks;
 //
+//   // The cookie store correctly distinguishes between OVERWRITE and EXPLICIT
+//   // (deletion) change causes.
+//   static const bool has_exact_change_cause;
+//
+//   // The cookie store is guaranteed to deliver cookie changes in the order
+//   // in which calls were issued. This only applies to changes coming from
+//   // _different_ calls. If a call results in a cookie overwrite, the deletion
+//   // change must still be issued before the insertion change.
+//   static const bool has_exact_change_ordering;
+//
 //   // Time to wait between two cookie insertions to ensure that cookies have
 //   // different creation times.
 //   static const int creation_time_granularity_in_ms;
@@ -106,10 +118,10 @@ class CookieStoreTest : public testing::Test {
         http_bar_com_("http://bar.com") {
     // This test may be used outside of the net test suite, and thus may not
     // have a message loop.
-    if (!base::MessageLoop::current())
+    if (!base::MessageLoopCurrent::Get())
       message_loop_.reset(new base::MessageLoop);
     weak_factory_.reset(new base::WeakPtrFactory<base::MessageLoop>(
-        base::MessageLoop::current()));
+        base::MessageLoopCurrent::Get()));
   }
 
   // Helper methods for the asynchronous Cookie Store API that call the
@@ -237,28 +249,24 @@ class CookieStoreTest : public testing::Test {
     return callback.result();
   }
 
-  uint32_t DeleteCreatedBetween(CookieStore* cs,
-                                const base::Time& delete_begin,
-                                const base::Time& delete_end) {
+  uint32_t DeleteCreatedInTimeRange(CookieStore* cs,
+                                    const TimeRange& creation_range) {
     DCHECK(cs);
     ResultSavingCookieCallback<uint32_t> callback;
-    cs->DeleteAllCreatedBetweenAsync(
-        delete_begin, delete_end,
-        base::Bind(&ResultSavingCookieCallback<uint32_t>::Run,
-                   base::Unretained(&callback)));
+    cs->DeleteAllCreatedInTimeRangeAsync(
+        creation_range,
+        base::BindRepeating(&ResultSavingCookieCallback<uint32_t>::Run,
+                            base::Unretained(&callback)));
     callback.WaitUntilDone();
     return callback.result();
   }
 
-  uint32_t DeleteAllCreatedBetweenWithPredicate(
-      CookieStore* cs,
-      const base::Time delete_begin,
-      const base::Time delete_end,
-      const CookieStore::CookiePredicate& predicate) {
+  uint32_t DeleteAllCreatedInTimeRange(CookieStore* cs,
+                                       CookieDeletionInfo delete_info) {
     DCHECK(cs);
     ResultSavingCookieCallback<uint32_t> callback;
-    cs->DeleteAllCreatedBetweenWithPredicateAsync(
-        delete_begin, delete_end, predicate,
+    cs->DeleteAllMatchingInfoAsync(
+        std::move(delete_info),
         base::Bind(&ResultSavingCookieCallback<uint32_t>::Run,
                    base::Unretained(&callback)));
     callback.WaitUntilDone();
@@ -301,9 +309,6 @@ class CookieStoreTest : public testing::Test {
       cookie_store_ = CookieStoreTestTraits::Create();
     return cookie_store_.get();
   }
-
-  // Drains all pending tasks on the run loop(s) involved in the test.
-  void RunUntilIdle() { CookieStoreTestTraits::RunUntilIdle(); }
 
   // Compares two cookie lines.
   void MatchCookieLines(const std::string& line1, const std::string& line2) {
@@ -1275,7 +1280,7 @@ TYPED_TEST_P(CookieStoreTest, TestDeleteAll) {
   EXPECT_EQ(0u, this->GetAllCookies(cs).size());
 }
 
-TYPED_TEST_P(CookieStoreTest, TestDeleteAllCreatedBetween) {
+TYPED_TEST_P(CookieStoreTest, TestDeleteAllCreatedInTimeRange) {
   CookieStore* cs = this->GetCookieStore();
   const base::Time last_month = base::Time::Now() -
                                 base::TimeDelta::FromDays(30);
@@ -1293,14 +1298,17 @@ TYPED_TEST_P(CookieStoreTest, TestDeleteAllCreatedBetween) {
                          this->GetCookies(cs, this->http_www_foo_.url()));
 
   // Remove cookies in empty intervals.
-  EXPECT_EQ(0u, this->DeleteCreatedBetween(cs, last_month, last_minute));
-  EXPECT_EQ(0u, this->DeleteCreatedBetween(cs, next_minute, next_month));
+  EXPECT_EQ(0u, this->DeleteCreatedInTimeRange(
+                    cs, TimeRange(last_month, last_minute)));
+  EXPECT_EQ(0u, this->DeleteCreatedInTimeRange(
+                    cs, TimeRange(next_minute, next_month)));
   // Check that the cookie is still there.
   this->MatchCookieLines("A=B",
                          this->GetCookies(cs, this->http_www_foo_.url()));
 
   // Remove the cookie with an interval defined by two dates.
-  EXPECT_EQ(1u, this->DeleteCreatedBetween(cs, last_minute, next_minute));
+  EXPECT_EQ(1u, this->DeleteCreatedInTimeRange(
+                    cs, TimeRange(last_minute, next_minute)));
   // Check that the cookie disappeared.
   this->MatchCookieLines(std::string(),
                          this->GetCookies(cs, this->http_www_foo_.url()));
@@ -1312,25 +1320,18 @@ TYPED_TEST_P(CookieStoreTest, TestDeleteAllCreatedBetween) {
                          this->GetCookies(cs, this->http_www_foo_.url()));
 
   // Remove the cookie with a null ending time.
-  EXPECT_EQ(1u, this->DeleteCreatedBetween(cs, last_minute, base::Time()));
+  EXPECT_EQ(1u, this->DeleteCreatedInTimeRange(
+                    cs, TimeRange(last_minute, base::Time())));
   // Check that the cookie disappeared.
   this->MatchCookieLines(std::string(),
                          this->GetCookies(cs, this->http_www_foo_.url()));
 }
 
-namespace {
-static bool CookieHasValue(const std::string& value,
-                           const CanonicalCookie& cookie) {
-  return cookie.Value() == value;
-}
-}
-
-TYPED_TEST_P(CookieStoreTest, TestDeleteAllCreatedBetweenWithPredicate) {
+TYPED_TEST_P(CookieStoreTest, TestDeleteAllWithInfo) {
   CookieStore* cs = this->GetCookieStore();
   base::Time now = base::Time::Now();
   base::Time last_month = base::Time::Now() - base::TimeDelta::FromDays(30);
   base::Time last_minute = base::Time::Now() - base::TimeDelta::FromMinutes(1);
-  std::string desired_value("B");
 
   // These 3 cookies match the time range and host.
   EXPECT_TRUE(this->SetCookie(cs, this->http_www_foo_.url(), "A=B"));
@@ -1339,31 +1340,25 @@ TYPED_TEST_P(CookieStoreTest, TestDeleteAllCreatedBetweenWithPredicate) {
   EXPECT_TRUE(this->SetCookie(cs, this->https_www_foo_.url(), "E=B"));
 
   // Delete cookies.
+  CookieDeletionInfo delete_info(now, base::Time::Max());
+  delete_info.value_for_testing = "B";
   EXPECT_EQ(2u,  // Deletes A=B, E=B
-            this->DeleteAllCreatedBetweenWithPredicate(
-                cs, now, base::Time::Max(),
-                base::BindRepeating(&CookieHasValue, desired_value)));
+            this->DeleteAllCreatedInTimeRange(cs, std::move(delete_info)));
 
   // Check that we deleted the right ones.
   this->MatchCookieLines("C=D;Y=Z",
                          this->GetCookies(cs, this->https_www_foo_.url()));
 
-  // Now check that using a null predicate will do nothing.
-  EXPECT_EQ(0u,
-            this->DeleteAllCreatedBetweenWithPredicate(
-                cs, now, base::Time::Max(), CookieStore::CookiePredicate()));
-
   // Finally, check that we don't delete cookies when our time range is off.
-  desired_value = "D";
-  EXPECT_EQ(0u, this->DeleteAllCreatedBetweenWithPredicate(
-                    cs, last_month, last_minute,
-                    base::BindRepeating(&CookieHasValue, desired_value)));
+  delete_info = CookieDeletionInfo(last_month, last_minute);
+  delete_info.value_for_testing = "D";
+  EXPECT_EQ(0u, this->DeleteAllCreatedInTimeRange(cs, std::move(delete_info)));
   this->MatchCookieLines("C=D;Y=Z",
                          this->GetCookies(cs, this->https_www_foo_.url()));
   // Same thing, but with a good time range.
-  EXPECT_EQ(1u, this->DeleteAllCreatedBetweenWithPredicate(
-                    cs, now, base::Time::Max(),
-                    base::BindRepeating(&CookieHasValue, desired_value)));
+  delete_info = CookieDeletionInfo(now, base::Time::Max());
+  delete_info.value_for_testing = "D";
+  EXPECT_EQ(1u, this->DeleteAllCreatedInTimeRange(cs, std::move(delete_info)));
   this->MatchCookieLines("Y=Z",
                          this->GetCookies(cs, this->https_www_foo_.url()));
 }
@@ -1699,8 +1694,8 @@ REGISTER_TYPED_TEST_CASE_P(CookieStoreTest,
                            HttpOnlyTest,
                            TestCookieDeletion,
                            TestDeleteAll,
-                           TestDeleteAllCreatedBetween,
-                           TestDeleteAllCreatedBetweenWithPredicate,
+                           TestDeleteAllCreatedInTimeRange,
+                           TestDeleteAllWithInfo,
                            TestSecure,
                            NetUtilCookieTest,
                            OverwritePersistentCookie,

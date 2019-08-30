@@ -70,6 +70,7 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
     : views::MenuButton(text, this, false),
       title_(nullptr),
       subtitle_(nullptr),
+      secondary_icon_view_(nullptr),
       listener_(button_listener) {
   SetFocusBehavior(FocusBehavior::ALWAYS);
   SetFocusPainter(nullptr);
@@ -95,7 +96,7 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
                          std::unique_ptr<views::View> icon_view,
                          const base::string16& title,
                          const base::string16& subtitle,
-                         bool show_submenu_arrow)
+                         std::unique_ptr<views::View> secondary_icon_view)
     : HoverButton(button_listener, base::string16()) {
   label()->SetHandlesTooltips(false);
   ChromeLayoutProvider* layout_provider = ChromeLayoutProvider::Get();
@@ -133,15 +134,14 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
                                      views::DISTANCE_RELATED_LABEL_HORIZONTAL) -
                                  badge_spacing;
 
-  constexpr float kFixed = 0.f;
-  constexpr float kStretchy = 1.f;
   constexpr int kColumnSetId = 0;
   views::ColumnSet* columns = grid_layout->AddColumnSet(kColumnSetId);
   columns->AddColumn(views::GridLayout::CENTER, views::GridLayout::CENTER,
-                     kFixed, views::GridLayout::USE_PREF, 0, 0);
-  columns->AddPaddingColumn(kFixed, icon_label_spacing);
-  columns->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL,
-                     kStretchy, views::GridLayout::USE_PREF, 0, 0);
+                     views::GridLayout::kFixedSize, views::GridLayout::USE_PREF,
+                     0, 0);
+  columns->AddPaddingColumn(views::GridLayout::kFixedSize, icon_label_spacing);
+  columns->AddColumn(views::GridLayout::FILL, views::GridLayout::FILL, 1.0,
+                     views::GridLayout::USE_PREF, 0, 0);
 
   taken_width_ = GetInsets().width() + icon_view->GetPreferredSize().width() +
                  icon_label_spacing;
@@ -155,7 +155,8 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
   // Split the two rows evenly between the total height minus the padding.
   const int row_height =
       (total_height - remaining_vert_spacing * 2) / num_labels;
-  grid_layout->StartRow(0, kColumnSetId, row_height);
+  grid_layout->StartRow(views::GridLayout::kFixedSize, kColumnSetId,
+                        row_height);
   grid_layout->AddView(icon_view.release(), 1, num_labels);
 
   title_ = new views::StyledLabel(title, nullptr);
@@ -174,8 +175,24 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
   title_wrapper->set_can_process_events_within_subtree(false);
   grid_layout->AddView(title_wrapper);
 
+  secondary_icon_view_ = secondary_icon_view.get();
+  if (secondary_icon_view) {
+    columns->AddColumn(views::GridLayout::CENTER, views::GridLayout::CENTER,
+                       views::GridLayout::kFixedSize,
+                       views::GridLayout::USE_PREF, 0, 0);
+    // Make sure hovering over |secondary_icon_view| also hovers the
+    // |HoverButton|.
+    secondary_icon_view->set_can_process_events_within_subtree(false);
+    // |secondary_icon_view| needs a layer otherwise it's obscured by the layer
+    // used in drawing ink drops.
+    secondary_icon_view->SetPaintToLayer();
+    secondary_icon_view->layer()->SetFillsBoundsOpaquely(false);
+    grid_layout->AddView(secondary_icon_view.release(), 1, num_labels);
+  }
+
   if (!subtitle.empty()) {
-    grid_layout->StartRow(0, kColumnSetId, row_height);
+    grid_layout->StartRow(views::GridLayout::kFixedSize, kColumnSetId,
+                          row_height);
     subtitle_ = new views::Label(subtitle, views::style::CONTEXT_BUTTON,
                                  STYLE_SECONDARY);
     subtitle_->SetHorizontalAlignment(gfx::ALIGN_LEFT);
@@ -184,23 +201,6 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
     grid_layout->AddView(subtitle_);
   }
 
-  if (show_submenu_arrow) {
-    constexpr int kSubmenuArrowSize = 12;
-    columns->AddColumn(views::GridLayout::CENTER, views::GridLayout::CENTER,
-                       kFixed, views::GridLayout::USE_PREF, 0, 0);
-    views::ImageView* arrow = new views::ImageView();
-    arrow->SetImage(gfx::CreateVectorIcon(
-        kUserMenuRightArrowIcon, kSubmenuArrowSize, gfx::kChromeIconGrey));
-    // Make sure hovering over |arrow| also hovers the |HoverButton|.
-    arrow->set_can_process_events_within_subtree(false);
-    // |arrow| needs a layer otherwise it's obscured by the layer used in
-    // drawing ink drops.
-    arrow->SetPaintToLayer();
-    arrow->layer()->SetFillsBoundsOpaquely(false);
-    // Make sure that the arrow is flipped in RTL mode.
-    arrow->EnableCanvasFlippingForRTLUI(true);
-    grid_layout->AddView(arrow, 1, num_labels);
-  }
   SetTooltipAndAccessibleName(this, title_, subtitle_, GetLocalBounds(),
                               taken_width_, auto_compute_tooltip_);
 
@@ -208,6 +208,14 @@ HoverButton::HoverButton(views::ButtonListener* button_listener,
 }
 
 HoverButton::~HoverButton() {}
+
+bool HoverButton::OnKeyPressed(const ui::KeyEvent& event) {
+  // Unlike MenuButton, HoverButton should not be activated when the up or down
+  // arrow key is pressed.
+  if (event.key_code() == ui::VKEY_UP || event.key_code() == ui::VKEY_DOWN)
+    return false;
+  return MenuButton::OnKeyPressed(event);
+}
 
 void HoverButton::SetBorder(std::unique_ptr<views::Border> b) {
   MenuButton::SetBorder(std::move(b));
@@ -220,9 +228,22 @@ void HoverButton::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   Button::GetAccessibleNodeData(node_data);
 }
 
+bool HoverButton::IsTriggerableEventType(const ui::Event& event) {
+  // Override MenuButton::IsTriggerableEventType so the HoverButton only
+  // triggers on mouse-button release, like normal buttons.
+  if (event.IsMouseEvent()) {
+    // The button listener must only be notified when the mouse was released.
+    // The event type must be explicitly checked here, since
+    // Button::IsTriggerableEvent() returns true on the mouse-down event.
+    return Button::IsTriggerableEvent(event) &&
+           event.type() == ui::ET_MOUSE_RELEASED;
+  }
+
+  return MenuButton::IsTriggerableEventType(event);
+}
+
 void HoverButton::SetSubtitleElideBehavior(gfx::ElideBehavior elide_behavior) {
-  DCHECK(subtitle_);
-  if (!subtitle_->text().empty())
+  if (subtitle_ && !subtitle_->text().empty())
     subtitle_->SetElideBehavior(elide_behavior);
 }
 
@@ -318,6 +339,17 @@ views::View* HoverButton::GetTooltipHandlerForPoint(const gfx::Point& point) {
   if (!HitTestPoint(point))
     return nullptr;
 
+  // Let the secondary icon handle it if it has a tooltip.
+  if (secondary_icon_view_) {
+    gfx::Point point_in_icon_coords(point);
+    ConvertPointToTarget(this, secondary_icon_view_, &point_in_icon_coords);
+    base::string16 tooltip;
+    if (secondary_icon_view_->HitTestPoint(point_in_icon_coords) &&
+        secondary_icon_view_->GetTooltipText(point_in_icon_coords, &tooltip)) {
+      return secondary_icon_view_;
+    }
+  }
+
   // If possible, take advantage of the |views::Label| tooltip behavior, which
   // only sets the tooltip when the text is too long.
   if (title_)
@@ -360,7 +392,8 @@ void HoverButton::SetTitleTextStyle(views::style::TextStyle text_style,
 }
 
 void HoverButton::SetSubtitleColor(SkColor color) {
-  subtitle_->SetEnabledColor(color);
+  if (subtitle_)
+    subtitle_->SetEnabledColor(color);
 }
 
 void HoverButton::OnMenuButtonClicked(MenuButton* source,

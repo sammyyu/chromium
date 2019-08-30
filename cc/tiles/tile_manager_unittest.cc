@@ -9,7 +9,6 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -18,7 +17,6 @@
 #include "cc/raster/raster_source.h"
 #include "cc/raster/synchronous_task_graph_runner.h"
 #include "cc/resources/resource_pool.h"
-#include "cc/resources/resource_util.h"
 #include "cc/test/fake_impl_task_runner_provider.h"
 #include "cc/test/fake_layer_tree_frame_sink.h"
 #include "cc/test/fake_layer_tree_frame_sink_client.h"
@@ -40,6 +38,7 @@
 #include "cc/tiles/tile_priority.h"
 #include "cc/tiles/tiling_set_raster_queue_all.h"
 #include "cc/trees/layer_tree_impl.h"
+#include "components/viz/common/resources/resource_sizes.h"
 #include "components/viz/test/begin_frame_args_test.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -1366,12 +1365,11 @@ TEST_F(TileManagerTilePriorityQueueTest,
   EXPECT_FALSE(queue->IsEmpty());
   EXPECT_TRUE(queue->Top().tile()->required_for_draw());
   EXPECT_EQ(gfx::Size(256, 256), queue->Top().tile()->desired_texture_size());
-  EXPECT_EQ(viz::RGBA_8888,
-            host_impl()->resource_provider()->best_texture_format());
 
   ManagedMemoryPolicy policy = host_impl()->ActualManagedMemoryPolicy();
-  policy.bytes_limit_when_visible = ResourceUtil::UncheckedSizeInBytes<size_t>(
-      gfx::Size(256, 256), viz::RGBA_8888);
+  policy.bytes_limit_when_visible =
+      viz::ResourceSizes::UncheckedSizeInBytes<size_t>(gfx::Size(256, 256),
+                                                       viz::RGBA_8888);
   host_impl()->SetMemoryPolicy(policy);
 
   EXPECT_FALSE(host_impl()->is_likely_to_require_a_draw());
@@ -1526,7 +1524,11 @@ TEST_F(TileManagerTilePriorityQueueTest, NoRasterTasksforSolidColorTiles) {
 class TestSoftwareBacking : public ResourcePool::SoftwareBacking {
  public:
   // No tracing is done during these tests.
-  base::UnguessableToken SharedMemoryGuid() override { return {}; }
+  void OnMemoryDump(
+      base::trace_event::ProcessMemoryDump* pmd,
+      const base::trace_event::MemoryAllocatorDumpGuid& buffer_dump_guid,
+      uint64_t tracing_process_id,
+      int importance) const override {}
 
   std::unique_ptr<uint32_t[]> pixels;
 };
@@ -1543,9 +1545,9 @@ class TestSoftwareRasterBufferProvider : public FakeRasterBufferProviderImpl {
     if (!resource.software_backing()) {
       auto backing = std::make_unique<TestSoftwareBacking>();
       backing->shared_bitmap_id = viz::SharedBitmap::GenerateId();
-      backing->pixels =
-          std::make_unique<uint32_t[]>(viz::SharedBitmap::CheckedSizeInBytes(
-              resource.size(), viz::RGBA_8888));
+      backing->pixels = std::make_unique<uint32_t[]>(
+          viz::ResourceSizes::CheckedSizeInBytes<size_t>(resource.size(),
+                                                         viz::RGBA_8888));
       resource.set_software_backing(std::move(backing));
     }
     auto* backing =
@@ -1570,7 +1572,7 @@ class TestSoftwareRasterBufferProvider : public FakeRasterBufferProviderImpl {
       RasterBufferProvider::PlaybackToMemory(
           pixels_, viz::RGBA_8888, size_, /*stride=*/0, raster_source,
           raster_full_rect, /*playback_rect=*/raster_full_rect, transform,
-          gfx::ColorSpace(), playback_settings);
+          gfx::ColorSpace(), /*gpu_compositing=*/true, playback_settings);
     }
 
    private:
@@ -1723,6 +1725,11 @@ TEST_F(TileManagerTest, ActivateAndDrawWhenOOM) {
 
 class PixelInspectTileManagerTest : public TileManagerTest {
  public:
+  ~PixelInspectTileManagerTest() override {
+    // Ensure that the host impl doesn't outlive |raster_buffer_provider_|.
+    TakeHostImpl();
+  }
+
   void SetUp() override {
     TileManagerTest::SetUp();
     // Use a RasterBufferProvider that will let us inspect pixels.
@@ -2291,7 +2298,6 @@ TEST_F(TileManagerReadyToDrawTest, SmoothActivationWaitsOnCallback) {
               run_loop.Quit();
               return 1;
             }));
-    host_impl()->tile_manager()->DidModifyTilePriorities();
     host_impl()->tile_manager()->PrepareTiles(host_impl()->global_tile_state());
     run_loop.Run();
   }
@@ -2321,7 +2327,6 @@ TEST_F(TileManagerReadyToDrawTest, NonSmoothActivationDoesNotWaitOnCallback) {
   // will cause a test failure.
   base::RunLoop run_loop;
 
-  host_impl()->tile_manager()->DidModifyTilePriorities();
   host_impl()->tile_manager()->PrepareTiles(host_impl()->global_tile_state());
   EXPECT_CALL(MockHostImpl(), NotifyReadyToActivate())
       .WillOnce(Invoke([&run_loop]() { run_loop.Quit(); }));
@@ -2356,7 +2361,6 @@ TEST_F(TileManagerReadyToDrawTest, SmoothDrawWaitsOnCallback) {
               run_loop.Quit();
               return 1;
             }));
-    host_impl()->tile_manager()->DidModifyTilePriorities();
     host_impl()->tile_manager()->PrepareTiles(host_impl()->global_tile_state());
     run_loop.Run();
   }
@@ -2386,7 +2390,6 @@ TEST_F(TileManagerReadyToDrawTest, NonSmoothDrawDoesNotWaitOnCallback) {
   // will cause a test failure.
   base::RunLoop run_loop;
 
-  host_impl()->tile_manager()->DidModifyTilePriorities();
   host_impl()->tile_manager()->PrepareTiles(host_impl()->global_tile_state());
   EXPECT_CALL(MockHostImpl(), NotifyReadyToDraw())
       .WillOnce(Invoke([&run_loop]() { run_loop.Quit(); }));
@@ -2401,7 +2404,6 @@ TEST_F(TileManagerReadyToDrawTest, NoCallbackWhenAlreadyReadyToDraw) {
   SetupTreesWithPendingTreeTiles();
 
   base::RunLoop run_loop;
-  host_impl()->tile_manager()->DidModifyTilePriorities();
   host_impl()->tile_manager()->PrepareTiles(host_impl()->global_tile_state());
   EXPECT_CALL(MockHostImpl(), NotifyReadyToActivate())
       .WillOnce(Invoke([&run_loop]() { run_loop.Quit(); }));
@@ -2411,6 +2413,92 @@ TEST_F(TileManagerReadyToDrawTest, NoCallbackWhenAlreadyReadyToDraw) {
 
   EXPECT_TRUE(host_impl()->tile_manager()->IsReadyToDraw());
   EXPECT_TRUE(host_impl()->tile_manager()->IsReadyToActivate());
+}
+
+TEST_F(TileManagerReadyToDrawTest, TilePrioritiesUpdated) {
+  // Use smoothness as that's a mode in which we wait on resources to be
+  // ready instead of marking them ready immediately.
+  host_impl()->SetTreePriority(SMOOTHNESS_TAKES_PRIORITY);
+  gfx::Size very_small(1, 1);
+  host_impl()->SetViewportSize(very_small);
+
+  gfx::Size layer_bounds(1000, 1000);
+  SetupDefaultTrees(layer_bounds);
+
+  // Run until all tile tasks are complete, but don't let any draw callbacks
+  // finish.
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(MockHostImpl(), NotifyAllTileTasksCompleted())
+        .WillOnce(testing::Invoke([&run_loop]() { run_loop.Quit(); }));
+
+    // Until we activate our ready to draw callback, treat all resources as not
+    // ready to draw.
+    EXPECT_CALL(*mock_raster_buffer_provider(),
+                IsResourceReadyToDraw(testing::_))
+        .WillRepeatedly(Return(false));
+    EXPECT_CALL(*mock_raster_buffer_provider(), SetReadyToDrawCallback(_, _, _))
+        .WillRepeatedly(Return(1));
+    host_impl()->tile_manager()->PrepareTiles(host_impl()->global_tile_state());
+    run_loop.Run();
+  }
+
+  // Inspect the current state of tiles in this world of cpu done but gpu
+  // not ready yet.
+  size_t orig_num_required = 0;
+  size_t orig_num_prepaint = 0;
+  std::vector<Tile*> prepaint_tiles;
+  for (auto* tile : host_impl()->tile_manager()->AllTilesForTesting()) {
+    if (tile->draw_info().has_resource()) {
+      if (tile->is_prepaint()) {
+        orig_num_prepaint++;
+        prepaint_tiles.push_back(tile);
+      } else {
+        orig_num_required++;
+      }
+    }
+  }
+
+  // Verify that there exist some prepaint tiles here.
+  EXPECT_GT(orig_num_prepaint, 0u);
+  EXPECT_GT(orig_num_required, 0u);
+
+  host_impl()->SetViewportSize(layer_bounds);
+  host_impl()->active_tree()->UpdateDrawProperties();
+  host_impl()->pending_tree()->UpdateDrawProperties();
+
+  // Rerun prepare tiles.
+  {
+    base::RunLoop run_loop;
+    EXPECT_CALL(MockHostImpl(), NotifyAllTileTasksCompleted())
+        .WillOnce(testing::Invoke([&run_loop]() { run_loop.Quit(); }));
+    host_impl()->tile_manager()->PrepareTiles(host_impl()->global_tile_state());
+    run_loop.Run();
+  }
+
+  // Make sure tiles priorities are updated.
+  size_t final_num_required = 0;
+  size_t final_num_prepaint = 0;
+  bool found_one_prepaint_to_required_transition = false;
+  for (auto* tile : host_impl()->tile_manager()->AllTilesForTesting()) {
+    if (tile->draw_info().has_resource()) {
+      if (tile->is_prepaint()) {
+        final_num_prepaint++;
+      } else {
+        final_num_required++;
+        if (std::find(prepaint_tiles.begin(), prepaint_tiles.end(), tile) !=
+            prepaint_tiles.end()) {
+          found_one_prepaint_to_required_transition = true;
+        }
+      }
+    }
+  }
+
+  // Tile priorities should be updated and we should have more required
+  // and fewer prepaint now that the viewport has changed.
+  EXPECT_GT(final_num_required, orig_num_required);
+  EXPECT_LT(final_num_prepaint, orig_num_prepaint);
+  EXPECT_TRUE(found_one_prepaint_to_required_transition);
 }
 
 void UpdateVisibleRect(FakePictureLayerImpl* layer,
@@ -2495,6 +2583,13 @@ TEST_F(TileManagerReadyToDrawTest, ReadyToDrawRespectsRequirementChange) {
   EXPECT_TRUE(host_impl()->tile_manager()->IsReadyToActivate());
 }
 
+PaintImage MakeCheckerablePaintImage(const gfx::Size& size) {
+  auto image = CreateDiscardablePaintImage(size);
+  return PaintImageBuilder::WithCopy(image)
+      .set_decoding_mode(PaintImage::DecodingMode::kAsync)
+      .TakePaintImage();
+}
+
 class CheckerImagingTileManagerTest : public TestLayerTreeHostBase {
  public:
   class MockImageGenerator : public FakePaintImageGenerator {
@@ -2554,7 +2649,6 @@ class CheckerImagingTileManagerTest : public TestLayerTreeHostBase {
 TEST_F(CheckerImagingTileManagerTest,
        NoImageDecodeDependencyForCheckeredTiles) {
   const gfx::Size layer_bounds(512, 512);
-  SetupDefaultTrees(layer_bounds);
 
   std::unique_ptr<FakeRecordingSource> recording_source =
       FakeRecordingSource::CreateFilledRecordingSource(layer_bounds);
@@ -2565,6 +2659,7 @@ TEST_F(CheckerImagingTileManagerTest,
   PaintImage image = PaintImageBuilder::WithDefault()
                          .set_id(PaintImage::GetNextId())
                          .set_paint_image_generator(generator)
+                         .set_decoding_mode(PaintImage::DecodingMode::kAsync)
                          .TakePaintImage();
   recording_source->add_draw_image(image, gfx::Point(0, 0));
 
@@ -2572,13 +2667,12 @@ TEST_F(CheckerImagingTileManagerTest,
   scoped_refptr<RasterSource> raster_source =
       recording_source->CreateRasterSource();
 
-  std::unique_ptr<PictureLayerImpl> layer_impl = PictureLayerImpl::Create(
-      host_impl()->pending_tree(), 1, Layer::LayerMaskType::NOT_MASK);
-  layer_impl->set_contributes_to_drawn_render_surface(true);
-  PictureLayerTilingSet* tiling_set = layer_impl->picture_layer_tiling_set();
+  Region invalidation((gfx::Rect(layer_bounds)));
+  SetupPendingTree(raster_source, layer_bounds, invalidation);
 
-  PictureLayerTiling* tiling =
-      tiling_set->AddTiling(gfx::AxisTransform2d(), raster_source);
+  PictureLayerTilingSet* tiling_set =
+      pending_layer()->picture_layer_tiling_set();
+  PictureLayerTiling* tiling = tiling_set->tiling_at(0);
   tiling->set_resolution(HIGH_RESOLUTION);
   tiling->CreateAllTilesForTesting();
   tiling->SetTilePriorityRectsForTesting(
@@ -2615,8 +2709,7 @@ TEST_F(EmptyCacheTileManagerTest, AtRasterOnScreenTileRasterTasks) {
   recording_source->set_fill_with_nonsolid_color(true);
 
   int dimension = 500;
-  PaintImage image =
-      CreateDiscardablePaintImage(gfx::Size(dimension, dimension));
+  PaintImage image = MakeCheckerablePaintImage(gfx::Size(dimension, dimension));
   recording_source->add_draw_image(image, gfx::Point(0, 0));
 
   recording_source->Rerecord();
@@ -2652,8 +2745,7 @@ TEST_F(EmptyCacheTileManagerTest, AtRasterPrepaintTileRasterTasksSkipped) {
   recording_source->set_fill_with_nonsolid_color(true);
 
   int dimension = 500;
-  PaintImage image =
-      CreateDiscardablePaintImage(gfx::Size(dimension, dimension));
+  PaintImage image = MakeCheckerablePaintImage(gfx::Size(dimension, dimension));
   recording_source->add_draw_image(image, gfx::Point(0, 0));
 
   recording_source->Rerecord();
@@ -2690,11 +2782,11 @@ TEST_F(CheckerImagingTileManagerTest, BuildsImageDecodeQueueAsExpected) {
 
   int dimension = 450;
   PaintImage image1 =
-      CreateDiscardablePaintImage(gfx::Size(dimension, dimension));
+      MakeCheckerablePaintImage(gfx::Size(dimension, dimension));
   PaintImage image2 =
-      CreateDiscardablePaintImage(gfx::Size(dimension, dimension));
+      MakeCheckerablePaintImage(gfx::Size(dimension, dimension));
   PaintImage image3 =
-      CreateDiscardablePaintImage(gfx::Size(dimension, dimension));
+      MakeCheckerablePaintImage(gfx::Size(dimension, dimension));
   recording_source->add_draw_image(image1, gfx::Point(0, 0));
   recording_source->add_draw_image(image2, gfx::Point(600, 0));
   recording_source->add_draw_image(image3, gfx::Point(0, 600));
@@ -2851,7 +2943,7 @@ TEST_F(CheckerImagingTileManagerTest,
   std::unique_ptr<FakeRecordingSource> recording_source =
       FakeRecordingSource::CreateFilledRecordingSource(layer_bounds);
   recording_source->set_fill_with_nonsolid_color(true);
-  PaintImage image = CreateDiscardablePaintImage(gfx::Size(512, 512));
+  PaintImage image = MakeCheckerablePaintImage(gfx::Size(512, 512));
   recording_source->add_draw_image(image, gfx::Point(0, 0));
   recording_source->Rerecord();
   scoped_refptr<RasterSource> raster_source =
@@ -2890,7 +2982,7 @@ TEST_F(CheckerImagingTileManagerTest,
   std::unique_ptr<FakeRecordingSource> recording_source =
       FakeRecordingSource::CreateFilledRecordingSource(layer_bounds);
   recording_source->set_fill_with_nonsolid_color(true);
-  PaintImage image = CreateDiscardablePaintImage(gfx::Size(512, 512));
+  PaintImage image = MakeCheckerablePaintImage(gfx::Size(512, 512));
   recording_source->add_draw_image(image, gfx::Point(0, 0));
   recording_source->Rerecord();
   scoped_refptr<RasterSource> raster_source =
@@ -2975,9 +3067,9 @@ TEST_F(CheckerImagingTileManagerMemoryTest, AddsAllNowTilesToImageDecodeQueue) {
 
   int dimension = 450;
   PaintImage image1 =
-      CreateDiscardablePaintImage(gfx::Size(dimension, dimension));
+      MakeCheckerablePaintImage(gfx::Size(dimension, dimension));
   PaintImage image2 =
-      CreateDiscardablePaintImage(gfx::Size(dimension, dimension));
+      MakeCheckerablePaintImage(gfx::Size(dimension, dimension));
   recording_source->add_draw_image(image1, gfx::Point(0, 515));
   recording_source->add_draw_image(image2, gfx::Point(515, 515));
 

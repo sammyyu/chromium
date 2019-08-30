@@ -15,14 +15,10 @@
 #include "base/strings/string16.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/bookmarks/bookmark_editor.h"
+#include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/resource_request_info.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/gfx/native_widget_types.h"
-
-#if defined(OS_CHROMEOS)
-#include "chrome/browser/chromeos/arc/intent_helper/arc_navigation_throttle.h"
-#include "url/gurl.h"
-#endif  // OS_CHROMEOS
 
 class Browser;
 class LoginHandler;
@@ -46,7 +42,6 @@ class Extension;
 
 namespace net {
 class AuthChallengeInfo;
-class AuthCredentials;
 }
 
 namespace payments {
@@ -69,11 +64,6 @@ namespace ui {
 class WebDialogDelegate;
 struct SelectedFileInfo;
 }
-
-namespace views {
-class View;
-class Widget;
-}  // namespace views
 
 namespace chrome {
 
@@ -102,9 +92,11 @@ gfx::NativeWindow ShowWebDialog(gfx::NativeView parent,
 // Returns the created window.
 // See ash/public/cpp/shell_window_ids.h for |container_id| values. The window
 // is destroyed when it is closed. See also chrome::ShowWebDialog().
+// |is_minimal_style| means whether the title area of the dialog should be hide.
 gfx::NativeWindow ShowWebDialogInContainer(int container_id,
                                            content::BrowserContext* context,
-                                           ui::WebDialogDelegate* delegate);
+                                           ui::WebDialogDelegate* delegate,
+                                           bool is_minimal_style = false);
 #endif  // defined(OS_CHROMEOS)
 
 // Shows the create chrome app shortcut dialog box.
@@ -159,8 +151,7 @@ void ShowUpdateChromeDialogViews(gfx::NativeWindow parent);
 scoped_refptr<LoginHandler> CreateLoginHandlerViews(
     net::AuthChallengeInfo* auth_info,
     content::ResourceRequestInfo::WebContentsGetter web_contents_getter,
-    const base::Callback<void(const base::Optional<net::AuthCredentials>&)>&
-        auth_required_callback);
+    LoginAuthRequiredCallback auth_required_callback);
 
 // Shows the toolkit-views based BookmarkEditor.
 void ShowBookmarkEditorViews(gfx::NativeWindow parent_window,
@@ -207,7 +198,7 @@ enum class DialogIdentifier {
   SAFE_BROWSING_DOWNLOAD_FEEDBACK = 13,
   FIRST_RUN = 14,
   NETWORK_SHARE_PROFILE_WARNING = 15,
-  CONFLICTING_MODULE = 16,
+  // CONFLICTING_MODULE = 16,  Deprecated
   CRITICAL_NOTIFICATION = 17,
   IME_WARNING = 18,
   TOOLBAR_ACTIONS_BAR = 19,
@@ -276,6 +267,10 @@ enum class DialogIdentifier {
   RELAUNCH_RECOMMENDED = 82,
   CROSTINI_INSTALLER = 83,
   RELAUNCH_REQUIRED = 84,
+  UNITY_SYNC_CONSENT_BUMP = 85,
+  CROSTINI_UNINSTALLER = 86,
+  DOWNLOAD_OPEN_CONFIRMATION = 87,
+  ARC_DATA_REMOVAL_CONFIRMATION = 88,
   MAX_VALUE
 };
 
@@ -308,34 +303,6 @@ void ShowChromeCleanerRebootPrompt(
 #endif  // OS_WIN
 
 }  // namespace chrome
-
-#if defined(OS_CHROMEOS)
-
-// This callback informs the package name of the app selected by the user, along
-// with the reason why the Bubble was closed. The string param must have a valid
-// package name, except when the CloseReason is ERROR or DIALOG_DEACTIVATED, for
-// these cases we return a dummy value which won't be used at all and has no
-// significance.
-using IntentPickerResponse =
-    base::Callback<void(const std::string&,
-                        arc::ArcNavigationThrottle::CloseReason)>;
-
-// TODO(djacobo): Decide whether or not refactor as base::RepeatableCallback.
-// Return a pointer to the IntentPickerBubbleView::ShowBubble method, which in
-// turn receives a View to be used as an anchor, the WebContents associated
-// with the current tab, a list of app candidates to be displayed to the user
-// and a callback to report back the user's response respectively. The newly
-// created widget is returned.
-using BubbleShowPtr =
-    views::Widget* (*)(views::View*,
-                       content::WebContents*,
-                       const std::vector<arc::ArcNavigationThrottle::AppInfo>&,
-                       bool disable_display_in_chrome,
-                       const IntentPickerResponse&);
-
-BubbleShowPtr ShowIntentPickerBubble();
-
-#endif  // OS_CHROMEOS
 
 void ShowFolderUploadConfirmationDialog(
     const base::FilePath& path,

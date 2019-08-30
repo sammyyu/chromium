@@ -24,7 +24,6 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/md5.h"
-#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
@@ -253,13 +252,13 @@ class PrintPreviewObserver : public WebContentsObserver {
     void RegisterMessages() override {
       web_ui()->RegisterMessageCallback(
           "UILoadedForTest",
-          base::Bind(&UIDoneLoadingMessageHandler::HandleDone,
-                     base::Unretained(this)));
+          base::BindRepeating(&UIDoneLoadingMessageHandler::HandleDone,
+                              base::Unretained(this)));
 
       web_ui()->RegisterMessageCallback(
           "UIFailedLoadingForTest",
-          base::Bind(&UIDoneLoadingMessageHandler::HandleFailure,
-                     base::Unretained(this)));
+          base::BindRepeating(&UIDoneLoadingMessageHandler::HandleFailure,
+                              base::Unretained(this)));
     }
 
    private:
@@ -271,7 +270,8 @@ class PrintPreviewObserver : public WebContentsObserver {
   // Called when the observer gets the IPC message stating that the page count
   // is ready.
   void OnDidGetPreviewPageCount(
-        const PrintHostMsg_DidGetPreviewPageCount_Params &params) {
+      const PrintHostMsg_DidGetPreviewPageCount_Params& params,
+      const PrintHostMsg_PreviewIds& ids) {
     WebContents* web_contents = GetDialog();
     ASSERT_TRUE(web_contents);
     Observe(web_contents);
@@ -370,7 +370,9 @@ class PrintPreviewPdfGeneratedBrowserTest : public InProcessBrowserTest {
       total_height_in_pixels += height_in_pixels;
       gfx::Rect rect(width_in_pixels, height_in_pixels);
       PdfRenderSettings settings(rect, gfx::Point(0, 0), gfx::Size(kDpi, kDpi),
-                                 true, PdfRenderSettings::Mode::NORMAL);
+                                 /*autorotate=*/false,
+                                 /*use_color=*/true,
+                                 PdfRenderSettings::Mode::NORMAL);
 
       int int_max = std::numeric_limits<int>::max();
       if (settings.area.width() > int_max / kColorChannels ||
@@ -386,7 +388,8 @@ class PrintPreviewPdfGeneratedBrowserTest : public InProcessBrowserTest {
       ASSERT_TRUE(chrome_pdf::RenderPDFPageToBitmap(
           pdf_data.data(), pdf_data.size(), i, page_bitmap_data.data(),
           settings.area.size().width(), settings.area.size().height(),
-          settings.dpi.width(), settings.dpi.height(), settings.autorotate));
+          settings.dpi.width(), settings.dpi.height(), settings.autorotate,
+          settings.use_color));
       FillPng(&page_bitmap_data, width_in_pixels, max_width_in_pixels,
               settings.area.size().height());
       bitmap_data.insert(bitmap_data.end(),

@@ -62,6 +62,7 @@ void CastContentWindowAndroid::CreateWindowForWebContents(
     content::WebContents* web_contents,
     CastWindowManager* /* window_manager */,
     bool /* is_visible */,
+    CastWindowManager::WindowId /* z_order */,
     VisibilityPriority visibility_priority) {
   DCHECK(web_contents);
   JNIEnv* env = base::android::AttachCurrentThread();
@@ -69,7 +70,14 @@ void CastContentWindowAndroid::CreateWindowForWebContents(
       web_contents->GetJavaWebContents();
 
   Java_CastContentWindowAndroid_createWindowForWebContents(
-      env, java_window_, java_web_contents, static_cast<int>(visibility_priority));
+      env, java_window_, java_web_contents,
+      static_cast<int>(visibility_priority));
+}
+
+void CastContentWindowAndroid::EnableTouchInput(bool enabled) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_CastContentWindowAndroid_enableTouchInput(
+      env, java_window_, static_cast<jboolean>(enabled));
 }
 
 void CastContentWindowAndroid::OnActivityStopped(
@@ -91,8 +99,13 @@ void CastContentWindowAndroid::OnKeyDown(
 void CastContentWindowAndroid::RequestVisibility(
     VisibilityPriority visibility_priority) {
   JNIEnv* env = base::android::AttachCurrentThread();
-  Java_CastContentWindowAndroid_requestVisibilityPriority(env, java_window_,
-                                                          static_cast<int>(visibility_priority));
+  Java_CastContentWindowAndroid_requestVisibilityPriority(
+      env, java_window_, static_cast<int>(visibility_priority));
+}
+
+void CastContentWindowAndroid::NotifyVisibilityChange(
+    VisibilityType visibility_type) {
+  delegate_->OnVisibilityChange(visibility_type);
 }
 
 void CastContentWindowAndroid::RequestMoveOut() {
@@ -111,7 +124,7 @@ void CastContentWindowAndroid::OnVisibilityChange(
     JNIEnv* env,
     const base::android::JavaParamRef<jobject>& jcaller,
     int visibility_type) {
-  delegate_->OnVisibilityChange(static_cast<VisibilityType>(visibility_type));
+  NotifyVisibilityChange(static_cast<VisibilityType>(visibility_type));
 }
 
 base::android::ScopedJavaLocalRef<jstring> CastContentWindowAndroid::GetId(

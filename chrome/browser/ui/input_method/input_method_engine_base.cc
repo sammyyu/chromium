@@ -208,13 +208,12 @@ bool InputMethodEngineBase::SetComposition(
        segment != segments.end(); ++segment) {
     ui::ImeTextSpan ime_text_span;
 
+    ime_text_span.underline_color = SK_ColorTRANSPARENT;
     switch (segment->style) {
       case SEGMENT_STYLE_UNDERLINE:
-        ime_text_span.underline_color = SK_ColorBLACK;
         ime_text_span.thickness = ui::ImeTextSpan::Thickness::kThin;
         break;
       case SEGMENT_STYLE_DOUBLE_UNDERLINE:
-        ime_text_span.underline_color = SK_ColorBLACK;
         ime_text_span.thickness = ui::ImeTextSpan::Thickness::kThick;
         break;
       case SEGMENT_STYLE_NO_UNDERLINE:
@@ -293,6 +292,7 @@ bool InputMethodEngineBase::DeleteSurroundingText(int context_id,
 
 void InputMethodEngineBase::SetCompositionBounds(
     const std::vector<gfx::Rect>& bounds) {
+  composition_bounds_ = bounds;
   observer_->OnCompositionBoundsChanged(bounds);
 }
 
@@ -307,8 +307,8 @@ void InputMethodEngineBase::FocusIn(
   ++next_context_id_;
 
   observer_->OnFocus(ui::IMEEngineHandlerInterface::InputContext(
-      context_id_, input_context.type, input_context.mode,
-      input_context.flags));
+      context_id_, input_context.type, input_context.mode, input_context.flags,
+      input_context.focus_reason, input_context.should_do_learning));
 }
 
 void InputMethodEngineBase::FocusOut() {

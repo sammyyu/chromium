@@ -7,13 +7,13 @@
 #include "base/bind.h"
 #include "base/memory/ptr_util.h"
 #include "build/build_config.h"
-#include "media/gpu/features.h"
+#include "media/gpu/buildflags.h"
 #include "media/gpu/gpu_video_accelerator_util.h"
 
 #if BUILDFLAG(USE_V4L2_CODEC)
 #include "media/gpu/v4l2/v4l2_video_encode_accelerator.h"
 #endif
-#if defined(OS_ANDROID) && BUILDFLAG(ENABLE_WEBRTC)
+#if defined(OS_ANDROID)
 #include "media/gpu/android/android_video_encode_accelerator.h"
 #endif
 #if defined(OS_MACOSX)
@@ -48,7 +48,7 @@ std::unique_ptr<VideoEncodeAccelerator> CreateVaapiVEA() {
 }
 #endif
 
-#if defined(OS_ANDROID) && BUILDFLAG(ENABLE_WEBRTC)
+#if defined(OS_ANDROID)
 std::unique_ptr<VideoEncodeAccelerator> CreateAndroidVEA() {
   return base::WrapUnique<VideoEncodeAccelerator>(
       new AndroidVideoEncodeAccelerator());
@@ -92,7 +92,7 @@ std::vector<VEAFactoryFunction> GetVEAFactoryFunctions(
 #if BUILDFLAG(USE_VAAPI)
   vea_factory_functions.push_back(base::BindRepeating(&CreateVaapiVEA));
 #endif
-#if defined(OS_ANDROID) && BUILDFLAG(ENABLE_WEBRTC)
+#if defined(OS_ANDROID)
   vea_factory_functions.push_back(base::BindRepeating(&CreateAndroidVEA));
 #endif
 #if defined(OS_MACOSX)

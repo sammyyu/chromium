@@ -41,7 +41,9 @@ bool ShouldMergeStackMappings(const MemoryMap::Mapping& stack_mapping,
                               const MemoryMap::Mapping& adj_mapping) {
   DCHECK(stack_mapping.readable);
   return adj_mapping.readable && stack_mapping.device == adj_mapping.device &&
-         stack_mapping.inode == adj_mapping.inode;
+         stack_mapping.inode == adj_mapping.inode &&
+         (stack_mapping.name == adj_mapping.name ||
+          stack_mapping.name.empty() || adj_mapping.name.empty());
 }
 
 }  // namespace
@@ -98,10 +100,18 @@ void ProcessReaderLinux::Thread::InitializeStack(ProcessReaderLinux* reader) {
 #elif defined(ARCH_CPU_ARM_FAMILY)
   stack_pointer = reader->Is64Bit() ? thread_info.thread_context.t64.sp
                                     : thread_info.thread_context.t32.sp;
+#elif defined(ARCH_CPU_MIPS_FAMILY)
+  stack_pointer = reader->Is64Bit() ? thread_info.thread_context.t64.regs[29]
+                                    : thread_info.thread_context.t32.regs[29];
 #else
 #error Port.
 #endif
+  InitializeStackFromSP(reader, stack_pointer);
+}
 
+void ProcessReaderLinux::Thread::InitializeStackFromSP(
+    ProcessReaderLinux* reader,
+    LinuxVMAddress stack_pointer) {
   const MemoryMap* memory_map = reader->GetMemoryMap();
 
   // If we can't find the mapping, it's probably a bad stack pointer
@@ -182,7 +192,6 @@ ProcessReaderLinux::ProcessReaderLinux()
       threads_(),
       modules_(),
       elf_readers_(),
-      process_memory_(),
       is_64_bit_(false),
       initialized_threads_(false),
       initialized_modules_(false),
@@ -199,12 +208,7 @@ bool ProcessReaderLinux::Initialize(PtraceConnection* connection) {
     return false;
   }
 
-  pid_t pid = connection->GetProcessID();
-  if (!memory_map_.Initialize(pid)) {
-    return false;
-  }
-
-  if (!process_memory_.Initialize(pid)) {
+  if (!memory_map_.Initialize(connection_)) {
     return false;
   }
 
@@ -273,6 +277,7 @@ const std::vector<ProcessReaderLinux::Module>& ProcessReaderLinux::Modules() {
 
 void ProcessReaderLinux::InitializeThreads() {
   DCHECK(threads_.empty());
+  initialized_threads_ = true;
 
   pid_t pid = ProcessID();
   if (pid == getpid()) {
@@ -330,9 +335,10 @@ void ProcessReaderLinux::InitializeThreads() {
 
 void ProcessReaderLinux::InitializeModules() {
   INITIALIZATION_STATE_DCHECK_VALID(initialized_);
+  initialized_modules_ = true;
 
   AuxiliaryVector aux;
-  if (!aux.Initialize(ProcessID(), is_64_bit_)) {
+  if (!aux.Initialize(connection_)) {
     return;
   }
 

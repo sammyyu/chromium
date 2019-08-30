@@ -10,6 +10,7 @@
 
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
+#include "base/memory/weak_ptr.h"
 #include "base/scoped_observer.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/timer/timer.h"
@@ -68,9 +69,6 @@ class PeopleHandler : public SettingsPageUIHandler,
   explicit PeopleHandler(Profile* profile);
   ~PeopleHandler() override;
 
-  // Initializes the sync setup flow and shows the setup UI.
-  void OpenSyncSetup();
-
   // Terminates the sync setup flow.
   void CloseSyncSetup();
 
@@ -83,9 +81,26 @@ class PeopleHandler : public SettingsPageUIHandler,
                            DisplayConfigureWithEngineDisabledAndCancel);
   FRIEND_TEST_ALL_PREFIXES(
       PeopleHandlerTest,
+      DisplayConfigureWithEngineDisabledAndCancelAfterSigninSuccess);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest,
+                           DisplayConfigureWithEngineDisabledAndSigninFailed);
+  FRIEND_TEST_ALL_PREFIXES(
+      PeopleHandlerTest,
       DisplayConfigureWithEngineDisabledAndSyncStartupCompleted);
   FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, HandleSetupUIWhenSyncDisabled);
   FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, SelectCustomEncryption);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest,
+                           ShowSetupCustomPassphraseRequired);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, ShowSetupEncryptAll);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, ShowSetupEncryptAllDisallowed);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, ShowSetupManuallySyncAll);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest,
+                           ShowSetupOldGaiaPassphraseRequired);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, ShowSetupSyncEverything);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest,
+                           ShowSetupSyncForAllTypesIndividually);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, ShowSigninOnAuthError);
+  FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, ShowSyncSetup);
   FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, ShowSyncSetupWhenNotSignedIn);
   FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, SuccessfullySetPassphrase);
   FRIEND_TEST_ALL_PREFIXES(PeopleHandlerTest, TestSyncEverything);
@@ -153,11 +168,13 @@ class PeopleHandler : public SettingsPageUIHandler,
   void OnDidClosePage(const base::ListValue* args);
   void HandleSetDatatypes(const base::ListValue* args);
   void HandleSetEncryption(const base::ListValue* args);
-  void HandleSetSyncEverything(const base::ListValue* args);
   void HandleShowSetupUI(const base::ListValue* args);
   void HandleAttemptUserExit(const base::ListValue* args);
+#if defined(OS_CHROMEOS)
+  void HandleRequestPinLoginState(const base::ListValue* args);
+#endif
   void HandleStartSignin(const base::ListValue* args);
-  void HandleStopSyncing(const base::ListValue* args);
+  void HandleSignout(const base::ListValue* args);
   void HandleGetSyncStatus(const base::ListValue* args);
   void HandleManageOtherPeople(const base::ListValue* args);
 
@@ -169,6 +186,10 @@ class PeopleHandler : public SettingsPageUIHandler,
   // This function is virtual so that tests can override.
   virtual void DisplayGaiaLoginInNewTabOrWindow(
       signin_metrics::AccessPoint access_point);
+#endif
+
+#if defined(OS_CHROMEOS)
+  void OnPinLoginAvailable(bool is_available);
 #endif
 
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
@@ -197,6 +218,9 @@ class PeopleHandler : public SettingsPageUIHandler,
 
   // Suppresses any further signin promos, since the user has signed in once.
   void MarkFirstSetupComplete();
+
+  // True if profile needs authentication before sync can run.
+  bool IsProfileAuthNeededOrHasErrors();
 
   // If we're directly loading the sync setup page, we acquire a
   // SetupInProgressHandle early in order to prevent a lapse in
@@ -236,6 +260,10 @@ class PeopleHandler : public SettingsPageUIHandler,
 #if BUILDFLAG(ENABLE_DICE_SUPPORT)
   ScopedObserver<AccountTrackerService, PeopleHandler>
       account_tracker_observer_;
+#endif
+
+#if defined(OS_CHROMEOS)
+  base::WeakPtrFactory<PeopleHandler> weak_factory_{this};
 #endif
 
   DISALLOW_COPY_AND_ASSIGN(PeopleHandler);

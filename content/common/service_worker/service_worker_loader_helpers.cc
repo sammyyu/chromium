@@ -92,6 +92,7 @@ void ServiceWorkerLoaderHelpers::SaveResponseInfo(
   out_head->was_fallback_required_by_service_worker = false;
   out_head->url_list_via_service_worker = response.url_list;
   out_head->response_type_via_service_worker = response.response_type;
+  out_head->response_time = response.response_time;
   out_head->is_in_cache_storage = response.is_in_cache_storage;
   out_head->cache_storage_cache_name = response.cache_storage_cache_name;
   out_head->cors_exposed_header_names = response.cors_exposed_header_names;
@@ -120,7 +121,8 @@ ServiceWorkerLoaderHelpers::ComputeRedirectInfo(
       original_request.referrer_policy,
       network::ComputeReferrer(original_request.referrer),
       response_head.headers.get(), response_head.headers->response_code(),
-      original_request.url.Resolve(new_location), token_binding_negotiated);
+      original_request.url.Resolve(new_location), false,
+      token_binding_negotiated);
 }
 
 int ServiceWorkerLoaderHelpers::ReadBlobResponseBody(
@@ -154,52 +156,6 @@ int ServiceWorkerLoaderHelpers::ReadBlobResponseBody(
   }
   *handle_out = std::move(data_pipe.consumer_handle);
   return net::OK;
-}
-
-// static
-scoped_refptr<network::ResourceRequestBody>
-ServiceWorkerLoaderHelpers::CloneResourceRequestBody(
-    const network::ResourceRequestBody* body) {
-  auto clone = base::MakeRefCounted<network::ResourceRequestBody>();
-
-  clone->set_identifier(body->identifier());
-  clone->set_contains_sensitive_info(body->contains_sensitive_info());
-  for (const network::DataElement& element : *body->elements()) {
-    switch (element.type()) {
-      case network::DataElement::TYPE_UNKNOWN:
-        NOTREACHED();
-        break;
-      case network::DataElement::TYPE_DATA_PIPE: {
-        network::mojom::DataPipeGetterPtrInfo clone_ptr_info;
-        element.data_pipe()->Clone(mojo::MakeRequest(&clone_ptr_info));
-        network::mojom::DataPipeGetterPtr clone_ptr(std::move(clone_ptr_info));
-        clone->AppendDataPipe(std::move(clone_ptr));
-        break;
-      }
-      case network::DataElement::TYPE_RAW_FILE:
-        clone->AppendRawFileRange(element.file().Duplicate(), element.path(),
-                                  element.offset(), element.length(),
-                                  element.expected_modification_time());
-        break;
-      case network::DataElement::TYPE_CHUNKED_DATA_PIPE:
-        NOTREACHED() << "There should be no chunked data pipes going through "
-                        "ServiceWorker";
-        break;
-      case network::DataElement::TYPE_BLOB:
-        NOTREACHED() << "There should be no blob elements in NetworkService";
-        break;
-      case network::DataElement::TYPE_FILE:
-        clone->AppendFileRange(element.path(), element.offset(),
-                               element.length(),
-                               element.expected_modification_time());
-        break;
-      case network::DataElement::TYPE_BYTES:
-        clone->AppendBytes(element.bytes(), element.length());
-        break;
-    }
-  }
-
-  return clone;
 }
 
 }  // namespace content

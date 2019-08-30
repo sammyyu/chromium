@@ -7,7 +7,6 @@
 #include <vector>
 
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/test/motion_event_test_utils.h"
@@ -115,6 +114,12 @@ class TouchSelectionControllerTest : public testing::Test,
   void EnableLongPressDragSelection() {
     TouchSelectionController::Config config = DefaultConfig();
     config.enable_longpress_drag_selection = true;
+    controller_.reset(new TouchSelectionController(this, config));
+  }
+
+  void SetHideActiveHandle(bool hide) {
+    TouchSelectionController::Config config = DefaultConfig();
+    config.hide_active_handle = hide;
     controller_.reset(new TouchSelectionController(this, config));
   }
 
@@ -1163,6 +1168,51 @@ TEST_F(TouchSelectionControllerTest, RectBetweenBounds) {
   EXPECT_EQ(gfx::RectF(), controller().GetRectBetweenBounds());
 }
 
+TEST_F(TouchSelectionControllerTest, TouchHandleHeight) {
+  OnLongPressEvent();
+  SetDraggingEnabled(true);
+
+  gfx::RectF start_rect(5, 5, 0, 10);
+  gfx::RectF end_rect(50, 5, 0, 10);
+
+  // Handle height should be zero when there is no selection/ insertion.
+  EXPECT_EQ(0.f, controller().GetTouchHandleHeight());
+
+  // Insertion case - Handle shown.
+  ChangeInsertion(start_rect, true);
+  EXPECT_THAT(GetAndResetEvents(), ElementsAre(INSERTION_HANDLE_SHOWN));
+  EXPECT_NE(0.f, controller().GetTouchHandleHeight());
+
+  // Insertion case - Handle moved.
+  start_rect.Offset(1, 0);
+  ChangeInsertion(start_rect, true);
+  EXPECT_THAT(GetAndResetEvents(), ElementsAre(INSERTION_HANDLE_MOVED));
+  EXPECT_NE(0.f, controller().GetTouchHandleHeight());
+
+  ClearInsertion();
+  EXPECT_THAT(GetAndResetEvents(), ElementsAre(INSERTION_HANDLE_CLEARED));
+  EXPECT_EQ(0.f, controller().GetTouchHandleHeight());
+
+  // Selection case - Start and End are visible.
+  ChangeSelection(start_rect, true, end_rect, true);
+  ASSERT_THAT(GetAndResetEvents(), ElementsAre(SELECTION_HANDLES_SHOWN));
+  EXPECT_NE(0.f, controller().GetTouchHandleHeight());
+
+  // Selection case - Only Start is visible.
+  ChangeSelection(start_rect, true, end_rect, false);
+  ASSERT_THAT(GetAndResetEvents(), ElementsAre(SELECTION_HANDLES_MOVED));
+  EXPECT_NE(0.f, controller().GetTouchHandleHeight());
+
+  // Selection case - Only End is visible.
+  ChangeSelection(start_rect, false, end_rect, true);
+  ASSERT_THAT(GetAndResetEvents(), ElementsAre(SELECTION_HANDLES_MOVED));
+  EXPECT_NE(0.f, controller().GetTouchHandleHeight());
+
+  ClearSelection();
+  ASSERT_THAT(GetAndResetEvents(), ElementsAre(SELECTION_HANDLES_CLEARED));
+  EXPECT_EQ(0.f, controller().GetTouchHandleHeight());
+}
+
 TEST_F(TouchSelectionControllerTest, SelectionNoOrientationChangeWhenSwapped) {
   TouchSelectionControllerTestApi test_controller(&controller());
   base::TimeTicks event_time = base::TimeTicks::Now();
@@ -1455,6 +1505,150 @@ TEST_F(TouchSelectionControllerTest, SelectionUpdateDragPosition) {
   event = MockMotionEvent(MockMotionEvent::Action::UP, event_time, 45, 5);
   EXPECT_TRUE(controller().WillHandleTouchEvent(event));
   EXPECT_THAT(GetAndResetEvents(), ElementsAre(SELECTION_HANDLE_DRAG_STOPPED));
+}
+
+TEST_F(TouchSelectionControllerTest, NoHideActiveInsertionHandle) {
+  SetHideActiveHandle(false);
+  TouchSelectionControllerTestApi test_controller(&controller());
+
+  base::TimeTicks event_time = base::TimeTicks::Now();
+  float line_height = 10.f;
+  gfx::RectF insertion_rect(10, 0, 0, line_height);
+  bool visible = true;
+  OnTapEvent();
+
+  ChangeInsertion(insertion_rect, visible);
+  EXPECT_THAT(GetAndResetEvents(), ElementsAre(INSERTION_HANDLE_SHOWN));
+
+  SetDraggingEnabled(true);
+  EXPECT_EQ(1.f, test_controller.GetInsertionHandleAlpha());
+  MockMotionEvent event(MockMotionEvent::Action::DOWN, event_time, 10, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(1.f, test_controller.GetInsertionHandleAlpha());
+}
+
+TEST_F(TouchSelectionControllerTest, HideActiveInsertionHandle) {
+  SetHideActiveHandle(true);
+  TouchSelectionControllerTestApi test_controller(&controller());
+
+  base::TimeTicks event_time = base::TimeTicks::Now();
+  float line_height = 10.f;
+  gfx::RectF insertion_rect(10, 0, 0, line_height);
+  bool visible = true;
+  OnTapEvent();
+
+  ChangeInsertion(insertion_rect, visible);
+  EXPECT_THAT(GetAndResetEvents(), ElementsAre(INSERTION_HANDLE_SHOWN));
+
+  SetDraggingEnabled(true);
+  EXPECT_EQ(1.f, test_controller.GetInsertionHandleAlpha());
+  MockMotionEvent event(MockMotionEvent::Action::DOWN, event_time, 10, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(0.f, test_controller.GetInsertionHandleAlpha());
+
+  event = MockMotionEvent(MockMotionEvent::Action::MOVE, event_time, 10, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(0.f, test_controller.GetInsertionHandleAlpha());
+
+  event_time += base::TimeDelta::FromMilliseconds(2 * kDefaultTapTimeoutMs);
+  // UP will reset the alpha to visible.
+  event = MockMotionEvent(MockMotionEvent::Action::UP, event_time, 0, 0);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(1.f, test_controller.GetInsertionHandleAlpha());
+}
+
+TEST_F(TouchSelectionControllerTest, NoHideActiveSelectionHandle) {
+  SetHideActiveHandle(false);
+  TouchSelectionControllerTestApi test_controller(&controller());
+
+  base::TimeTicks event_time = base::TimeTicks::Now();
+  float line_height = 10.f;
+  gfx::RectF start_rect(10, 0, 0, line_height);
+  gfx::RectF end_rect(50, 0, 0, line_height);
+  bool visible = true;
+  OnLongPressEvent();
+
+  ChangeSelection(start_rect, visible, end_rect, visible);
+
+  // Start handle.
+  SetDraggingEnabled(true);
+  EXPECT_EQ(1.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(1.f, test_controller.GetEndAlpha());
+  MockMotionEvent event(MockMotionEvent::Action::DOWN, event_time, 10, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(1.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(1.f, test_controller.GetEndAlpha());
+
+  event = MockMotionEvent(MockMotionEvent::Action::UP, event_time, 10, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(1.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(1.f, test_controller.GetEndAlpha());
+
+  // End handle.
+  event = MockMotionEvent(MockMotionEvent::Action::DOWN, event_time, 50, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(1.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(1.f, test_controller.GetEndAlpha());
+
+  event_time += base::TimeDelta::FromMilliseconds(2 * kDefaultTapTimeoutMs);
+  event = MockMotionEvent(MockMotionEvent::Action::UP, event_time, 50, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(1.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(1.f, test_controller.GetEndAlpha());
+}
+
+TEST_F(TouchSelectionControllerTest, HideActiveSelectionHandle) {
+  SetHideActiveHandle(true);
+  TouchSelectionControllerTestApi test_controller(&controller());
+
+  base::TimeTicks event_time = base::TimeTicks::Now();
+  float line_height = 10.f;
+  gfx::RectF start_rect(10, 0, 0, line_height);
+  gfx::RectF end_rect(50, 0, 0, line_height);
+  bool visible = true;
+  OnLongPressEvent();
+
+  ChangeSelection(start_rect, visible, end_rect, visible);
+
+  // Start handle.
+  SetDraggingEnabled(true);
+  EXPECT_EQ(1.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(1.f, test_controller.GetEndAlpha());
+  MockMotionEvent event(MockMotionEvent::Action::DOWN, event_time, 10, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(0.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(1.f, test_controller.GetEndAlpha());
+
+  event = MockMotionEvent(MockMotionEvent::Action::MOVE, event_time, 10, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(0.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(1.f, test_controller.GetEndAlpha());
+
+  event_time += base::TimeDelta::FromMilliseconds(2 * kDefaultTapTimeoutMs);
+  // UP will reset alpha to be visible.
+  event = MockMotionEvent(MockMotionEvent::Action::UP, event_time, 10, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(1.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(1.f, test_controller.GetEndAlpha());
+
+  // End handle.
+  event = MockMotionEvent(MockMotionEvent::Action::DOWN, event_time, 50, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(1.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(0.f, test_controller.GetEndAlpha());
+
+  event = MockMotionEvent(MockMotionEvent::Action::MOVE, event_time, 50, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+
+  EXPECT_EQ(1.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(0.f, test_controller.GetEndAlpha());
+
+  event_time += base::TimeDelta::FromMilliseconds(2 * kDefaultTapTimeoutMs);
+  // UP will reset alpha to be visible.
+  event = MockMotionEvent(MockMotionEvent::Action::UP, event_time, 50, 5);
+  EXPECT_TRUE(controller().WillHandleTouchEvent(event));
+  EXPECT_EQ(1.f, test_controller.GetStartAlpha());
+  EXPECT_EQ(1.f, test_controller.GetEndAlpha());
 }
 
 }  // namespace ui

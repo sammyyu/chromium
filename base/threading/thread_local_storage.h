@@ -14,13 +14,33 @@
 
 #if defined(OS_WIN)
 #include "base/win/windows_types.h"
-#elif defined(OS_POSIX)
+#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
 #include <pthread.h>
 #endif
 
+namespace heap_profiling {
+class ScopedAllowAlloc;
+}  // namespace heap_profiling
+
+namespace ui {
+class TLSDestructionCheckerForX11;
+}
+
 namespace base {
 
+class SamplingHeapProfiler;
+
+namespace debug {
+class GlobalActivityTracker;
+}  // namespace debug
+
+namespace trace_event {
+class MallocDumpProvider;
+}  // namespace trace_event
+
 namespace internal {
+
+class ThreadLocalStorageTestInternal;
 
 // WARNING: You should *NOT* use this class directly.
 // PlatformThreadLocalStorage is a low-level abstraction of the OS's TLS
@@ -34,7 +54,7 @@ class BASE_EXPORT PlatformThreadLocalStorage {
 #if defined(OS_WIN)
   typedef unsigned long TLSKey;
   enum : unsigned { TLS_KEY_OUT_OF_INDEXES = TLS_OUT_OF_INDEXES };
-#elif defined(OS_POSIX)
+#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
   typedef pthread_key_t TLSKey;
   // The following is a "reserved key" which is used in our generic Chromium
   // ThreadLocalStorage implementation.  We expect that an OS will not return
@@ -59,7 +79,7 @@ class BASE_EXPORT PlatformThreadLocalStorage {
   static void* GetTLSValue(TLSKey key) {
 #if defined(OS_WIN)
     return TlsGetValue(key);
-#elif defined(OS_POSIX)
+#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
     return pthread_getspecific(key);
 #endif
   }
@@ -76,7 +96,7 @@ class BASE_EXPORT PlatformThreadLocalStorage {
   // Since Windows which doesn't support TLS destructor, the implementation
   // should use GetTLSValue() to retrieve the value of TLS slot.
   static void OnThreadExit();
-#elif defined(OS_POSIX)
+#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
   // |Value| is the data stored in TLS slot, The implementation can't use
   // GetTLSValue() to retrieve the value of slot as it has already been reset
   // in Posix.
@@ -90,7 +110,6 @@ class BASE_EXPORT PlatformThreadLocalStorage {
 // an API for portability.
 class BASE_EXPORT ThreadLocalStorage {
  public:
-
   // Prototype for the TLS destructor function, which can be optionally used to
   // cleanup thread local storage on thread exit.  'value' is the data that is
   // stored in thread local storage.
@@ -134,6 +153,22 @@ class BASE_EXPORT ThreadLocalStorage {
   };
 
  private:
+  // In most cases, most callers should not need access to HasBeenDestroyed().
+  // If you are working in code that runs during thread destruction, contact the
+  // base OWNERs for advice and then make a friend request.
+  //
+  // Returns |true| if Chrome's implementation of TLS has been destroyed during
+  // thread destruction. Attempting to call Slot::Get() during destruction is
+  // disallowed and will hit a DCHECK. Any code that relies on TLS during thread
+  // destruction must first check this method before calling Slot::Get().
+  friend class base::SamplingHeapProfiler;
+  friend class base::internal::ThreadLocalStorageTestInternal;
+  friend class base::trace_event::MallocDumpProvider;
+  friend class debug::GlobalActivityTracker;
+  friend class heap_profiling::ScopedAllowAlloc;
+  friend class ui::TLSDestructionCheckerForX11;
+  static bool HasBeenDestroyed();
+
   DISALLOW_COPY_AND_ASSIGN(ThreadLocalStorage);
 };
 

@@ -21,6 +21,7 @@
 #include "build/build_config.h"
 #include "chrome/browser/after_startup_task_utils.h"
 #include "chrome/browser/browser_process.h"
+#include "chrome/browser/chrome_browser_main.h"
 #include "chrome/browser/chrome_content_browser_client.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/devtools/devtools_window.h"
@@ -28,6 +29,7 @@
 #include "chrome/browser/lifetime/termination_notification.h"
 #include "chrome/browser/net/chrome_network_delegate.h"
 #include "chrome/browser/net/net_error_tab_helper.h"
+#include "chrome/browser/predictors/loading_predictor_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "chrome/browser/ui/browser.h"
@@ -65,6 +67,7 @@
 #include "ui/display/display_switches.h"
 
 #if defined(OS_MACOSX)
+#include "base/mac/foundation_util.h"
 #include "base/mac/scoped_nsautorelease_pool.h"
 #include "chrome/test/base/scoped_bundle_swizzler_mac.h"
 #endif
@@ -96,6 +99,10 @@
 #include "extensions/browser/extension_api_frame_id_map.h"
 #endif
 
+#if defined(TOOLKIT_VIEWS)
+#include "chrome/test/views/accessibility_checker.h"
+#endif
+
 namespace {
 
 // Passed as value of kTestType.
@@ -117,27 +124,29 @@ InProcessBrowserTest::InProcessBrowserTest()
 #endif  // OS_MACOSX
 {
 #if defined(OS_MACOSX)
+  base::mac::SetOverrideAmIBundled(true);
+
   // TODO(phajdan.jr): Make browser_tests self-contained on Mac, remove this.
   // Before we run the browser, we have to hack the path to the exe to match
   // what it would be if Chrome was running, because it is used to fork renderer
   // processes, on Linux at least (failure to do so will cause a browser_test to
   // be run instead of a renderer).
   base::FilePath chrome_path;
-  CHECK(PathService::Get(base::FILE_EXE, &chrome_path));
+  CHECK(base::PathService::Get(base::FILE_EXE, &chrome_path));
   chrome_path = chrome_path.DirName();
   chrome_path = chrome_path.Append(chrome::kBrowserProcessExecutablePath);
-  CHECK(PathService::Override(base::FILE_EXE, chrome_path));
+  CHECK(base::PathService::Override(base::FILE_EXE, chrome_path));
 #endif  // defined(OS_MACOSX)
 
   CreateTestServer(base::FilePath(FILE_PATH_LITERAL("chrome/test/data")));
   base::FilePath src_dir;
-  CHECK(PathService::Get(base::DIR_SOURCE_ROOT, &src_dir));
+  CHECK(base::PathService::Get(base::DIR_SOURCE_ROOT, &src_dir));
 
   // chrome::DIR_TEST_DATA isn't going to be setup until after we call
   // ContentMain. However that is after tests' constructors or SetUp methods,
   // which sometimes need it. So just override it.
-  CHECK(PathService::Override(chrome::DIR_TEST_DATA,
-                              src_dir.AppendASCII("chrome/test/data")));
+  CHECK(base::PathService::Override(chrome::DIR_TEST_DATA,
+                                    src_dir.AppendASCII("chrome/test/data")));
 
 #if defined(OS_MACOSX)
   bundle_swizzler_.reset(new ScopedBundleSwizzlerMac);
@@ -145,6 +154,10 @@ InProcessBrowserTest::InProcessBrowserTest()
 
 #if defined(OS_CHROMEOS)
   DefaultAshEventGeneratorDelegate::GetInstance();
+#endif
+
+#if defined(TOOLKIT_VIEWS)
+  accessibility_checker_ = std::make_unique<AccessibilityChecker>();
 #endif
 }
 
@@ -163,9 +176,12 @@ void InProcessBrowserTest::SetUp() {
   // here.
   command_line->AppendSwitch(switches::kDisableOfflineAutoReload);
 
-  // Turn off preconnects because they break the brittle python webserver;
-  // see http://crbug.com/60035.
-  scoped_feature_list_.InitAndDisableFeature(features::kNetworkPrediction);
+  // Turn off preconnects because it breaks some browser tests, see
+  // http://crbug.com/60035.
+  std::vector<base::Feature> enabled_features = {};
+  std::vector<base::Feature> disabled_features = {
+      features::kNetworkPrediction, predictors::kSpeculativePreconnectFeature};
+  scoped_feature_list_.InitWithFeatures(enabled_features, disabled_features);
 
   // Allow subclasses to change the command line before running any tests.
   SetUpCommandLine(command_line);
@@ -227,6 +243,11 @@ void InProcessBrowserTest::SetUp() {
   ChromeContentBrowserClient::SetDefaultQuotaSettingsForTesting(
       &quota_settings_);
 
+  // Redirect the default download directory to a temporary directory.
+  ASSERT_TRUE(default_download_dir_.CreateUniqueTempDir());
+  CHECK(base::PathService::Override(chrome::DIR_DEFAULT_DOWNLOADS,
+                                    default_download_dir_.GetPath()));
+
   BrowserTestBase::SetUp();
 }
 
@@ -246,7 +267,7 @@ void InProcessBrowserTest::SetUpDefaultCommandLine(
   // Explicitly set the path of the binary used for child processes, otherwise
   // they'll try to use browser_tests which doesn't contain ChromeMain.
   base::FilePath subprocess_path;
-  PathService::Get(base::FILE_EXE, &subprocess_path);
+  base::PathService::Get(base::FILE_EXE, &subprocess_path);
   // Recreate the real environment, run the helper within the app bundle.
   subprocess_path = subprocess_path.DirName().DirName();
   DCHECK_EQ(subprocess_path.BaseName().value(), "Contents");
@@ -327,6 +348,10 @@ void InProcessBrowserTest::CloseAllBrowsers() {
 #endif
 }
 
+void InProcessBrowserTest::RunUntilBrowserProcessQuits() {
+  std::move(run_loop_)->Run();
+}
+
 // TODO(alexmos): This function should expose success of the underlying
 // navigation to tests, which should make sure navigations succeed when
 // appropriate. See https://crbug.com/425335
@@ -341,10 +366,12 @@ void InProcessBrowserTest::AddTabAtIndexToBrowser(
   params.disposition = WindowOpenDisposition::NEW_FOREGROUND_TAB;
   Navigate(&params);
 
-  if (check_navigation_success)
-    content::WaitForLoadStop(params.target_contents);
-  else
-    content::WaitForLoadStopWithoutSuccessCheck(params.target_contents);
+  if (check_navigation_success) {
+    content::WaitForLoadStop(params.navigated_or_inserted_contents);
+  } else {
+    content::WaitForLoadStopWithoutSuccessCheck(
+        params.navigated_or_inserted_contents);
+  }
 }
 
 void InProcessBrowserTest::AddTabAtIndex(
@@ -437,7 +464,7 @@ base::CommandLine InProcessBrowserTest::GetCommandLineForRelaunch() {
   new_command_line.AppendSwitch(content::kLaunchAsBrowser);
 
   base::FilePath user_data_dir;
-  PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
+  base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir);
   new_command_line.AppendSwitchPath(switches::kUserDataDir, user_data_dir);
 
   for (base::CommandLine::SwitchMap::const_iterator iter = switches.begin();
@@ -450,6 +477,10 @@ base::CommandLine InProcessBrowserTest::GetCommandLineForRelaunch() {
 
 void InProcessBrowserTest::PreRunTestOnMainThread() {
   AfterStartupTaskUtils::SetBrowserStartupIsCompleteForTesting();
+
+  // Take the ChromeBrowserMainParts' RunLoop to run ourself, when we
+  // want to wait for the browser to exit.
+  run_loop_ = ChromeBrowserMainParts::TakeRunLoopForTest();
 
   // Pump startup related events.
   content::RunAllPendingInMessageLoop();
@@ -512,6 +543,7 @@ void InProcessBrowserTest::PostRunTestOnMainThread() {
   content::RunAllPendingInMessageLoop();
 
   QuitBrowsers();
+
   // BrowserList should be empty at this point.
   CHECK(BrowserList::GetInstance()->empty());
 }
@@ -535,7 +567,7 @@ void InProcessBrowserTest::QuitBrowsers() {
   // shut down properly.
   base::ThreadTaskRunnerHandle::Get()->PostTask(
       FROM_HERE, base::Bind(&chrome::AttemptExit));
-  content::RunMessageLoop();
+  RunUntilBrowserProcessQuits();
 
 #if defined(OS_MACOSX)
   // chrome::AttemptExit() will attempt to close all browsers by deleting

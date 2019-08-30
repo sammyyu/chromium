@@ -6,7 +6,6 @@
 
 #include <stddef.h>
 
-#include "base/memory/ptr_util.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "cc/animation/animation_host.h"
 #include "cc/layers/append_quads_data.h"
@@ -61,7 +60,7 @@ TEST(PictureLayerTest, NoTilesIfEmptyBounds) {
       FakeLayerTreeFrameSink::CreateSoftware();
   FakeLayerTreeHostImpl host_impl(
       LayerTreeSettings(), &impl_task_runner_provider, &task_graph_runner);
-  host_impl.InitializeRenderer(layer_tree_frame_sink.get());
+  host_impl.InitializeFrameSink(layer_tree_frame_sink.get());
   host_impl.CreatePendingTree();
   std::unique_ptr<FakePictureLayerImpl> layer_impl =
       FakePictureLayerImpl::Create(host_impl.pending_tree(), 1);
@@ -102,7 +101,7 @@ TEST(PictureLayerTest, InvalidateRasterAfterUpdate) {
   FakeLayerTreeHostImpl host_impl(
       layer_tree_settings, &impl_task_runner_provider, &task_graph_runner);
   host_impl.SetVisible(true);
-  host_impl.InitializeRenderer(layer_tree_frame_sink.get());
+  host_impl.InitializeFrameSink(layer_tree_frame_sink.get());
   host_impl.CreatePendingTree();
   host_impl.pending_tree()->SetRootLayerForTesting(
       FakePictureLayerImpl::Create(host_impl.pending_tree(), 1));
@@ -143,7 +142,7 @@ TEST(PictureLayerTest, InvalidateRasterWithoutUpdate) {
   FakeLayerTreeHostImpl host_impl(
       layer_tree_settings, &impl_task_runner_provider, &task_graph_runner);
   host_impl.SetVisible(true);
-  host_impl.InitializeRenderer(layer_tree_frame_sink.get());
+  host_impl.InitializeFrameSink(layer_tree_frame_sink.get());
   host_impl.CreatePendingTree();
   host_impl.pending_tree()->SetRootLayerForTesting(
       FakePictureLayerImpl::Create(host_impl.pending_tree(), 1));
@@ -188,7 +187,7 @@ TEST(PictureLayerTest, ClearVisibleRectWhenNoTiling) {
   FakeLayerTreeHostImpl host_impl(
       layer_tree_settings, &impl_task_runner_provider, &task_graph_runner);
   host_impl.SetVisible(true);
-  EXPECT_TRUE(host_impl.InitializeRenderer(layer_tree_frame_sink.get()));
+  EXPECT_TRUE(host_impl.InitializeFrameSink(layer_tree_frame_sink.get()));
 
   host_impl.CreatePendingTree();
   host_impl.pending_tree()->SetRootLayerForTesting(

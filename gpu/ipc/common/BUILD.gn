@@ -29,18 +29,6 @@ group("command_buffer_traits") {
   }
 }
 
-group("gpu_preferences_util") {
-  if (is_component_build) {
-    public_deps = [
-      "//gpu:gpu_util",
-    ]
-  } else {
-    public_deps = [
-      ":gpu_preferences_util_sources",
-    ]
-  }
-}
-
 source_set("command_buffer_traits_sources") {
   # External code should depend on this via
   # //gpu/ipc/common:command_buffer_traits above rather than depending on this
@@ -79,6 +67,7 @@ source_set("ipc_common_sources") {
   sources = [
     "flush_params.cc",
     "flush_params.h",
+    "gpu_client_ids.h",
     "gpu_memory_buffer_impl.cc",
     "gpu_memory_buffer_impl.h",
     "gpu_memory_buffer_impl_shared_memory.cc",
@@ -178,7 +167,6 @@ mojom("interfaces") {
     "dx_diag_node.mojom",
     "gpu_feature_info.mojom",
     "gpu_info.mojom",
-    "gpu_preferences.mojom",
     "mailbox.mojom",
     "mailbox_holder.mojom",
     "memory_stats.mojom",
@@ -187,8 +175,19 @@ mojom("interfaces") {
   ]
 
   public_deps = [
-    "//mojo/common:common_custom_types",
+    ":gpu_preferences_interface",
+    "//mojo/public/mojom/base",
     "//ui/gfx/geometry/mojo",
+  ]
+}
+
+mojom("gpu_preferences_interface") {
+  sources = [
+    "gpu_preferences.mojom",
+  ]
+
+  public_deps = [
+    "//mojo/public/mojom/base",
     "//ui/gfx/mojo",
   ]
 }
@@ -200,6 +199,7 @@ mojom("test_interfaces") {
   ]
 
   public_deps = [
+    ":gpu_preferences_interface",
     ":interfaces",
   ]
 }
@@ -218,20 +218,5 @@ source_set("struct_traits") {
     "//gpu/command_buffer/common",
     "//gpu/ipc/common",
     "//mojo/public/cpp/bindings:bindings",
-  ]
-}
-
-source_set("gpu_preferences_util_sources") {
-  # External code should depend on this via //gpu/ipc/gpu_preferences_util
-  # above rather than depending on this directly or the component build will
-  # break.
-  visibility = [ "//gpu/*" ]
-  sources = [
-    "gpu_preferences_util.cc",
-    "gpu_preferences_util.h",
-  ]
-  configs += [ "//gpu:gpu_util_implementation" ]
-  deps = [
-    ":interfaces",
   ]
 }

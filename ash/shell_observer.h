@@ -65,9 +65,11 @@ class ASH_EXPORT ShellObserver {
   // Called after split view mode has ended.
   virtual void OnSplitViewModeEnded() {}
 
-  // Called when keyboard is activated/deactivated in |root_window|.
-  virtual void OnVirtualKeyboardStateChanged(bool activated,
-                                             aura::Window* root_window) {}
+  // Called when dictation is activated.
+  virtual void OnDictationStarted() {}
+
+  // Called when dicatation is ended.
+  virtual void OnDictationEnded() {}
 
   // Called when a new KeyboardController is created.
   virtual void OnKeyboardControllerCreated() {}

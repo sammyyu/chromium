@@ -27,9 +27,7 @@
 #include "components/download/public/common/download_item.h"
 #include "components/history/core/browser/history_service.h"
 #include "components/safe_browsing/db/database_manager.h"
-#include "net/url_request/url_fetcher.h"
-#include "net/url_request/url_fetcher_delegate.h"
-#include "net/url_request/url_request_context_getter.h"
+#include "content/public/browser/browser_thread.h"
 #include "url/gurl.h"
 
 #if defined(OS_MACOSX)
@@ -39,12 +37,15 @@
 
 using content::BrowserThread;
 
+namespace network {
+class SimpleURLLoader;
+}
+
 namespace safe_browsing {
 
 class CheckClientDownloadRequest
     : public base::RefCountedThreadSafe<CheckClientDownloadRequest,
                                         BrowserThread::DeleteOnUIThread>,
-      public net::URLFetcherDelegate,
       public download::DownloadItem::Observer {
  public:
   CheckClientDownloadRequest(
@@ -56,9 +57,12 @@ class CheckClientDownloadRequest
   bool ShouldSampleUnsupportedFile(const base::FilePath& filename);
   void Start();
   void StartTimeout();
-  void Cancel();
+
+  // |download_destroyed| indicates if cancellation is due to the destruction of
+  // the download item.
+  void Cancel(bool download_destroyed);
   void OnDownloadDestroyed(download::DownloadItem* download) override;
-  void OnURLFetchComplete(const net::URLFetcher* source) override;
+  void OnURLLoaderComplete(std::unique_ptr<std::string> response_body);
   static bool IsSupportedDownload(const download::DownloadItem& item,
                                   const base::FilePath& target_path,
                                   DownloadCheckResultReason* reason,
@@ -129,6 +133,9 @@ class CheckClientDownloadRequest
 
 #if defined(OS_MACOSX)
   std::unique_ptr<std::vector<uint8_t>> disk_image_signature_;
+  google::protobuf::RepeatedPtrField<
+      ClientDownloadRequest_DetachedCodeSignature>
+      detached_code_signatures_;
 #endif
 
   ClientDownloadRequest_SignatureInfo signature_info_;
@@ -140,7 +147,7 @@ class CheckClientDownloadRequest
   scoped_refptr<BinaryFeatureExtractor> binary_feature_extractor_;
   scoped_refptr<SafeBrowsingDatabaseManager> database_manager_;
   const bool pingback_enabled_;
-  std::unique_ptr<net::URLFetcher> fetcher_;
+  std::unique_ptr<network::SimpleURLLoader> loader_;
   scoped_refptr<SandboxedRarAnalyzer> rar_analyzer_;
   scoped_refptr<SandboxedZipAnalyzer> zip_analyzer_;
   base::TimeTicks rar_analysis_start_time_;

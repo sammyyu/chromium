@@ -46,67 +46,6 @@ std::unique_ptr<ProcessMetrics> ProcessMetrics::CreateProcessMetrics(
   return WrapUnique(new ProcessMetrics(process));
 }
 
-bool ProcessMetrics::GetMemoryBytes(size_t* private_bytes,
-                                    size_t* shared_bytes) const {
-  // PROCESS_MEMORY_COUNTERS_EX is not supported until XP SP2.
-  // GetProcessMemoryInfo() will simply fail on prior OS. So the requested
-  // information is simply not available. Hence, we will return 0 on unsupported
-  // OSes. Unlike most Win32 API, we don't need to initialize the "cb" member.
-  PROCESS_MEMORY_COUNTERS_EX pmcx;
-  if (private_bytes &&
-      GetProcessMemoryInfo(process_.Get(),
-                           reinterpret_cast<PROCESS_MEMORY_COUNTERS*>(&pmcx),
-                           sizeof(pmcx))) {
-    *private_bytes = pmcx.PrivateUsage;
-  }
-
-  if (shared_bytes) {
-    WorkingSetKBytes ws_usage;
-    if (!GetWorkingSetKBytes(&ws_usage))
-      return false;
-
-    *shared_bytes = ws_usage.shared * 1024;
-  }
-
-  return true;
-}
-
-void ProcessMetrics::GetCommittedKBytes(CommittedKBytes* usage) const {
-  MEMORY_BASIC_INFORMATION mbi = {0};
-  size_t committed_private = 0;
-  size_t committed_mapped = 0;
-  size_t committed_image = 0;
-  void* base_address = NULL;
-  while (VirtualQueryEx(process_.Get(), base_address, &mbi, sizeof(mbi)) ==
-         sizeof(mbi)) {
-    if (mbi.State == MEM_COMMIT) {
-      if (mbi.Type == MEM_PRIVATE) {
-        committed_private += mbi.RegionSize;
-      } else if (mbi.Type == MEM_MAPPED) {
-        committed_mapped += mbi.RegionSize;
-      } else if (mbi.Type == MEM_IMAGE) {
-        committed_image += mbi.RegionSize;
-      } else {
-        NOTREACHED();
-      }
-    }
-    void* new_base = (static_cast<BYTE*>(mbi.BaseAddress)) + mbi.RegionSize;
-    // Avoid infinite loop by weird MEMORY_BASIC_INFORMATION.
-    // If we query 64bit processes in a 32bit process, VirtualQueryEx()
-    // returns such data.
-    if (new_base <= base_address) {
-      usage->image = 0;
-      usage->mapped = 0;
-      usage->priv = 0;
-      return;
-    }
-    base_address = new_base;
-  }
-  usage->image = committed_image / 1024;
-  usage->mapped = committed_mapped / 1024;
-  usage->priv = committed_private / 1024;
-}
-
 namespace {
 
 class WorkingSetInformationBuffer {
@@ -189,65 +128,7 @@ class WorkingSetInformationBuffer {
 
 }  // namespace
 
-bool ProcessMetrics::GetWorkingSetKBytes(WorkingSetKBytes* ws_usage) const {
-  size_t ws_private = 0;
-  size_t ws_shareable = 0;
-  size_t ws_shared = 0;
-
-  DCHECK(ws_usage);
-  memset(ws_usage, 0, sizeof(*ws_usage));
-
-  WorkingSetInformationBuffer buffer;
-  if (!buffer.QueryPageEntries(process_.Get()))
-    return false;
-
-  size_t num_page_entries = buffer.GetPageEntryCount();
-  for (size_t i = 0; i < num_page_entries; i++) {
-    if (buffer->WorkingSetInfo[i].Shared) {
-      ws_shareable++;
-      if (buffer->WorkingSetInfo[i].ShareCount > 1)
-        ws_shared++;
-    } else {
-      ws_private++;
-    }
-  }
-
-  ws_usage->priv = ws_private * PAGESIZE_KB;
-  ws_usage->shareable = ws_shareable * PAGESIZE_KB;
-  ws_usage->shared = ws_shared * PAGESIZE_KB;
-
-  return true;
-}
-
-// This function calculates the proportional set size for a process.
-bool ProcessMetrics::GetProportionalSetSizeBytes(uint64_t* pss_bytes) const {
-  double ws_pss = 0.0;
-
-  WorkingSetInformationBuffer buffer;
-  if (!buffer.QueryPageEntries(process_.Get()))
-    return false;
-
-  size_t num_page_entries = buffer.GetPageEntryCount();
-  for (size_t i = 0; i < num_page_entries; i++) {
-    if (buffer->WorkingSetInfo[i].Shared &&
-        buffer->WorkingSetInfo[i].ShareCount > 0)
-      ws_pss += 1.0 / buffer->WorkingSetInfo[i].ShareCount;
-    else
-      ws_pss += 1.0;
-  }
-
-  *pss_bytes = static_cast<uint64_t>(ws_pss * GetPageSize());
-  return true;
-}
-
-static uint64_t FileTimeToUTC(const FILETIME& ftime) {
-  LARGE_INTEGER li;
-  li.LowPart = ftime.dwLowDateTime;
-  li.HighPart = ftime.dwHighDateTime;
-  return li.QuadPart;
-}
-
-double ProcessMetrics::GetPlatformIndependentCPUUsage() {
+TimeDelta ProcessMetrics::GetCumulativeCPUUsage() {
   FILETIME creation_time;
   FILETIME exit_time;
   FILETIME kernel_time;
@@ -258,43 +139,24 @@ double ProcessMetrics::GetPlatformIndependentCPUUsage() {
     // We don't assert here because in some cases (such as in the Task Manager)
     // we may call this function on a process that has just exited but we have
     // not yet received the notification.
-    return 0;
-  }
-  int64_t system_time = FileTimeToUTC(kernel_time) + FileTimeToUTC(user_time);
-  TimeTicks time = TimeTicks::Now();
-
-  if (last_system_time_ == 0) {
-    // First call, just set the last values.
-    last_system_time_ = system_time;
-    last_cpu_time_ = time;
-    return 0;
+    return TimeDelta();
   }
 
-  int64_t system_time_delta = system_time - last_system_time_;
-  // FILETIME is in 100-nanosecond units, so this needs microseconds times 10.
-  int64_t time_delta = (time - last_cpu_time_).InMicroseconds() * 10;
-  DCHECK_NE(0U, time_delta);
-  if (time_delta == 0)
-    return 0;
-
-
-  last_system_time_ = system_time;
-  last_cpu_time_ = time;
-
-  return static_cast<double>(system_time_delta * 100) / time_delta;
+  return TimeDelta::FromFileTime(kernel_time) +
+         TimeDelta::FromFileTime(user_time);
 }
 
 bool ProcessMetrics::GetIOCounters(IoCounters* io_counters) const {
   return GetProcessIoCounters(process_.Get(), io_counters) != FALSE;
 }
 
-ProcessMetrics::ProcessMetrics(ProcessHandle process) : last_system_time_(0) {
+ProcessMetrics::ProcessMetrics(ProcessHandle process) {
   if (process) {
-    HANDLE duplicate_handle;
+    HANDLE duplicate_handle = INVALID_HANDLE_VALUE;
     BOOL result = ::DuplicateHandle(::GetCurrentProcess(), process,
                                     ::GetCurrentProcess(), &duplicate_handle,
                                     PROCESS_QUERY_INFORMATION, FALSE, 0);
-    DCHECK(result);
+    DPCHECK(result);
     process_.Set(duplicate_handle);
   }
 }

@@ -24,7 +24,8 @@
       }
     </style>
     <div class="settings-box first two-line">
-      <div id="categoryLabel" class="start">
+      <div id="categoryLabel" class="start" on-click="categoryLabelClicked_"
+          actionable>
         [[computeHandlersDescription_(categoryEnabled)]]
       </div>
       <cr-toggle id="toggle" checked="{{categoryEnabled}}"
@@ -33,7 +34,7 @@
     </div>
 
     <template is="dom-repeat" items="[[protocols]]" as="protocol">
-      <div class="column-header">[[protocol.protocol]]</div>
+      <div class="column-header">[[protocol.protocol_display_name]]</div>
 
       <div class="list-frame menu-content vertical-list">
         <template is="dom-repeat" items="[[protocol.handlers]]">
@@ -42,7 +43,9 @@
             <div class="favicon-image" style$="[[computeSiteIcon(item.host)]]">
             </div>
             <div class="middle" >
-              <div class="protocol-host">[[item.host]]</div>
+              <div class="protocol-host">
+                <span class="url-directionality">[[item.host]]</span>
+              </div>
               <div class="secondary protocol-default"
                   hidden$="[[!item.is_default]]">
                 $i18n{handlerIsDefault}
@@ -57,7 +60,7 @@
       </div>
     </template>
 
-    <dialog is="cr-action-menu">
+    <cr-action-menu>
       <button slot="item" class="dropdown-item" on-click="onDefaultClick_"
           id="defaultButton" hidden$="[[actionMenuModel_.is_default]]">
         $i18n{handlerSetDefault}
@@ -66,7 +69,7 @@
           id="removeButton">
         $i18n{handlerRemove}
       </button>
-    </dialog>
+    </cr-action-menu>
 
     <template is="dom-if" if="[[ignoredProtocols.length]]">
       <div class="column-header">$i18n{siteSettingsBlocked}</div>
@@ -76,14 +79,17 @@
             <div class="favicon-image" style$="[[computeSiteIcon(item.host)]]">
             </div>
             <div class="middle" >
-              <div class="protocol-host">[[item.host]]</div>
-              <div class="secondary protocol-protocol">[[item.protocol]]</div>
+              <div class="protocol-host">
+                <span class="url-directionality">[[item.host]]</span></div>
+              <div class="secondary protocol-protocol">
+                [[item.protocol_display_name]]
+              </div>
             </div>
-
-            <button is="paper-icon-button-light" on-click="onRemoveIgnored_"
-                class="icon-clear" title="$i18n{moreActions}"
-                id="removeIgnoredButton">
-            </button>
+            <paper-icon-button-light class="icon-clear">
+              <button id="removeIgnoredButton" on-click="onRemoveIgnored_"
+                  title="$i18n{handlerRemove}">
+              </button>
+            </paper-icon-button-light>
           </div>
         </template>
       </div>

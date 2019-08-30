@@ -27,7 +27,6 @@
 #include "components/variations/variations_seed_store.h"
 #include "components/version_info/version_info.h"
 #include "components/web_resource/resource_request_allowed_notifier.h"
-#include "net/url_request/url_fetcher_delegate.h"
 #include "url/gurl.h"
 
 class PrefService;
@@ -40,6 +39,10 @@ class Version;
 
 namespace metrics {
 class MetricsStateManager;
+}
+
+namespace network {
+class SimpleURLLoader;
 }
 
 namespace user_prefs {
@@ -55,8 +58,7 @@ namespace variations {
 // Used to setup field trials based on stored variations seed data, and fetch
 // new seed data from the variations server.
 class VariationsService
-    : public net::URLFetcherDelegate,
-      public web_resource::ResourceRequestAllowedNotifier::Observer {
+    : public web_resource::ResourceRequestAllowedNotifier::Observer {
  public:
   class Observer {
    public:
@@ -149,7 +151,7 @@ class VariationsService
 
   // Enables fetching the seed for testing, even for unofficial builds. This
   // should be used along with overriding |DoActualFetch| or using
-  // |net::TestURLFetcherFactory|.
+  // |net::TestURLLoaderFactory|.
   static void EnableFetchForTesting();
 
   // Set the PrefService responsible for getting policy-related preferences,
@@ -170,6 +172,8 @@ class VariationsService
                         const std::vector<std::string>& variation_ids,
                         std::unique_ptr<base::FeatureList> feature_list,
                         variations::PlatformFieldTrials* platform_field_trials);
+
+  int request_count() const { return request_count_; }
 
  protected:
   // Starts the fetching process once, where |OnURLFetchComplete| is called with
@@ -208,6 +212,16 @@ class VariationsService
     variations_server_url_ = url;
   }
 
+  // The client that provides access to the embedder's environment.
+  // Protected so testing subclasses can access it.
+  VariationsServiceClient* client() { return client_.get(); }
+
+  // Records a successful fetch:
+  //   (1) Resets failure streaks for Safe Mode.
+  //   (2) Records the time of this fetch as the most recent successful fetch.
+  // Protected so testing subclasses can call it.
+  void RecordSuccessfulFetch();
+
  private:
   FRIEND_TEST_ALL_PREFIXES(VariationsServiceTest, Observer);
   FRIEND_TEST_ALL_PREFIXES(VariationsServiceTest, SeedStoredWhenOKStatus);
@@ -245,6 +259,8 @@ class VariationsService
     LOAD_COUNTRY_MAX,
   };
 
+  void InitResourceRequestedAllowedNotifier();
+
   // Attempts a seed fetch from the set |url|. Returns true if the fetch was
   // started successfully, false otherwise. |is_http_retry| should be true if
   // this is a retry over HTTP, false otherwise.
@@ -262,8 +278,8 @@ class VariationsService
   void NotifyObservers(
       const variations::VariationsSeedSimulator::Result& result);
 
-  // net::URLFetcherDelegate implementation:
-  void OnURLFetchComplete(const net::URLFetcher* source) override;
+  // Called by SimpleURLLoader when |pending_seed_request_| load completes.
+  void OnSimpleLoaderComplete(std::unique_ptr<std::string> response_body);
 
   // ResourceRequestAllowedNotifier::Observer implementation:
   void OnResourceRequestsAllowed() override;
@@ -273,11 +289,6 @@ class VariationsService
   void PerformSimulationWithVersion(
       std::unique_ptr<variations::VariationsSeed> seed,
       const base::Version& version);
-
-  // Records a successful fetch:
-  //   (1) Resets failure streaks for Safe Mode.
-  //   (2) Records the time of this fetch as the most recent successful fetch.
-  void RecordSuccessfulFetch();
 
   // Encrypts a string using the encrypted_messages component, input is passed
   // in as |plaintext|, outputs a serialized EncryptedMessage protobuf as
@@ -314,7 +325,7 @@ class VariationsService
 
   // Contains the current seed request. Will only have a value while a request
   // is pending, and will be reset by |OnURLFetchComplete|.
-  std::unique_ptr<net::URLFetcher> pending_seed_request_;
+  std::unique_ptr<network::SimpleURLLoader> pending_seed_request_;
 
   // The value of the "restrict" URL param to the variations server that has
   // been specified via |SetRestrictMode|. If empty, the URL param will be set

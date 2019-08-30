@@ -24,6 +24,8 @@ Description of common properties:
         are removed from both full_name and name during normalization).
   * section_name: E.g. ".text", ".rodata", ".data.rel.local"
   * section: The second character of |section_name|. E.g. "t", "r", "d".
+  * component: The team that owns this feature.
+        Never None, but will be '' when no component exists.
 """
 
 import collections
@@ -43,12 +45,15 @@ METADATA_ELF_FILENAME = 'elf_file_name'  # Path relative to output_directory.
 METADATA_ELF_MTIME = 'elf_mtime'  # int timestamp in utc.
 METADATA_ELF_BUILD_ID = 'elf_build_id'
 METADATA_GN_ARGS = 'gn_args'
+METADATA_LINKER_NAME = 'linker_name'
 METADATA_TOOL_PREFIX = 'tool_prefix'  # Path relative to SRC_ROOT.
 
 SECTION_BSS = '.bss'
 SECTION_DATA = '.data'
 SECTION_DATA_REL_RO = '.data.rel.ro'
 SECTION_DATA_REL_RO_LOCAL = '.data.rel.ro.local'
+SECTION_DEX = '.dex'
+SECTION_DEX_METHOD = '.dex.method'
 SECTION_OTHER = '.other'
 SECTION_PAK_NONTRANSLATED = '.pak.nontranslated'
 SECTION_PAK_TRANSLATIONS = '.pak.translations'
@@ -57,6 +62,12 @@ SECTION_TEXT = '.text'
 # Used by SymbolGroup when they contain a mix of sections.
 SECTION_MULTIPLE = '.*'
 
+APK_PREFIX_PATH = '$APK'
+
+DEX_SECTIONS = (
+    SECTION_DEX,
+    SECTION_DEX_METHOD,
+)
 NATIVE_SECTIONS = (
     SECTION_BSS,
     SECTION_DATA,
@@ -75,6 +86,8 @@ SECTION_NAME_TO_SECTION = {
     SECTION_DATA: 'd',
     SECTION_DATA_REL_RO_LOCAL: 'R',
     SECTION_DATA_REL_RO: 'R',
+    SECTION_DEX: 'x',
+    SECTION_DEX_METHOD: 'm',
     SECTION_OTHER: 'o',
     SECTION_PAK_NONTRANSLATED: 'P',
     SECTION_PAK_TRANSLATIONS: 'p',
@@ -89,19 +102,41 @@ SECTION_TO_SECTION_NAME = collections.OrderedDict((
     ('R', SECTION_DATA_REL_RO),
     ('d', SECTION_DATA),
     ('b', SECTION_BSS),
+    ('x', SECTION_DEX),
+    ('m', SECTION_DEX_METHOD),
     ('p', SECTION_PAK_TRANSLATIONS),
     ('P', SECTION_PAK_NONTRANSLATED),
     ('o', SECTION_OTHER),
 ))
 
 
+# Relevant for native symbols. All anonymous:: namespaces are removed during
+# name normalization. This flag means that the name had one or more anonymous::
+# namespaces stripped from it.
 FLAG_ANONYMOUS = 1
+# Relevant for .text symbols. The actual symbol name had a "startup." prefix on
+# it, which was removed by name normalization.
 FLAG_STARTUP = 2
+# Relevant for .text symbols. The actual symbol name had a "unlikely." prefix on
+# it, which was removed by name normalization.
 FLAG_UNLIKELY = 4
+# Relevant to .data & .rodata symbols. The actual symbol name had a "rel."
+# prefix on it, which was removed by name normalization.
 FLAG_REL = 8
+# Relevant to .data & .rodata symbols. The actual symbol name had a "rel.local."
+# prefix on it, which was removed by name normalization.
 FLAG_REL_LOCAL = 16
+# The source path did not have the usual "../.." prefix, but instead had a
+# prefix of "gen", meaning that the symbol is from a source file that was
+# generated during the build (the "gen" prefix is removed during normalization).
 FLAG_GENERATED_SOURCE = 32
+# Relevant for .text symbols. The actual symbol name had a " [clone .####]"
+# suffix, which was removed by name normalization. Cloned symbols are created by
+# compiler optimizations (e.g. partial inlining).
 FLAG_CLONE = 64
+# Relevant for .text symbols. The actual symbol name had a "hot." prefix on it,
+# which was removed by name normalization. Occurs when an AFDO profile is
+# supplied to the linker.
 FLAG_HOT = 128
 
 
@@ -276,9 +311,20 @@ class BaseSymbol(object):
   def IsBss(self):
     return self.section_name == SECTION_BSS
 
+  def IsDex(self):
+    return self.section_name in DEX_SECTIONS
+
+  def IsOther(self):
+    return self.section_name == SECTION_OTHER
+
   def IsPak(self):
-    return (self.section_name == SECTION_PAK_TRANSLATIONS or
-        self.section_name == SECTION_PAK_NONTRANSLATED)
+    return self.section_name in PAK_SECTIONS
+
+  def IsNative(self):
+    return self.section_name in NATIVE_SECTIONS
+
+  def IsOverhead(self):
+    return self.full_name.startswith('Overhead: ')
 
   def IsGroup(self):
     return False
@@ -315,6 +361,7 @@ class Symbol(BaseSymbol):
       'section_name',
       'source_path',
       'size',
+      'component',
   )
 
   def __init__(self, section_name, size_without_padding, address=None,
@@ -331,14 +378,16 @@ class Symbol(BaseSymbol):
     self.flags = flags
     self.aliases = aliases
     self.padding = 0
+    self.component = ''
 
   def __repr__(self):
     template = ('{}@{:x}(size_without_padding={},padding={},full_name={},'
-                'object_path={},source_path={},flags={},num_aliases={})')
+                'object_path={},source_path={},flags={},num_aliases={},'
+                'component={})')
     return template.format(
         self.section_name, self.address, self.size_without_padding,
         self.padding, self.full_name, self.object_path, self.source_path,
-        self.FlagsString(), self.num_aliases)
+        self.FlagsString(), self.num_aliases, self.component)
 
   @property
   def pss(self):
@@ -388,9 +437,16 @@ class DeltaSymbol(BaseSymbol):
       return DIFF_STATUS_ADDED
     if self.after_symbol is None:
       return DIFF_STATUS_REMOVED
-    if self.size == 0:
-      return DIFF_STATUS_UNCHANGED
-    return DIFF_STATUS_CHANGED
+    # Use delta size and delta PSS as indicators of change. Delta size = 0 with
+    # delta PSS != 0 can be caused by:
+    # (1) Alias addition / removal without actual binary change.
+    # (2) Alias merging / splitting along with binary changes, where matched
+    #     symbols all happen the same size (hence delta size = 0).
+    # The purpose of checking PSS is to account for (2). However, this means (1)
+    # would produce much more diffs than before!
+    if self.size != 0 or self.pss != 0:
+      return DIFF_STATUS_CHANGED
+    return DIFF_STATUS_UNCHANGED
 
   @property
   def address(self):
@@ -429,6 +485,10 @@ class DeltaSymbol(BaseSymbol):
   @property
   def section_name(self):
     return (self.after_symbol or self.before_symbol).section_name
+
+  @property
+  def component(self):
+    return (self.after_symbol or self.before_symbol).component
 
   @property
   def padding_pss(self):
@@ -597,6 +657,11 @@ class SymbolGroup(BaseSymbol):
     return self._size
 
   @property
+  def component(self):
+    first = self._symbols[0].component if self else ''
+    return first if all(s.component == first for s in self._symbols) else ''
+
+  @property
   def pss(self):
     if self._pss is None:
       if self.IsBss():
@@ -656,8 +721,12 @@ class SymbolGroup(BaseSymbol):
 
   def Sorted(self, cmp_func=None, key=None, reverse=False):
     if cmp_func is None and key is None:
-      cmp_func = lambda a, b: cmp((a.IsBss(), abs(b.pss), a.name),
-                                  (b.IsBss(), abs(a.pss), b.name))
+      if self.IsDelta():
+        key = lambda s: (s.diff_status == DIFF_STATUS_UNCHANGED, s.IsBss(),
+                         s.size_without_padding == 0, -abs(s.pss), s.name)
+      else:
+        key = lambda s: (
+            s.IsBss(), s.size_without_padding == 0, -abs(s.pss), s.name)
 
     after_symbols = sorted(self._symbols, cmp_func, key, reverse)
     return self._CreateTransformed(
@@ -708,6 +777,10 @@ class SymbolGroup(BaseSymbol):
         ret.section_name = SECTION_TO_SECTION_NAME[section]
     return ret
 
+  def WhereIsDex(self):
+    return self.WhereInSection(
+        ''.join(SECTION_NAME_TO_SECTION[s] for s in DEX_SECTIONS))
+
   def WhereIsNative(self):
     return self.WhereInSection(
         ''.join(SECTION_NAME_TO_SECTION[s] for s in NATIVE_SECTIONS))
@@ -718,6 +791,9 @@ class SymbolGroup(BaseSymbol):
 
   def WhereIsTemplate(self):
     return self.Filter(lambda s: s.template_name is not s.name)
+
+  def WhereHasComponent(self):
+    return self.Filter(lambda s: s.component)
 
   def WhereSourceIsGenerated(self):
     return self.Filter(lambda s: s.generated_source)
@@ -749,6 +825,10 @@ class SymbolGroup(BaseSymbol):
     regex = re.compile(match_util.ExpandRegexIdentifierPlaceholder(pattern))
     return self.Filter(lambda s: (regex.search(s.source_path) or
                                   regex.search(s.object_path)))
+
+  def WhereComponentMatches(self, pattern):
+    regex = re.compile(match_util.ExpandRegexIdentifierPlaceholder(pattern))
+    return self.Filter(lambda s: regex.search(s.component))
 
   def WhereMatches(self, pattern):
     """Looks for |pattern| within all paths & names."""
@@ -806,6 +886,9 @@ class SymbolGroup(BaseSymbol):
           Use a negative value to omit symbols entirely rather than
           include them outside of a group.
       group_factory: Function to create SymbolGroup from a list of Symbols.
+
+    Returns:
+      SymbolGroup of SymbolGroups
     """
     if group_factory is None:
       group_factory = lambda token, symbols: self._CreateTransformed(
@@ -926,6 +1009,9 @@ class SymbolGroup(BaseSymbol):
 
   def GroupedBySectionName(self):
     return self.GroupedBy(lambda s: s.section_name)
+
+  def GroupedByComponent(self):
+    return self.GroupedBy(lambda s: s.component)
 
   def GroupedByFullName(self, min_count=2):
     """Groups by symbol.full_name.

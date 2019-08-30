@@ -39,8 +39,8 @@ import org.chromium.chrome.browser.omnibox.MatchClassificationStyle;
 import org.chromium.chrome.browser.omnibox.OmniboxSuggestion;
 import org.chromium.chrome.browser.omnibox.OmniboxSuggestion.MatchClassification;
 import org.chromium.chrome.browser.omnibox.UrlBar;
+import org.chromium.chrome.browser.search_engines.TemplateUrl;
 import org.chromium.chrome.browser.search_engines.TemplateUrlService;
-import org.chromium.chrome.browser.search_engines.TemplateUrlService.TemplateUrl;
 import org.chromium.chrome.browser.searchwidget.SearchActivity.SearchActivityDelegate;
 import org.chromium.chrome.browser.tab.Tab;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
@@ -103,12 +103,12 @@ public class SearchActivityTest {
                 LocaleManager.setInstanceForTest(new LocaleManager() {
                     @Override
                     public int getSearchEnginePromoShowType() {
-                        return SEARCH_ENGINE_PROMO_SHOW_EXISTING;
+                        return SearchEnginePromoType.SHOW_EXISTING;
                     }
 
                     @Override
                     public List<TemplateUrl> getSearchEnginesForPromoDialog(int promoType) {
-                        return TemplateUrlService.getInstance().getSearchEngines();
+                        return TemplateUrlService.getInstance().getTemplateUrls();
                     }
                 });
                 super.showSearchEngineDialogIfNeeded(activity, onSearchEngineFinalized);

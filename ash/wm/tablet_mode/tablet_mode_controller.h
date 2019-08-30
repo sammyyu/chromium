@@ -24,6 +24,7 @@
 #include "chromeos/dbus/power_manager_client.h"
 #include "mojo/public/cpp/bindings/binding.h"
 #include "mojo/public/cpp/bindings/interface_ptr_set.h"
+#include "ui/events/devices/input_device_event_observer.h"
 #include "ui/gfx/geometry/vector3d_f.h"
 
 namespace aura {
@@ -59,7 +60,8 @@ class ASH_EXPORT TabletModeController
       public mojom::TabletModeController,
       public ShellObserver,
       public WindowTreeHostManager::Observer,
-      public SessionObserver {
+      public SessionObserver,
+      public ui::InputDeviceEventObserver {
  public:
   // Used for keeping track if the user wants the machine to behave as a
   // clamshell/tablet regardless of hardware orientation.
@@ -103,9 +105,7 @@ class ASH_EXPORT TabletModeController
   void AddObserver(TabletModeObserver* observer);
   void RemoveObserver(TabletModeObserver* observer);
 
-  // Checks if we should auto hide title bars in tablet mode. If |widget| is not
-  // null this also checks if the window associated with |widget| is in an auto
-  // hide state.
+  // Checks if we should auto hide title bars for the |widget| in tablet mode.
   bool ShouldAutoHideTitlebars(views::Widget* widget);
 
   // Flushes the mojo message pipe to chrome.
@@ -136,6 +136,10 @@ class ASH_EXPORT TabletModeController
   void SuspendImminent(power_manager::SuspendImminent::Reason reason) override;
   void SuspendDone(const base::TimeDelta& sleep_duration) override;
 
+  // ui::InputDeviceEventObserver::
+  void OnMouseDeviceConfigurationChanged() override;
+  void OnDeviceListsComplete() override;
+
  private:
   friend class TabletModeControllerTest;
   friend class TabletModeWindowManagerTest;
@@ -153,7 +157,7 @@ class ASH_EXPORT TabletModeController
   // artificially and deterministically control the current time.
   // This does not take the ownership of the tick_clock. |tick_clock| must
   // outlive the TabletModeController instance.
-  void SetTickClockForTest(base::TickClock* tick_clock);
+  void SetTickClockForTest(const base::TickClock* tick_clock);
 
   // Detect hinge rotation from base and lid accelerometers and automatically
   // start / stop tablet mode.
@@ -176,7 +180,7 @@ class ASH_EXPORT TabletModeController
 
   // Removes TabletModeWindowManager and resets the display rotation if there
   // is no rotation lock.
-  void LeaveTabletMode();
+  void LeaveTabletMode(bool called_by_device_update);
 
   // Record UMA stats tracking TabletMode usage. If |type| is
   // TABLET_MODE_INTERVAL_INACTIVE, then record that TabletMode has been
@@ -200,6 +204,10 @@ class ASH_EXPORT TabletModeController
   // returns false if the user set a flag for the software to behave in a
   // certain way regardless of configuration.
   bool AllowEnterExitTabletMode() const;
+
+  // Called when a mouse config is changed, or when a device list is
+  // sent from device manager. This will exit tablet mode if needed.
+  void HandleMouseAddedOrRemoved();
 
   // The maximized window manager (if enabled).
   std::unique_ptr<TabletModeWindowManager> tablet_mode_window_manager_;
@@ -228,7 +236,7 @@ class ASH_EXPORT TabletModeController
   base::TimeTicks first_unstable_lid_angle_time_;
 
   // Source for the current time in base::TimeTicks.
-  base::TickClock* tick_clock_;
+  const base::TickClock* tick_clock_;
 
   // Set when tablet mode switch is on. This is used to force tablet mode.
   bool tablet_mode_switch_is_on_ = false;
@@ -238,6 +246,15 @@ class ASH_EXPORT TabletModeController
 
   // Last computed lid angle.
   double lid_angle_ = 0.0f;
+
+  // Tracks if the device has an external mouse. The device will
+  // not enter tablet mode if this is true.
+  bool has_external_mouse_ = false;
+
+  // Tracks if the device would enter tablet mode, but does not because of a
+  // attached external mouse. If the external mouse is detached and this is
+  // true, we will enter tablet mode.
+  bool should_enter_tablet_mode_ = false;
 
   // Tracks smoothed accelerometer data over time. This is done when the hinge
   // is approaching vertical to remove abrupt acceleration that can lead to

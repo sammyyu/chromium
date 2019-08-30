@@ -8,7 +8,7 @@
 
 #include "base/android/application_status_listener.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/simple_test_clock.h"
 #include "chrome/browser/android/ntp/content_suggestions_notifier.h"
 #include "chrome/common/pref_names.h"
@@ -65,7 +65,7 @@ class FakeContentSuggestionsService : public ContentSuggestionsService {
  public:
   FakeContentSuggestionsService(PrefService* prefs, base::Clock* clock)
       : ContentSuggestionsService(
-            ContentSuggestionsService::ENABLED,
+            ContentSuggestionsService::State::ENABLED,
             /*identity_manager=*/nullptr,
             /*history_service=*/nullptr,
             /*large_icon_cache=*/nullptr,
@@ -100,6 +100,12 @@ class FakeArticleProvider : public ContentSuggestionsProvider {
   void FetchSuggestionImage(const ContentSuggestion::ID& id,
                             ImageFetchedCallback callback) override {
     std::move(callback).Run(gfx::Image());
+  }
+
+  void FetchSuggestionImageData(
+      const ContentSuggestion::ID& suggestion_id,
+      ntp_snippets::ImageDataFetchedCallback callback) override {
+    std::move(callback).Run(std::string());
   }
 
   void DismissSuggestion(const ContentSuggestion::ID& id) override {

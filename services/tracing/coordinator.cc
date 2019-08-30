@@ -23,9 +23,8 @@
 #include "base/task_scheduler/task_traits.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
-#include "base/trace_event/trace_config.h"
 #include "base/trace_event/trace_event.h"
-#include "mojo/common/data_pipe_utils.h"
+#include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "services/service_manager/public/cpp/bind_source_info.h"
 #include "services/service_manager/public/cpp/service_context_ref.h"
 #include "services/tracing/agent_registry.h"
@@ -42,8 +41,6 @@ const char kRequestBufferUsageClosureName[] = "RequestBufferUsageClosure";
 const char kRequestClockSyncMarkerClosureName[] =
     "RequestClockSyncMarkerClosure";
 const char kStartTracingClosureName[] = "StartTracingClosure";
-
-tracing::Coordinator* g_coordinator = nullptr;
 
 }  // namespace
 
@@ -108,6 +105,13 @@ class Coordinator::TraceStreamer : public base::SupportsWeakPtr<TraceStreamer> {
   }
 
  private:
+  // Handles synchronize writes to |stream_|, if the stream is not already
+  // closed.
+  void WriteToStream(const std::string& data) {
+    if (stream_.is_valid())
+      mojo::BlockingCopyFromString(data, stream_);
+  }
+
   // Called from |background_task_runner_|.
   void OnRecorderDataChange(const std::string& label) {
     // Bail out if we are in the middle of writing events for another label to
@@ -145,7 +149,7 @@ class Coordinator::TraceStreamer : public base::SupportsWeakPtr<TraceStreamer> {
         if (all_finished) {
           StreamMetadata();
           if (!stream_is_empty_ && agent_label_.empty()) {
-            mojo::common::BlockingCopyFromString("}", stream_);
+            WriteToStream("}");
             stream_is_empty_ = false;
           }
           // Recorder connections should be closed on their binding thread.
@@ -193,12 +197,11 @@ class Coordinator::TraceStreamer : public base::SupportsWeakPtr<TraceStreamer> {
         std::string escaped;
         base::EscapeJSONString(recorder->data(), false /* put_in_quotes */,
                                &escaped);
-        mojo::common::BlockingCopyFromString(prefix + escaped, stream_);
+        WriteToStream(prefix + escaped);
       } else {
         if (prefix.empty() && !stream_is_empty_)
           prefix = ",";
-        mojo::common::BlockingCopyFromString(prefix + recorder->data(),
-                                             stream_);
+        WriteToStream(prefix + recorder->data());
       }
       stream_is_empty_ = false;
       recorder->clear_data();
@@ -207,13 +210,13 @@ class Coordinator::TraceStreamer : public base::SupportsWeakPtr<TraceStreamer> {
       if (json_field_name_written_) {
         switch (data_type) {
           case mojom::TraceDataType::ARRAY:
-            mojo::common::BlockingCopyFromString("]", stream_);
+            WriteToStream("]");
             break;
           case mojom::TraceDataType::OBJECT:
-            mojo::common::BlockingCopyFromString("}", stream_);
+            WriteToStream("}");
             break;
           case mojom::TraceDataType::STRING:
-            mojo::common::BlockingCopyFromString("\"", stream_);
+            WriteToStream("\"");
             break;
           default:
             NOTREACHED();
@@ -239,9 +242,8 @@ class Coordinator::TraceStreamer : public base::SupportsWeakPtr<TraceStreamer> {
     if (!metadata_->empty() &&
         base::JSONWriter::Write(*metadata_, &metadataJSON)) {
       std::string prefix = stream_is_empty_ ? "{\"" : ",\"";
-      mojo::common::BlockingCopyFromString(
-          prefix + std::string(kMetadataTraceLabel) + "\":" + metadataJSON,
-          stream_);
+      WriteToStream(prefix + std::string(kMetadataTraceLabel) +
+                    "\":" + metadataJSON);
       stream_is_empty_ = false;
     }
   }
@@ -265,22 +267,12 @@ class Coordinator::TraceStreamer : public base::SupportsWeakPtr<TraceStreamer> {
   DISALLOW_COPY_AND_ASSIGN(TraceStreamer);
 };
 
-// static
-Coordinator* Coordinator::GetInstance() {
-  DCHECK(g_coordinator);
-  return g_coordinator;
-}
-
-Coordinator::Coordinator(
-    service_manager::ServiceContextRefFactory* service_ref_factory)
+Coordinator::Coordinator(AgentRegistry* agent_registry)
     : binding_(this),
       task_runner_(base::ThreadTaskRunnerHandle::Get()),
-      agent_registry_(AgentRegistry::GetInstance()),
-      service_ref_(service_ref_factory->CreateRef()),
+      agent_registry_(agent_registry),
       weak_ptr_factory_(this) {
-  DCHECK(!g_coordinator);
   DCHECK(agent_registry_);
-  g_coordinator = this;
   constexpr base::TaskTraits traits = {base::MayBlock(),
                                        base::WithBaseSyncPrimitives(),
                                        base::TaskPriority::BACKGROUND};
@@ -290,7 +282,7 @@ Coordinator::Coordinator(
 Coordinator::~Coordinator() {
   if (!stop_and_flush_callback_.is_null()) {
     base::ResetAndReturn(&stop_and_flush_callback_)
-        .Run(std::make_unique<base::DictionaryValue>());
+        .Run(base::Value(base::Value::Type::DICTIONARY));
   }
   if (!start_tracing_callback_.is_null())
     base::ResetAndReturn(&start_tracing_callback_).Run(false);
@@ -309,8 +301,6 @@ Coordinator::~Coordinator() {
     trace_streamer_->CloseStream();
     background_task_runner_->DeleteSoon(FROM_HERE, trace_streamer_.release());
   }
-
-  g_coordinator = nullptr;
 }
 
 void Coordinator::BindCoordinatorRequest(
@@ -320,27 +310,33 @@ void Coordinator::BindCoordinatorRequest(
 }
 
 void Coordinator::StartTracing(const std::string& config,
-                               const StartTracingCallback& callback) {
-  if (is_tracing_) {
-    // Cannot change the config while tracing is enabled.
-    callback.Run(config == config_);
+                               StartTracingCallback callback) {
+  bool is_initializing = !start_tracing_callback_.is_null();
+  if (is_initializing || (is_tracing_ && config == config_)) {
+    std::move(callback).Run(config == config_);
     return;
   }
 
   is_tracing_ = true;
   config_ = config;
+  parsed_config_ = base::trace_event::TraceConfig(config);
   agent_registry_->SetAgentInitializationCallback(base::BindRepeating(
       &Coordinator::SendStartTracingToAgent, weak_ptr_factory_.GetWeakPtr()));
   if (!agent_registry_->HasDisconnectClosure(&kStartTracingClosureName)) {
-    callback.Run(true);
+    std::move(callback).Run(true);
     return;
   }
-  start_tracing_callback_ = callback;
+  start_tracing_callback_ = std::move(callback);
 }
 
 void Coordinator::SendStartTracingToAgent(
     AgentRegistry::AgentEntry* agent_entry) {
-  DCHECK(!agent_entry->is_tracing());
+  if (agent_entry->is_tracing())
+    return;
+  if (agent_entry->HasDisconnectClosure(&kStartTracingClosureName))
+    return;
+  if (!parsed_config_.process_filter_config().IsEnabled(agent_entry->pid()))
+    return;
   agent_entry->AddDisconnectClosure(
       &kStartTracingClosureName,
       base::BindOnce(&Coordinator::OnTracingStarted,
@@ -362,21 +358,21 @@ void Coordinator::OnTracingStarted(AgentRegistry::AgentEntry* agent_entry,
 
   if (!agent_registry_->HasDisconnectClosure(&kStartTracingClosureName) &&
       !start_tracing_callback_.is_null()) {
-    base::ResetAndReturn(&start_tracing_callback_).Run(true);
+    std::move(start_tracing_callback_).Run(true);
   }
 }
 
 void Coordinator::StopAndFlush(mojo::ScopedDataPipeProducerHandle stream,
-                               const StopAndFlushCallback& callback) {
-  StopAndFlushAgent(std::move(stream), "", callback);
+                               StopAndFlushCallback callback) {
+  StopAndFlushAgent(std::move(stream), "", std::move(callback));
 }
 
 void Coordinator::StopAndFlushAgent(mojo::ScopedDataPipeProducerHandle stream,
                                     const std::string& agent_label,
-                                    const StopAndFlushCallback& callback) {
+                                    StopAndFlushCallback callback) {
   if (!is_tracing_) {
     stream.reset();
-    callback.Run(std::make_unique<base::DictionaryValue>());
+    std::move(callback).Run(base::Value(base::Value::Type::DICTIONARY));
     return;
   }
   DCHECK(!trace_streamer_);
@@ -388,7 +384,7 @@ void Coordinator::StopAndFlushAgent(mojo::ScopedDataPipeProducerHandle stream,
   trace_streamer_.reset(new Coordinator::TraceStreamer(
       std::move(stream), agent_label, task_runner_,
       weak_ptr_factory_.GetWeakPtr()));
-  stop_and_flush_callback_ = callback;
+  stop_and_flush_callback_ = std::move(callback);
   StopAndFlushInternal();
 }
 
@@ -482,8 +478,8 @@ void Coordinator::SendRecorder(
 }
 
 void Coordinator::OnFlushDone() {
-  base::ResetAndReturn(&stop_and_flush_callback_)
-      .Run(trace_streamer_->GetMetadata());
+  std::move(stop_and_flush_callback_)
+      .Run(std::move(*trace_streamer_->GetMetadata()));
   background_task_runner_->DeleteSoon(FROM_HERE, trace_streamer_.release());
   agent_registry_->ForAllAgents([this](AgentRegistry::AgentEntry* agent_entry) {
     agent_entry->set_is_tracing(false);
@@ -491,20 +487,19 @@ void Coordinator::OnFlushDone() {
   is_tracing_ = false;
 }
 
-void Coordinator::IsTracing(const IsTracingCallback& callback) {
-  callback.Run(is_tracing_);
+void Coordinator::IsTracing(IsTracingCallback callback) {
+  std::move(callback).Run(is_tracing_);
 }
 
-void Coordinator::RequestBufferUsage(
-    const RequestBufferUsageCallback& callback) {
+void Coordinator::RequestBufferUsage(RequestBufferUsageCallback callback) {
   if (!request_buffer_usage_callback_.is_null()) {
-    callback.Run(false, 0, 0);
+    std::move(callback).Run(false, 0, 0);
     return;
   }
 
   maximum_trace_buffer_usage_ = 0;
   approximate_event_count_ = 0;
-  request_buffer_usage_callback_ = callback;
+  request_buffer_usage_callback_ = std::move(callback);
   agent_registry_->ForAllAgents([this](AgentRegistry::AgentEntry* agent_entry) {
     agent_entry->AddDisconnectClosure(
         &kRequestBufferUsageClosureName,
@@ -535,20 +530,21 @@ void Coordinator::OnRequestBufferStatusResponse(
   }
 
   if (!agent_registry_->HasDisconnectClosure(&kRequestBufferUsageClosureName)) {
-    base::ResetAndReturn(&request_buffer_usage_callback_)
+    std::move(request_buffer_usage_callback_)
         .Run(true, maximum_trace_buffer_usage_, approximate_event_count_);
   }
 }
 
-void Coordinator::GetCategories(const GetCategoriesCallback& callback) {
+void Coordinator::GetCategories(GetCategoriesCallback callback) {
   if (is_tracing_) {
-    callback.Run(false, "");
+    std::move(callback).Run(false, "");
+    return;
   }
 
   DCHECK(get_categories_callback_.is_null());
   is_tracing_ = true;
   category_set_.clear();
-  get_categories_callback_ = callback;
+  get_categories_callback_ = std::move(callback);
   agent_registry_->ForAllAgents([this](AgentRegistry::AgentEntry* agent_entry) {
     agent_entry->AddDisconnectClosure(
         &kGetCategoriesClosureName,
@@ -577,7 +573,7 @@ void Coordinator::OnGetCategoriesResponse(
   if (!agent_registry_->HasDisconnectClosure(&kGetCategoriesClosureName)) {
     std::vector<std::string> category_vector(category_set_.begin(),
                                              category_set_.end());
-    base::ResetAndReturn(&get_categories_callback_)
+    std::move(get_categories_callback_)
         .Run(true, base::JoinString(category_vector, ","));
     is_tracing_ = false;
   }

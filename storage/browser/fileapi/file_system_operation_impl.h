@@ -19,7 +19,7 @@
 #include "storage/browser/fileapi/file_system_url.h"
 #include "storage/browser/fileapi/file_writer_delegate.h"
 #include "storage/browser/storage_browser_export.h"
-#include "third_party/WebKit/public/mojom/quota/quota_types.mojom.h"
+#include "third_party/blink/public/mojom/quota/quota_types.mojom.h"
 
 namespace storage {
 
@@ -198,6 +198,7 @@ class STORAGE_EXPORT FileSystemOperationImpl : public FileSystemOperation {
   // A flag to make sure we call operation only once per instance.
   OperationType pending_operation_;
 
+  base::WeakPtr<FileSystemOperationImpl> weak_ptr_;
   base::WeakPtrFactory<FileSystemOperationImpl> weak_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(FileSystemOperationImpl);

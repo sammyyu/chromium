@@ -4,9 +4,10 @@
 
 #import <XCTest/XCTest.h>
 
-#include "base/ios/ios_util.h"
 #include "components/strings/grit/components_strings.h"
+#import "ios/chrome/browser/ui/ui_util.h"
 #import "ios/chrome/browser/ui/uikit_ui_util.h"
+#import "ios/chrome/test/app/chrome_test_util.h"
 #import "ios/chrome/test/app/web_view_interaction_test_util.h"
 #import "ios/chrome/test/earl_grey/chrome_earl_grey.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
@@ -22,6 +23,7 @@
 using chrome_test_util::ContentSuggestionCollectionView;
 using chrome_test_util::BackButton;
 using chrome_test_util::ForwardButton;
+using chrome_test_util::PurgeCachedWebViewPages;
 using chrome_test_util::OmniboxText;
 using chrome_test_util::TapWebViewElementWithId;
 
@@ -307,13 +309,12 @@ std::unique_ptr<net::test_server::HttpResponse> WindowLocationHashHandlers(
       assertWithMatcher:grey_notNil()];
 
   // Verify that the forward button is not enabled.
-  if (IsCompactWidth()) {
-    // In horizontally compact environments, the forward button is not visible.
+  if (!IsUIRefreshPhase1Enabled() && IsCompactWidth()) {
+    // The forward button is not visible.
     [[EarlGrey selectElementWithMatcher:ForwardButton()]
         assertWithMatcher:grey_nil()];
   } else {
-    // In horizontally regular environments, the forward button is visible and
-    // disabled.
+    // The forward button is visible and disabled.
     id<GREYMatcher> disabledForwardButton = grey_allOf(
         ForwardButton(),
         grey_accessibilityTrait(UIAccessibilityTraitNotEnabled), nil);
@@ -339,36 +340,6 @@ std::unique_ptr<net::test_server::HttpResponse> WindowLocationHashHandlers(
   [[EarlGrey selectElementWithMatcher:ForwardButton()]
       performAction:grey_tap()];
   [ChromeEarlGrey waitForWebViewContainingText:"pony"];
-}
-
-// Tests navigating forward via window.history.forward() to an error page.
-- (void)testHistoryForwardToErrorPage {
-// TODO(crbug.com/694662): This test relies on external URL because of the bug.
-// Re-enable this test on device once the bug is fixed.
-#if !TARGET_IPHONE_SIMULATOR
-  EARL_GREY_TEST_DISABLED(@"Test disabled on device.");
-#endif
-  GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
-
-  // Go to page 1 with a button which calls window.history.forward().
-  const GURL forwardURL = self.testServer->GetURL(kWindowHistoryGoTestURL);
-  [ChromeEarlGrey loadURL:forwardURL];
-
-  // Go to page 2: 'www.badurljkljkljklfloofy.com'. This page should display a
-  // page not available error.
-  const GURL badURL("http://www.badurljkljkljklfloofy.com");
-  [ChromeEarlGrey loadURL:badURL];
-  [ChromeEarlGrey waitForErrorPage];
-
-  // Go back to page 1 by clicking back button.
-  [[EarlGrey selectElementWithMatcher:BackButton()] performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:OmniboxText(forwardURL.GetContent())]
-      assertWithMatcher:grey_notNil()];
-
-  // Go forward to page 2 by calling window.history.forward() and assert that
-  // the error page is shown.
-  [ChromeEarlGrey tapWebViewElementWithID:kGoForwardID];
-  [ChromeEarlGrey waitForErrorPage];
 }
 
 #pragma mark window.location.hash operations
@@ -590,6 +561,42 @@ std::unique_ptr<net::test_server::HttpResponse> WindowLocationHashHandlers(
   [[EarlGrey selectElementWithMatcher:ForwardButton()]
       performAction:grey_tap()];
   [ChromeEarlGrey waitForWebViewContainingText:"You've arrived"];
+  [[EarlGrey selectElementWithMatcher:OmniboxText(destinationURL.GetContent())]
+      assertWithMatcher:grey_notNil()];
+}
+
+// Tests that navigating forward from a WebUI URL works when resuming from
+// session restore. This is a regression test for https://crbug.com/814790.
+- (void)testRestoreHistoryToWebUIAndNavigateForward {
+  GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
+  const GURL destinationURL = self.testServer->GetURL(kSimpleFileBasedTestURL);
+  [ChromeEarlGrey loadURL:GURL("chrome://version")];
+  [ChromeEarlGrey loadURL:destinationURL];
+  [ChromeEarlGrey goBack];
+
+  GREYAssert(PurgeCachedWebViewPages(), @"History not restored");
+
+  [ChromeEarlGrey waitForWebViewContainingText:"Revision"];
+  [[EarlGrey selectElementWithMatcher:OmniboxText("chrome://version")]
+      assertWithMatcher:grey_notNil()];
+  [ChromeEarlGrey goForward];
+  [ChromeEarlGrey waitForWebViewContainingText:"pony"];
+  [[EarlGrey selectElementWithMatcher:OmniboxText(destinationURL.GetContent())]
+      assertWithMatcher:grey_notNil()];
+}
+
+// Tests that navigating forward from NTP works when resuming from session
+// restore. This is a regression test for https://crbug.com/814790.
+- (void)testRestoreHistoryToNTPAndNavigateForward {
+  GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
+  const GURL destinationURL = self.testServer->GetURL(kSimpleFileBasedTestURL);
+  [ChromeEarlGrey loadURL:destinationURL];
+  [ChromeEarlGrey goBack];
+
+  GREYAssert(PurgeCachedWebViewPages(), @"History not restored");
+
+  [ChromeEarlGrey goForward];
+  [ChromeEarlGrey waitForWebViewContainingText:"pony"];
   [[EarlGrey selectElementWithMatcher:OmniboxText(destinationURL.GetContent())]
       assertWithMatcher:grey_notNil()];
 }

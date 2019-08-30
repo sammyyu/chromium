@@ -10,12 +10,13 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/strings/string_util.h"
-#include "build/build_config.h"
+#include "content/browser/frame_host/render_frame_host_delegate.h"
+#include "content/browser/frame_host/render_frame_host_impl.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/service_manager_connection.h"
-#include "media/mojo/features.h"
+#include "media/mojo/buildflags.h"
 #include "media/mojo/interfaces/constants.mojom.h"
 #include "media/mojo/interfaces/media_service.mojom.h"
 #include "media/mojo/services/media_interface_provider.h"
@@ -26,7 +27,7 @@
 #include "content/public/browser/provision_fetcher_impl.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/browser/storage_partition.h"
-#include "net/url_request/url_request_context_getter.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #endif
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
@@ -42,6 +43,12 @@
 #include "sandbox/mac/seatbelt_extension.h"
 #endif  // defined(OS_MACOSX)
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+
+#if defined(OS_ANDROID)
+#include "content/browser/media/android/media_player_renderer.h"
+#include "content/browser/media/flinging_renderer.h"
+#include "media/mojo/services/mojo_renderer_service.h"  // nogncheck
+#endif
 
 namespace content {
 
@@ -145,12 +152,32 @@ void MediaInterfaceProxy::CreateVideoDecoder(
 }
 
 void MediaInterfaceProxy::CreateRenderer(
-    const std::string& audio_device_id,
+    media::mojom::HostedRendererType type,
+    const std::string& type_specific_id,
     media::mojom::RendererRequest request) {
   DCHECK(thread_checker_.CalledOnValidThread());
+
+#if defined(OS_ANDROID)
+  if (type == media::mojom::HostedRendererType::kMediaPlayer) {
+    CreateMediaPlayerRenderer(std::move(request));
+    return;
+  }
+
+  if (type == media::mojom::HostedRendererType::kFlinging) {
+    std::unique_ptr<FlingingRenderer> renderer =
+        FlingingRenderer::Create(render_frame_host_, type_specific_id);
+
+    media::MojoRendererService::Create(
+        nullptr, std::move(renderer),
+        media::MojoRendererService::InitiateSurfaceRequestCB(),
+        std::move(request));
+    return;
+  }
+#endif
+
   InterfaceFactory* factory = GetMediaInterfaceFactory();
   if (factory)
-    factory->CreateRenderer(audio_device_id, std::move(request));
+    factory->CreateRenderer(type, type_specific_id, std::move(request));
 }
 
 void MediaInterfaceProxy::CreateCdm(
@@ -166,6 +193,14 @@ void MediaInterfaceProxy::CreateCdm(
   if (factory)
     factory->CreateCdm(key_system, std::move(request));
 #endif
+}
+
+void MediaInterfaceProxy::CreateDecryptor(
+    int cdm_id,
+    media::mojom::DecryptorRequest request) {
+  InterfaceFactory* factory = GetMediaInterfaceFactory();
+  if (factory)
+    factory->CreateDecryptor(cdm_id, std::move(request));
 }
 
 void MediaInterfaceProxy::CreateCdmProxy(
@@ -187,12 +222,12 @@ MediaInterfaceProxy::GetFrameServices(const std::string& cdm_guid,
 
 #if BUILDFLAG(ENABLE_MOJO_CDM)
   // TODO(slan): Wrap these into a RenderFrame specific ProvisionFetcher impl.
-  net::URLRequestContextGetter* context_getter =
-      BrowserContext::GetDefaultStoragePartition(
-          render_frame_host_->GetProcess()->GetBrowserContext())
-          ->GetURLRequestContext();
   provider->registry()->AddInterface(base::BindRepeating(
-      &ProvisionFetcherImpl::Create, base::RetainedRef(context_getter)));
+      &ProvisionFetcherImpl::Create,
+      base::RetainedRef(
+          BrowserContext::GetDefaultStoragePartition(
+              render_frame_host_->GetProcess()->GetBrowserContext())
+              ->GetURLLoaderFactoryForBrowserProcess())));
 
 #if BUILDFLAG(ENABLE_LIBRARY_CDMS)
   // Only provide CdmStorageImpl when we have a valid |cdm_file_system_id|,
@@ -354,5 +389,26 @@ void MediaInterfaceProxy::CreateCdmProxyInternal(
     factory->CreateCdmProxy(cdm_guid, std::move(request));
 }
 #endif  // BUILDFLAG(ENABLE_LIBRARY_CDMS)
+
+#if defined(OS_ANDROID)
+void MediaInterfaceProxy::CreateMediaPlayerRenderer(
+    media::mojom::RendererRequest request) {
+  auto renderer = std::make_unique<MediaPlayerRenderer>(
+      render_frame_host_->GetProcess()->GetID(),
+      render_frame_host_->GetRoutingID(),
+      static_cast<RenderFrameHostImpl*>(render_frame_host_)
+          ->delegate()
+          ->GetAsWebContents());
+
+  // base::Unretained is safe here because the lifetime of the MediaPlayerRender
+  // is tied to the lifetime of the MojoRendererService.
+  media::MojoRendererService::InitiateSurfaceRequestCB surface_request_cb =
+      base::BindRepeating(&MediaPlayerRenderer::InitiateScopedSurfaceRequest,
+                          base::Unretained(renderer.get()));
+
+  media::MojoRendererService::Create(nullptr, std::move(renderer),
+                                     surface_request_cb, std::move(request));
+}
+#endif  // defined(OS_ANDROID)
 
 }  // namespace content

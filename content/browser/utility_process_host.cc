@@ -11,7 +11,7 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/memory/ptr_util.h"
+#include "base/i18n/base_i18n_switches.h"
 #include "base/sequenced_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/network_session_configurator/common/network_switches.h"
@@ -22,7 +22,6 @@
 #include "content/common/child_process_host_impl.h"
 #include "content/common/in_process_child_thread_params.h"
 #include "content/common/service_manager/child_connection.h"
-#include "content/public/browser/browser_message_filter.h"
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_switches.h"
@@ -30,21 +29,25 @@
 #include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/service_manager_connection.h"
 #include "content/public/common/service_names.mojom.h"
-#include "content/public/common/zygote_buildflags.h"
 #include "media/base/media_switches.h"
 #include "services/network/public/cpp/network_switches.h"
+#include "services/service_manager/embedder/switches.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
 #include "services/service_manager/sandbox/sandbox_type.h"
+#include "services/service_manager/sandbox/switches.h"
+#include "services/service_manager/zygote/common/zygote_buildflags.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/gl/gl_switches.h"
 
 #if defined(OS_WIN)
 #include "sandbox/win/src/sandbox_policy.h"
 #include "sandbox/win/src/sandbox_types.h"
+#include "services/audio/audio_sandbox_win.h"
+#include "services/network/network_sandbox_win.h"
 #endif
 
 #if BUILDFLAG(USE_ZYGOTE_HANDLE)
-#include "content/public/common/zygote_handle.h"
+#include "services/service_manager/zygote/common/zygote_handle.h"  // nogncheck
 #endif
 
 namespace content {
@@ -73,7 +76,8 @@ class UtilitySandboxedProcessLauncherDelegate
         sandbox_type_ == service_manager::SANDBOX_TYPE_CDM ||
         sandbox_type_ == service_manager::SANDBOX_TYPE_PDF_COMPOSITOR ||
         sandbox_type_ == service_manager::SANDBOX_TYPE_PROFILING ||
-        sandbox_type_ == service_manager::SANDBOX_TYPE_PPAPI;
+        sandbox_type_ == service_manager::SANDBOX_TYPE_PPAPI ||
+        sandbox_type_ == service_manager::SANDBOX_TYPE_AUDIO;
     DCHECK(supported_sandbox_type);
 #endif  // DCHECK_IS_ON()
   }
@@ -86,16 +90,24 @@ class UtilitySandboxedProcessLauncherDelegate
            service_manager::SANDBOX_TYPE_NO_SANDBOX_AND_ELEVATED_PRIVILEGES;
   }
 
-  bool PreSpawnTarget(sandbox::TargetPolicy* policy) override { return true; }
+  bool PreSpawnTarget(sandbox::TargetPolicy* policy) override {
+    if (sandbox_type_ == service_manager::SANDBOX_TYPE_NETWORK)
+      return network::NetworkPreSpawnTarget(policy);
+
+    if (sandbox_type_ == service_manager::SANDBOX_TYPE_AUDIO)
+      return audio::AudioPreSpawnTarget(policy);
+
+    return true;
+  }
 #endif  // OS_WIN
 
 #if BUILDFLAG(USE_ZYGOTE_HANDLE)
-  ZygoteHandle GetZygote() override {
+  service_manager::ZygoteHandle GetZygote() override {
     if (service_manager::IsUnsandboxedSandboxType(sandbox_type_) ||
         sandbox_type_ == service_manager::SANDBOX_TYPE_NETWORK) {
       return nullptr;
     }
-    return GetGenericZygote();
+    return service_manager::GetGenericZygote();
   }
 #endif  // BUILDFLAG(USE_ZYGOTE_HANDLE)
 
@@ -181,6 +193,10 @@ void UtilityProcessHost::BindInterface(
                                               std::move(interface_pipe));
 }
 
+void UtilityProcessHost::SetMetricsName(const std::string& metrics_name) {
+  metrics_name_ = metrics_name;
+}
+
 void UtilityProcessHost::SetName(const base::string16& name) {
   name_ = name;
 }
@@ -188,10 +204,6 @@ void UtilityProcessHost::SetName(const base::string16& name) {
 void UtilityProcessHost::SetServiceIdentity(
     const service_manager::Identity& identity) {
   service_identity_ = identity;
-}
-
-void UtilityProcessHost::AddFilter(BrowserMessageFilter* filter) {
-  process_->AddFilter(filter);
 }
 
 void UtilityProcessHost::SetLaunchCallback(
@@ -206,6 +218,7 @@ bool UtilityProcessHost::StartProcess() {
 
   started_ = true;
   process_->SetName(name_);
+  process_->SetMetricsName(metrics_name_);
   process_->GetHost()->CreateChannelMojo();
 
   if (RenderProcessHost::run_renderer_in_process()) {
@@ -215,7 +228,7 @@ bool UtilityProcessHost::StartProcess() {
     in_process_thread_.reset(
         g_utility_main_thread_factory(InProcessChildThreadParams(
             BrowserThread::GetTaskRunnerForThread(BrowserThread::IO),
-            process_->GetInProcessBrokerClientInvitation(),
+            process_->GetInProcessMojoInvitation(),
             process_->child_connection()->service_token())));
     in_process_thread_->Start();
   } else {
@@ -255,6 +268,7 @@ bool UtilityProcessHost::StartProcess() {
     cmd_line->AppendSwitchASCII(switches::kProcessType,
                                 switches::kUtilityProcess);
     BrowserChildProcessHostImpl::CopyFeatureAndFieldTrialFlags(cmd_line.get());
+    BrowserChildProcessHostImpl::CopyTraceStartupFlags(cmd_line.get());
     std::string locale = GetContentClient()->browser()->GetApplicationLocale();
     cmd_line->AppendSwitchASCII(switches::kLang, locale);
 
@@ -267,24 +281,47 @@ bool UtilityProcessHost::StartProcess() {
 
     // Browser command-line switches to propagate to the utility process.
     static const char* const kSwitchNames[] = {
+      network::switches::kForceEffectiveConnectionType,
       network::switches::kHostResolverRules,
       network::switches::kIgnoreCertificateErrorsSPKIList,
       network::switches::kLogNetLog,
       network::switches::kNoReferrers,
-      switches::kIgnoreCertificateErrors,
-      switches::kNoSandbox,
-      switches::kOverrideUseSoftwareGLForTests,
-      switches::kProxyServer,
+      service_manager::switches::kNoSandbox,
 #if defined(OS_MACOSX)
-      switches::kEnableSandboxLogging,
+      service_manager::switches::kEnableSandboxLogging,
 #endif
+      switches::kForceTextDirection,
+      switches::kForceUIDirection,
+      switches::kIgnoreCertificateErrors,
+      switches::kOverrideUseSoftwareGLForTests,
+      switches::kOverrideEnabledCdmInterfaceVersion,
+      switches::kProxyServer,
+      switches::kDisableAcceleratedMjpegDecode,
       switches::kUseFakeDeviceForMediaStream,
+      switches::kUseFakeJpegDecodeAccelerator,
       switches::kUseFileForFakeVideoCapture,
       switches::kUseMockCertVerifierForTesting,
       switches::kUtilityStartupDialog,
       switches::kUseGL,
 #if defined(OS_ANDROID)
       switches::kOrderfileMemoryOptimization,
+#endif
+      // These flags are used by the audio service:
+      switches::kAudioBufferSize,
+      switches::kAudioServiceQuitTimeoutMs,
+      switches::kDisableAudioOutput,
+      switches::kFailAudioStreamCreation,
+      switches::kMuteAudio,
+      switches::kUseFileForFakeAudioCapture,
+#if defined(OS_LINUX) || defined(OS_FREEBSD) || defined(OS_SOLARIS)
+      switches::kAlsaInputDevice,
+      switches::kAlsaOutputDevice,
+#endif
+#if defined(OS_WIN)
+      switches::kEnableExclusiveAudio,
+      switches::kForceWaveAudio,
+      switches::kTrySupportedChannelLayouts,
+      switches::kWaveOutBuffers,
 #endif
     };
     cmd_line->CopySwitchesFrom(browser_command_line, kSwitchNames,
@@ -350,24 +387,6 @@ void UtilityProcessHost::OnProcessCrashed(int exit_code) {
   client_task_runner_->PostTask(
       FROM_HERE, base::BindOnce(&UtilityProcessHostClient::OnProcessCrashed,
                                 client_, exit_code));
-}
-
-void UtilityProcessHost::NotifyAndDelete(int error_code) {
-  BrowserThread::PostTask(
-      BrowserThread::IO, FROM_HERE,
-      base::BindOnce(&UtilityProcessHost::NotifyLaunchFailedAndDelete,
-                     weak_ptr_factory_.GetWeakPtr(), error_code));
-}
-
-// static
-void UtilityProcessHost::NotifyLaunchFailedAndDelete(
-    base::WeakPtr<UtilityProcessHost> host,
-    int error_code) {
-  if (!host)
-    return;
-
-  host->OnProcessLaunchFailed(error_code);
-  delete host.get();
 }
 
 }  // namespace content

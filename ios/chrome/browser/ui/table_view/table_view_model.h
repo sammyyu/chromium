@@ -12,8 +12,8 @@
 #import "ios/chrome/browser/ui/table_view/cells/table_view_item.h"
 
 // TableViewModel acts as a model class for table view controllers.
-@interface TableViewModel<__covariant ObjectType : TableViewItem*>
-    : ListModel<ObjectType, TableViewHeaderFooterItem*>
+@interface TableViewModel<__covariant ObjectType : TableViewItem*> :
+    ListModel<ObjectType, TableViewHeaderFooterItem*>
 
 @end
 

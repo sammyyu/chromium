@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "base/memory/weak_ptr.h"
 #include "base/sequence_checker.h"
 #include "components/reading_list/core/reading_list_model_storage.h"
 #include "components/reading_list/core/reading_list_store_delegate.h"
@@ -23,8 +24,9 @@ class ReadingListModel;
 // A ReadingListModelStorage storing and syncing data in protobufs.
 class ReadingListStore : public ReadingListModelStorage {
  public:
-  ReadingListStore(syncer::OnceModelTypeStoreFactory create_store_callback,
-                   const ChangeProcessorFactory& change_processor_factory);
+  ReadingListStore(
+      syncer::OnceModelTypeStoreFactory create_store_callback,
+      std::unique_ptr<syncer::ModelTypeChangeProcessor> change_processor);
   ~ReadingListStore() override;
 
   std::unique_ptr<ScopedBatchUpdate> EnsureBatchCreated() override;
@@ -105,7 +107,7 @@ class ReadingListStore : public ReadingListModelStorage {
   void GetData(StorageKeyList storage_keys, DataCallback callback) override;
 
   // Asynchronously retrieve all of the local sync data.
-  void GetAllData(DataCallback callback) override;
+  void GetAllDataForDebugging(DataCallback callback) override;
 
   // Get or generate a client tag for |entity_data|. This must be the same tag
   // that was/would have been generated in the SyncableService/Directory world
@@ -165,6 +167,8 @@ class ReadingListStore : public ReadingListModelStorage {
   base::Clock* clock_;
 
   SEQUENCE_CHECKER(sequence_checker_);
+
+  base::WeakPtrFactory<ReadingListStore> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(ReadingListStore);
 };

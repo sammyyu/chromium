@@ -9,6 +9,7 @@
 #include <map>
 #include <set>
 #include <string>
+#include <utility>
 
 #include "base/callback.h"
 #include "base/command_line.h"
@@ -28,7 +29,9 @@
 #include "chrome/browser/chromeos/settings/cros_settings.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/profiles/profiles_state.h"
 #include "chromeos/chromeos_switches.h"
+#include "components/arc/arc_features.h"
 #include "components/arc/arc_prefs.h"
 #include "components/arc/arc_util.h"
 #include "components/prefs/pref_service.h"
@@ -58,8 +61,8 @@ base::LazyInstance<std::map<base::FilePath, bool>>::DestructorAtExit
 bool g_disallow_for_testing = false;
 
 // Let IsArcBlockedDueToIncompatibleFileSystem() return the specified value
-// during test runs.
-bool g_arc_blocked_due_to_incomaptible_filesystem_for_testing = false;
+// during test runs. Doesn't affect ARC kiosk and public session.
+bool g_arc_blocked_due_to_incompatible_filesystem_for_testing = false;
 
 // TODO(kinaba): Temporary workaround for crbug.com/729034.
 //
@@ -97,7 +100,7 @@ FileSystemCompatibilityState GetFileSystemCompatibilityPref(
 // Stores the result of IsArcCompatibleFilesystem posted back from the blocking
 // task runner.
 void StoreCompatibilityCheckResult(const AccountId& account_id,
-                                   const base::Closure& callback,
+                                   base::OnceClosure callback,
                                    bool is_compatible) {
   if (is_compatible) {
     user_manager::known_user::SetIntegerPref(
@@ -109,7 +112,7 @@ void StoreCompatibilityCheckResult(const AccountId& account_id,
     if (GetFileSystemCompatibilityPref(account_id) != kFileSystemCompatible)
       g_known_compatible_users.Get().insert(account_id);
   }
-  callback.Run();
+  std::move(callback).Run();
 }
 
 bool IsArcMigrationAllowedInternal(const Profile* profile) {
@@ -290,23 +293,32 @@ bool IsArcMigrationAllowedByPolicyForProfile(const Profile* profile) {
 }
 
 bool IsArcBlockedDueToIncompatibleFileSystem(const Profile* profile) {
-  // Test runs on Linux workstation does not have expected /etc/lsb-release
-  // field nor profile creation step. Hence it returns a dummy test value.
-  if (!base::SysInfo::IsRunningOnChromeOS())
-    return g_arc_blocked_due_to_incomaptible_filesystem_for_testing;
-
-  // Conducts the actual check, only when running on a real Chrome OS device.
-  return !IsArcCompatibleFileSystemUsedForProfile(profile);
-}
-
-void SetArcBlockedDueToIncompatibleFileSystemForTesting(bool block) {
-  g_arc_blocked_due_to_incomaptible_filesystem_for_testing = block;
-}
-
-bool IsArcCompatibleFileSystemUsedForProfile(const Profile* profile) {
   const user_manager::User* user =
       chromeos::ProfileHelper::Get()->GetUserByProfile(profile);
 
+  // Return true for public accounts as they only have ext4 and
+  // for ARC kiosk as migration to ext4 should always be triggered.
+  // Without this check it fails to start after browser crash as
+  // compatibility info is stored in RAM.
+  if (user && (user->GetType() == user_manager::USER_TYPE_PUBLIC_ACCOUNT ||
+               user->GetType() == user_manager::USER_TYPE_ARC_KIOSK_APP)) {
+    return false;
+  }
+
+  // Test runs on Linux workstation does not have expected /etc/lsb-release
+  // field nor profile creation step. Hence it returns a dummy test value.
+  if (!base::SysInfo::IsRunningOnChromeOS())
+    return g_arc_blocked_due_to_incompatible_filesystem_for_testing;
+
+  // Conducts the actual check, only when running on a real Chrome OS device.
+  return !IsArcCompatibleFileSystemUsedForUser(user);
+}
+
+void SetArcBlockedDueToIncompatibleFileSystemForTesting(bool block) {
+  g_arc_blocked_due_to_incompatible_filesystem_for_testing = block;
+}
+
+bool IsArcCompatibleFileSystemUsedForUser(const user_manager::User* user) {
   // Returns false for profiles not associated with users (like sign-in profile)
   if (!user)
     return false;
@@ -414,34 +426,44 @@ bool IsArcOobeOptInActive() {
   if (!IsPlayStoreAvailable())
     return false;
 
-  // Check if Chrome OS OOBE or OPA OptIn flow is currently showing.
-  // TODO(b/65861628): Rename the method since it is no longer accurate.
-  // Redesign the OptIn flow since there is no longer reason to have two
-  // different OptIn flows.
+  // Check if Chrome OS OOBE flow is currently showing.
+  // TODO(b/65861628): Redesign the OptIn flow since there is no longer reason
+  // to have two different OptIn flows.
+  if (!chromeos::LoginDisplayHost::default_host())
+    return false;
+
+  // Use the legacy logic for first sign-in OOBE OptIn flow. Make sure the user
+  // is new.
+  if (!user_manager::UserManager::Get()->IsCurrentUserNew())
+    return false;
+
+  // Differentiate the case when Assistant Wizard is started later for the new
+  // user session. For example, OOBE was shown and user pressed Skip button.
+  // Later in the same user session user activates Assistant and we show
+  // Assistant Wizard with ARC terms. This case is not considered as OOBE OptIn.
+  return !IsArcOptInWizardForAssistantActive();
+}
+
+bool IsArcOptInWizardForAssistantActive() {
+  // Check if Assistant Wizard is currently showing.
+  // TODO(b/65861628): Redesign the OptIn flow since there is no longer reason
+  // to have two different OptIn flows.
   chromeos::LoginDisplayHost* host = chromeos::LoginDisplayHost::default_host();
-  if (!host)
+  if (!host || !host->IsVoiceInteractionOobe())
     return false;
 
   // Make sure the wizard controller is active and have the ARC ToS screen
   // showing for the voice interaction OptIn flow.
-  if (host->IsVoiceInteractionOobe()) {
-    const chromeos::WizardController* wizard_controller =
-        host->GetWizardController();
-    if (!wizard_controller)
-      return false;
-    const chromeos::BaseScreen* screen = wizard_controller->current_screen();
-    if (!screen)
-      return false;
-    return screen->screen_id() ==
-           chromeos::OobeScreen::SCREEN_ARC_TERMS_OF_SERVICE;
-  }
-
-  // Use the legacy logic for first sign-in OOBE OptIn flow. Make sure the user
-  // is new and the swtich is appended.
-  if (!user_manager::UserManager::Get()->IsCurrentUserNew())
+  const chromeos::WizardController* wizard_controller =
+      host->GetWizardController();
+  if (!wizard_controller)
     return false;
 
-  return true;
+  const chromeos::BaseScreen* screen = wizard_controller->current_screen();
+  if (!screen)
+    return false;
+  return screen->screen_id() ==
+         chromeos::OobeScreen::SCREEN_ARC_TERMS_OF_SERVICE;
 }
 
 bool IsArcTermsOfServiceNegotiationNeeded(const Profile* profile) {
@@ -451,7 +473,8 @@ bool IsArcTermsOfServiceNegotiationNeeded(const Profile* profile) {
   // them are managed by the admin policy. Note that the ToS agreement is anyway
   // not shown in the case of the managed ARC.
   if (IsArcPlayStoreEnabledPreferenceManagedForProfile(profile) &&
-      AreArcAllOptInPreferencesIgnorableForProfile(profile)) {
+      AreArcAllOptInPreferencesIgnorableForProfile(profile) &&
+      !ShouldShowOptInForTesting()) {
     VLOG(1) << "All opt-in preferences are under managed. "
             << "Skip ARC Terms of Service negotiation.";
     return false;
@@ -472,6 +495,17 @@ bool IsArcTermsOfServiceNegotiationNeeded(const Profile* profile) {
 }
 
 bool IsArcTermsOfServiceOobeNegotiationNeeded() {
+  if (!IsPlayStoreAvailable()) {
+    VLOG(1) << "Skip ARC Terms of Service screen because Play Store is not "
+               "available on the device.";
+    return false;
+  }
+
+  // Demo mode setup flow runs before user is created, therefore this condition
+  // needs to be checked before any user related ones.
+  if (IsArcDemoModeSetupFlow())
+    return true;
+
   if (!user_manager::UserManager::Get()->IsUserLoggedIn()) {
     VLOG(1) << "Skip ARC Terms of Service screen because user is not "
             << "logged in.";
@@ -490,12 +524,6 @@ bool IsArcTermsOfServiceOobeNegotiationNeeded() {
     return false;
   }
 
-  if (!IsPlayStoreAvailable()) {
-    VLOG(1) << "Skip ARC Terms of Service screen because Play Store is not "
-               "available on the device.";
-    return false;
-  }
-
   if (IsActiveDirectoryUserForProfile(profile)) {
     VLOG(1) << "Skip ARC Terms of Service screen because it does not apply to "
                "Active Directory users.";
@@ -511,11 +539,35 @@ bool IsArcTermsOfServiceOobeNegotiationNeeded() {
   return true;
 }
 
+bool IsArcStatsReportingEnabled() {
+  // Public session users never saw the consent for stats reporting even if the
+  // admin forced the pref by a policy.
+  if (profiles::IsPublicSession()) {
+    return false;
+  }
+
+  bool pref = false;
+  chromeos::CrosSettings::Get()->GetBoolean(chromeos::kStatsReportingPref,
+                                            &pref);
+  return pref;
+}
+
+bool IsArcDemoModeSetupFlow() {
+  chromeos::LoginDisplayHost* const host =
+      chromeos::LoginDisplayHost::default_host();
+  if (!host)
+    return false;
+
+  const chromeos::WizardController* const wizard_controller =
+      host->GetWizardController();
+  return wizard_controller && wizard_controller->is_in_demo_mode_setup_flow();
+}
+
 void UpdateArcFileSystemCompatibilityPrefIfNeeded(
     const AccountId& account_id,
     const base::FilePath& profile_path,
-    const base::Closure& callback) {
-  DCHECK(!callback.is_null());
+    base::OnceClosure callback) {
+  DCHECK(callback);
 
   // If ARC is not available, skip the check.
   // This shortcut is just for merginally improving the log-in performance on
@@ -523,13 +575,13 @@ void UpdateArcFileSystemCompatibilityPrefIfNeeded(
   // without changing any functionality when, say, the code clarity becomes
   // more important in the future.
   if (!IsArcAvailable() && !IsArcKioskAvailable()) {
-    callback.Run();
+    std::move(callback).Run();
     return;
   }
 
   // If the compatibility has been already confirmed, skip the check.
   if (GetFileSystemCompatibilityPref(account_id) != kFileSystemIncompatible) {
-    callback.Run();
+    std::move(callback).Run();
     return;
   }
 
@@ -538,17 +590,17 @@ void UpdateArcFileSystemCompatibilityPrefIfNeeded(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::USER_BLOCKING,
        base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
-      base::Bind(&IsArcCompatibleFilesystem, profile_path),
-      base::Bind(&StoreCompatibilityCheckResult, account_id, callback));
+      base::BindOnce(&IsArcCompatibleFilesystem, profile_path),
+      base::BindOnce(&StoreCompatibilityCheckResult, account_id,
+                     std::move(callback)));
 }
 
 ash::mojom::AssistantAllowedState IsAssistantAllowedForProfile(
     const Profile* profile) {
-  if (!chromeos::switches::IsVoiceInteractionFlagsEnabled())
+  if (!chromeos::switches::IsAssistantEnabled() &&
+      !chromeos::switches::IsVoiceInteractionFlagsEnabled()) {
     return ash::mojom::AssistantAllowedState::DISALLOWED_BY_FLAG;
-
-  if (!chromeos::switches::IsVoiceInteractionLocalesSupported())
-    return ash::mojom::AssistantAllowedState::DISALLOWED_BY_LOCALE;
+  }
 
   if (!chromeos::ProfileHelper::IsPrimaryProfile(profile))
     return ash::mojom::AssistantAllowedState::DISALLOWED_BY_NONPRIMARY_USER;
@@ -559,16 +611,49 @@ ash::mojom::AssistantAllowedState IsAssistantAllowedForProfile(
   if (profile->IsLegacySupervised())
     return ash::mojom::AssistantAllowedState::DISALLOWED_BY_SUPERVISED_USER;
 
-  const PrefService* prefs = profile->GetPrefs();
-  if (prefs->IsManagedPreference(prefs::kArcEnabled) &&
-      !prefs->GetBoolean(prefs::kArcEnabled)) {
-    return ash::mojom::AssistantAllowedState::DISALLOWED_BY_ARC_POLICY;
+  if (chromeos::switches::IsVoiceInteractionFlagsEnabled()) {
+    if (!chromeos::switches::IsVoiceInteractionLocalesSupported())
+      return ash::mojom::AssistantAllowedState::DISALLOWED_BY_LOCALE;
+
+    const PrefService* prefs = profile->GetPrefs();
+    if (prefs->IsManagedPreference(prefs::kArcEnabled) &&
+        !prefs->GetBoolean(prefs::kArcEnabled)) {
+      return ash::mojom::AssistantAllowedState::DISALLOWED_BY_ARC_POLICY;
+    }
+
+    if (!IsArcAllowedForProfile(profile))
+      return ash::mojom::AssistantAllowedState::DISALLOWED_BY_ARC_DISALLOWED;
   }
 
-  if (!IsArcAllowedForProfile(profile))
-    return ash::mojom::AssistantAllowedState::DISALLOWED_BY_ARC_DISALLOWED;
-
   return ash::mojom::AssistantAllowedState::ALLOWED;
+}
+
+ArcSupervisionTransition GetSupervisionTransition(const Profile* profile) {
+  DCHECK(profile);
+  DCHECK(profile->GetPrefs());
+
+  const ArcSupervisionTransition supervision_transition =
+      static_cast<ArcSupervisionTransition>(
+          profile->GetPrefs()->GetInteger(prefs::kArcSupervisionTransition));
+  const bool is_child_to_regular_enabled =
+      base::FeatureList::IsEnabled(kEnableChildToRegularTransitionFeature);
+  const bool is_regular_to_child_enabled =
+      base::FeatureList::IsEnabled(kEnableRegularToChildTransitionFeature);
+
+  switch (supervision_transition) {
+    case ArcSupervisionTransition::NO_TRANSITION:
+      // Do nothing.
+      break;
+    case ArcSupervisionTransition::CHILD_TO_REGULAR:
+      if (!is_child_to_regular_enabled)
+        return ArcSupervisionTransition::NO_TRANSITION;
+      break;
+    case ArcSupervisionTransition::REGULAR_TO_CHILD:
+      if (!is_regular_to_child_enabled)
+        return ArcSupervisionTransition::NO_TRANSITION;
+      break;
+  }
+  return supervision_transition;
 }
 
 }  // namespace arc

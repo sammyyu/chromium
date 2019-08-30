@@ -12,6 +12,7 @@
 #include "cc/paint/paint_export.h"
 #include "cc/paint/paint_flags.h"
 #include "cc/paint/paint_image.h"
+#include "cc/paint/scoped_raster_flags.h"
 #include "third_party/skia/include/core/SkBlendMode.h"
 #include "third_party/skia/include/core/SkImageFilter.h"
 #include "third_party/skia/include/core/SkPoint3.h"
@@ -23,10 +24,12 @@
 
 namespace viz {
 class GLRenderer;
+class SkiaRenderer;
 class SoftwareRenderer;
 }  // namespace viz
 
 namespace cc {
+class ImageProvider;
 
 class CC_PAINT_EXPORT PaintFilter : public SkRefCnt {
  public:
@@ -90,19 +93,26 @@ class CC_PAINT_EXPORT PaintFilter : public SkRefCnt {
       return 0;
     return cached_sk_filter_->countInputs();
   }
-  std::string ToString() const {
-    if (!cached_sk_filter_)
-      return "Invalid filter";
-
-    SkString str;
-    cached_sk_filter_->toString(&str);
-    return str.c_str();
-  }
   const CropRect* crop_rect() const {
     return base::OptionalOrNullptr(crop_rect_);
   }
 
+  bool has_discardable_images() const { return has_discardable_images_; }
+  ImageAnalysisState image_analysis_state() const {
+    return image_analysis_state_;
+  }
+  void set_has_animated_images(bool has_animated_images) {
+    image_analysis_state_ = has_animated_images
+                                ? ImageAnalysisState::kAnimatedImages
+                                : ImageAnalysisState::kNoAnimatedImages;
+  }
+
   virtual size_t SerializedSize() const = 0;
+
+  // Returns a snaphot of the PaintFilter with images replaced using
+  // |image_provider|. Note that this may return the same filter if the filter
+  // has no images.
+  sk_sp<PaintFilter> SnapshotWithImages(ImageProvider* image_provider) const;
 
   // Note that this operation is potentially slow. It also only compares things
   // that are easy to compare. As an example, it doesn't compare equality of
@@ -114,7 +124,9 @@ class CC_PAINT_EXPORT PaintFilter : public SkRefCnt {
   bool operator!=(const PaintFilter& other) const { return !(*this == other); }
 
  protected:
-  PaintFilter(Type type, const CropRect* crop_rect);
+  PaintFilter(Type type,
+              const CropRect* crop_rect,
+              bool has_discardable_images);
 
   static sk_sp<SkImageFilter> GetSkFilter(const PaintFilter* paint_filter) {
     return paint_filter ? paint_filter->cached_sk_filter_ : nullptr;
@@ -124,6 +136,8 @@ class CC_PAINT_EXPORT PaintFilter : public SkRefCnt {
   }
 
   size_t BaseSerializedSize() const;
+  virtual sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const = 0;
 
   // This should be created by each sub-class at construction time, to ensure
   // that subsequent access to the filter is thread-safe.
@@ -134,10 +148,14 @@ class CC_PAINT_EXPORT PaintFilter : public SkRefCnt {
   // raster.
   friend class PaintFlags;
   friend class viz::GLRenderer;
+  friend class viz::SkiaRenderer;
   friend class viz::SoftwareRenderer;
 
   const Type type_;
   base::Optional<CropRect> crop_rect_;
+  const bool has_discardable_images_;
+
+  ImageAnalysisState image_analysis_state_ = ImageAnalysisState::kNoAnalysis;
 
   DISALLOW_COPY_AND_ASSIGN(PaintFilter);
 };
@@ -155,6 +173,10 @@ class CC_PAINT_EXPORT ColorFilterPaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const ColorFilterPaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   sk_sp<SkColorFilter> color_filter_;
@@ -180,6 +202,10 @@ class CC_PAINT_EXPORT BlurPaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const BlurPaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   SkScalar sigma_x_;
@@ -213,6 +239,10 @@ class CC_PAINT_EXPORT DropShadowPaintFilter final : public PaintFilter {
   size_t SerializedSize() const override;
   bool operator==(const DropShadowPaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
   SkScalar dx_;
   SkScalar dy_;
@@ -239,6 +269,10 @@ class CC_PAINT_EXPORT MagnifierPaintFilter final : public PaintFilter {
   size_t SerializedSize() const override;
   bool operator==(const MagnifierPaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
   SkRect src_rect_;
   SkScalar inset_;
@@ -256,6 +290,10 @@ class CC_PAINT_EXPORT ComposePaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const ComposePaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   sk_sp<PaintFilter> outer_;
@@ -280,6 +318,10 @@ class CC_PAINT_EXPORT AlphaThresholdPaintFilter final : public PaintFilter {
   size_t SerializedSize() const override;
   bool operator==(const AlphaThresholdPaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
   SkRegion region_;
   SkScalar inner_min_;
@@ -302,6 +344,10 @@ class CC_PAINT_EXPORT XfermodePaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const XfermodePaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   SkBlendMode blend_mode_;
@@ -332,6 +378,10 @@ class CC_PAINT_EXPORT ArithmeticPaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const ArithmeticPaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   float k1_;
@@ -370,6 +420,10 @@ class CC_PAINT_EXPORT MatrixConvolutionPaintFilter final : public PaintFilter {
   size_t SerializedSize() const override;
   bool operator==(const MatrixConvolutionPaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
   SkISize kernel_size_;
   base::StackVector<SkScalar, 3> kernel_;
@@ -403,6 +457,10 @@ class CC_PAINT_EXPORT DisplacementMapEffectPaintFilter final
   size_t SerializedSize() const override;
   bool operator==(const DisplacementMapEffectPaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
   ChannelSelectorType channel_x_;
   ChannelSelectorType channel_y_;
@@ -428,6 +486,10 @@ class CC_PAINT_EXPORT ImagePaintFilter final : public PaintFilter {
   size_t SerializedSize() const override;
   bool operator==(const ImagePaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
   PaintImage image_;
   SkRect src_rect_;
@@ -447,7 +509,15 @@ class CC_PAINT_EXPORT RecordPaintFilter final : public PaintFilter {
   size_t SerializedSize() const override;
   bool operator==(const RecordPaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
+  RecordPaintFilter(sk_sp<PaintRecord> record,
+                    const SkRect& record_bounds,
+                    ImageProvider* image_provider);
+
   sk_sp<PaintRecord> record_;
   SkRect record_bounds_;
 };
@@ -455,7 +525,7 @@ class CC_PAINT_EXPORT RecordPaintFilter final : public PaintFilter {
 class CC_PAINT_EXPORT MergePaintFilter final : public PaintFilter {
  public:
   static constexpr Type kType = Type::kMerge;
-  MergePaintFilter(sk_sp<PaintFilter>* const filters,
+  MergePaintFilter(const sk_sp<PaintFilter>* const filters,
                    int count,
                    const CropRect* crop_rect = nullptr);
   ~MergePaintFilter() override;
@@ -469,7 +539,15 @@ class CC_PAINT_EXPORT MergePaintFilter final : public PaintFilter {
   size_t SerializedSize() const override;
   bool operator==(const MergePaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
+  MergePaintFilter(const sk_sp<PaintFilter>* const filters,
+                   int count,
+                   const CropRect* crop_rect,
+                   ImageProvider* image_provider);
   base::StackVector<sk_sp<PaintFilter>, 2> inputs_;
 };
 
@@ -491,6 +569,10 @@ class CC_PAINT_EXPORT MorphologyPaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const MorphologyPaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   MorphType morph_type_;
@@ -515,6 +597,10 @@ class CC_PAINT_EXPORT OffsetPaintFilter final : public PaintFilter {
   size_t SerializedSize() const override;
   bool operator==(const OffsetPaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
   SkScalar dx_;
   SkScalar dy_;
@@ -535,6 +621,10 @@ class CC_PAINT_EXPORT TilePaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const TilePaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   SkRect src_;
@@ -569,6 +659,10 @@ class CC_PAINT_EXPORT TurbulencePaintFilter final : public PaintFilter {
   size_t SerializedSize() const override;
   bool operator==(const TurbulencePaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
   TurbulenceType turbulence_type_;
   SkScalar base_frequency_x_;
@@ -590,8 +684,17 @@ class CC_PAINT_EXPORT PaintFlagsPaintFilter final : public PaintFilter {
   size_t SerializedSize() const override;
   bool operator==(const PaintFlagsPaintFilter& other) const;
 
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
+
  private:
+  PaintFlagsPaintFilter(PaintFlags flags,
+                        ImageProvider* image_provider,
+                        const CropRect* crop_rect);
+
   PaintFlags flags_;
+  base::Optional<ScopedRasterFlags> raster_flags_;
 };
 
 class CC_PAINT_EXPORT MatrixPaintFilter final : public PaintFilter {
@@ -608,6 +711,10 @@ class CC_PAINT_EXPORT MatrixPaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const MatrixPaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   SkMatrix matrix_;
@@ -641,6 +748,10 @@ class CC_PAINT_EXPORT LightingDistantPaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const LightingDistantPaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   LightingType lighting_type_;
@@ -678,6 +789,10 @@ class CC_PAINT_EXPORT LightingPointPaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const LightingPointPaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   LightingType lighting_type_;
@@ -721,6 +836,10 @@ class CC_PAINT_EXPORT LightingSpotPaintFilter final : public PaintFilter {
 
   size_t SerializedSize() const override;
   bool operator==(const LightingSpotPaintFilter& other) const;
+
+ protected:
+  sk_sp<PaintFilter> SnapshotWithImagesInternal(
+      ImageProvider* image_provider) const override;
 
  private:
   LightingType lighting_type_;

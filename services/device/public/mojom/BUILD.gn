@@ -2,6 +2,7 @@
 # Use of this source code is governed by a BSD-style license that can be
 # found in the LICENSE file.
 
+import("//build/config/features.gni")
 import("//mojo/public/tools/bindings/mojom.gni")
 
 mojom("mojom") {
@@ -32,10 +33,18 @@ mojom("mojom") {
 
   public_deps = [
     ":constants",
-    "//mojo/common:common_custom_types",
+    "//mojo/public/mojom/base",
     "//services/network/public/mojom",
     "//services/network/public/mojom:mutable_network_traffic_annotation_interface",
   ]
+
+  if (is_chromeos && use_dbus) {
+    sources += [
+      "mtp_file_entry.mojom",
+      "mtp_manager.mojom",
+      "mtp_storage_info.mojom",
+    ]
+  }
 
   # The blink variant of the Device Service mojom are depended on by the
   # blink platform target. All blink variant mojoms use WTF types, which are
@@ -43,12 +52,13 @@ mojom("mojom") {
   # these targets must be part of that component.
   export_class_attribute_blink = "BLINK_PLATFORM_EXPORT"
   export_define_blink = "BLINK_PLATFORM_IMPLEMENTATION=1"
-  export_header_blink = "third_party/WebKit/public/platform/WebCommon.h"
+  export_header_blink = "third_party/blink/public/platform/web_common.h"
 
   visibility_blink = [
-    "//third_party/WebKit/Source/bindings/modules/v8:generate_mojo_bindings",
-    "//third_party/WebKit/Source/platform:blink_platform_public_deps",
-    "//third_party/WebKit/public:mojo_bindings_blink",
+    "//third_party/blink/renderer/bindings/modules/v8:generate_mojo_bindings",
+    "//third_party/blink/renderer/platform:blink_platform_public_deps",
+    "//third_party/blink/public:mojo_bindings_blink",
+    "//third_party/blink/public/mojom:mojom_platform_blink",
   ]
 }
 
@@ -64,10 +74,15 @@ mojom("generic_sensor") {
 
   export_class_attribute_blink = "BLINK_PLATFORM_EXPORT"
   export_define_blink = "BLINK_PLATFORM_IMPLEMENTATION=1"
-  export_header_blink = "third_party/WebKit/public/platform/WebCommon.h"
+  export_header_blink = "third_party/blink/public/platform/web_common.h"
 
   visibility_blink =
-      [ "//third_party/WebKit/Source/platform:blink_platform_public_deps" ]
+      [ "//third_party/blink/renderer/platform:blink_platform_public_deps" ]
+
+  # Generic Sensor Mojom interfaces are exposed publicly to layout tests which
+  # use prepackaged redistributable JS bindings. It is therefore not desirable
+  # to scramble these messages.
+  scramble_message_ids = false
 }
 
 mojom("constants") {
@@ -77,10 +92,10 @@ mojom("constants") {
 
   export_class_attribute_blink = "BLINK_PLATFORM_EXPORT"
   export_define_blink = "BLINK_PLATFORM_IMPLEMENTATION=1"
-  export_header_blink = "third_party/WebKit/public/platform/WebCommon.h"
+  export_header_blink = "third_party/blink/public/platform/web_common.h"
 
   visibility_blink = [
-    "//third_party/WebKit/Source/platform:blink_platform_public_deps",
+    "//third_party/blink/renderer/platform:blink_platform_public_deps",
     ":*",
   ]
 }

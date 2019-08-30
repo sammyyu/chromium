@@ -23,7 +23,7 @@ class AutocompleteProviderClientImpl : public AutocompleteProviderClient {
   ~AutocompleteProviderClientImpl() override;
 
   // AutocompleteProviderClient implementation.
-  net::URLRequestContextGetter* GetRequestContext() override;
+  scoped_refptr<network::SharedURLLoaderFactory> GetURLLoaderFactory() override;
   PrefService* GetPrefs() override;
   const AutocompleteSchemeClassifier& GetSchemeClassifier() const override;
   AutocompleteClassifier* GetAutocompleteClassifier() override;
@@ -36,12 +36,13 @@ class AutocompleteProviderClientImpl : public AutocompleteProviderClient {
   const TemplateURLService* GetTemplateURLService() const override;
   ContextualSuggestionsService* GetContextualSuggestionsService(
       bool create_if_necessary) const override;
+  DocumentSuggestionsService* GetDocumentSuggestionsService(
+      bool create_if_necessary) const override;
   const SearchTermsData& GetSearchTermsData() const override;
   scoped_refptr<ShortcutsBackend> GetShortcutsBackend() override;
   scoped_refptr<ShortcutsBackend> GetShortcutsBackendIfExists() override;
   std::unique_ptr<KeywordExtensionsDelegate> GetKeywordExtensionsDelegate(
       KeywordProvider* keyword_provider) override;
-  physical_web::PhysicalWebDataSource* GetPhysicalWebDataSource() override;
   std::string GetAcceptLanguages() const override;
   std::string GetEmbedderRepresentationOfAboutScheme() override;
   std::vector<base::string16> GetBuiltinURLs() override;
@@ -51,7 +52,7 @@ class AutocompleteProviderClientImpl : public AutocompleteProviderClient {
   base::Time GetCurrentVisitTimestamp() const override;
   bool IsOffTheRecord() const override;
   bool SearchSuggestEnabled() const override;
-  bool TabSyncEnabledAndUnencrypted() const override;
+  bool IsTabUploadToGoogleActive() const override;
   bool IsAuthenticated() const override;
   void Classify(
       const base::string16& text,

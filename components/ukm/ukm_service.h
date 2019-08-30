@@ -42,7 +42,9 @@ class UkmService : public UkmRecorderImpl {
   // Constructs a UkmService.
   // Calling code is responsible for ensuring that the lifetime of
   // |pref_service| is longer than the lifetime of UkmService.
-  UkmService(PrefService* pref_service, metrics::MetricsServiceClient* client);
+  UkmService(PrefService* pref_service,
+             metrics::MetricsServiceClient* client,
+             bool restrict_to_whitelist_entries);
   ~UkmService() override;
 
   // Initializes the UKM service.
@@ -82,14 +84,7 @@ class UkmService : public UkmRecorderImpl {
   friend ::metrics::UkmBrowserTest;
   friend ::metrics::UkmEGTestHelper;
   friend ::ukm::debug::UkmDebugDataExtractor;
-
-  FRIEND_TEST_ALL_PREFIXES(UkmServiceTest, AddEntryWithEmptyMetrics);
-  FRIEND_TEST_ALL_PREFIXES(UkmServiceTest, EntryBuilderAndSerialization);
-  FRIEND_TEST_ALL_PREFIXES(UkmServiceTest,
-                           LogsUploadedOnlyWhenHavingSourcesOrEntries);
-  FRIEND_TEST_ALL_PREFIXES(UkmServiceTest, MetricsProviderTest);
-  FRIEND_TEST_ALL_PREFIXES(UkmServiceTest, PersistAndPurge);
-  FRIEND_TEST_ALL_PREFIXES(UkmServiceTest, WhitelistEntryTest);
+  friend ::ukm::UkmUtilsForTest;
 
   // Starts metrics client initialization.
   void StartInitTask();
@@ -111,8 +106,14 @@ class UkmService : public UkmRecorderImpl {
   // Called by log_uploader_ when the an upload is completed.
   void OnLogUploadComplete(int response_code);
 
+  // ukm::UkmRecorderImpl:
+  bool ShouldRestrictToWhitelistedEntries() const override;
+
   // A weak pointer to the PrefService used to read and write preferences.
   PrefService* pref_service_;
+
+  // If true, only whitelisted Entries should be recorded.
+  bool restrict_to_whitelist_entries_;
 
   // The UKM client id stored in prefs.
   uint64_t client_id_;

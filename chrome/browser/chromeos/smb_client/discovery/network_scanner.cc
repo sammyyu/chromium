@@ -9,6 +9,7 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
+#include "base/strings/string_util.h"
 #include "chrome/browser/chromeos/smb_client/discovery/host_locator.h"
 
 namespace chromeos {
@@ -38,7 +39,7 @@ NetworkScanner::~NetworkScanner() = default;
 void NetworkScanner::FindHostsInNetwork(FindHostsCallback callback) {
   if (locators_.empty()) {
     // Fire the callback immediately if there are no registered HostLocators.
-    std::move(callback).Run(HostMap());
+    std::move(callback).Run(false /* success */, HostMap());
     return;
   }
 
@@ -53,11 +54,26 @@ void NetworkScanner::RegisterHostLocator(std::unique_ptr<HostLocator> locator) {
   locators_.push_back(std::move(locator));
 }
 
+std::string NetworkScanner::ResolveHost(const std::string& host) const {
+  DCHECK(find_hosts_returned_);
+
+  const auto& host_iter = found_hosts_.find(base::ToLowerASCII(host));
+  if (host_iter == found_hosts_.end()) {
+    return "";
+  }
+
+  return host_iter->second;
+}
+
 void NetworkScanner::OnHostsFound(uint32_t request_id,
+                                  bool success,
                                   const HostMap& host_map) {
   DCHECK_GT(requests_.count(request_id), 0u);
 
-  AddHostsToResults(request_id, host_map);
+  if (success) {
+    AddHostsToResults(request_id, host_map);
+  }
+
   FireCallbackIfFinished(request_id);
 }
 
@@ -68,11 +84,11 @@ void NetworkScanner::AddHostsToResults(uint32_t request_id,
 
   HostMap& existing_hosts = request_iter->second.hosts_found;
   for (const auto& new_host : new_hosts) {
-    const Hostname& new_hostname = new_host.first;
+    const Hostname& new_hostname = base::ToLowerASCII(new_host.first);
     const Address& new_ip = new_host.second;
 
     if (!HostExists(existing_hosts, new_hostname)) {
-      existing_hosts.insert(new_host);
+      existing_hosts.insert(std::pair<Hostname, Address>(new_hostname, new_ip));
     } else if (existing_hosts[new_hostname] != new_ip) {
       LOG(WARNING) << "Different addresses found for host: " << new_hostname;
       LOG(WARNING) << existing_hosts[new_hostname] << ":" << new_ip;
@@ -98,7 +114,11 @@ void NetworkScanner::FireCallbackIfFinished(uint32_t request_id) {
     RequestInfo info = std::move(request_iter->second);
     requests_.erase(request_iter);
 
-    std::move(info.callback).Run(info.hosts_found);
+    // Save the found hosts for name resolution.
+    found_hosts_ = std::move(info.hosts_found);
+    find_hosts_returned_ = true;
+
+    std::move(info.callback).Run(true /* success */, found_hosts_);
   }
 }
 

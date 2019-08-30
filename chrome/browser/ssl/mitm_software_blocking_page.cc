@@ -70,7 +70,8 @@ MITMSoftwareBlockingPage::MITMSoftwareBlockingPage(
     const base::Callback<void(content::CertificateRequestResultType)>& callback)
     : SSLBlockingPageBase(
           web_contents,
-          certificate_reporting::ErrorReport::INTERSTITIAL_MITM_SOFTWARE,
+          cert_error,
+          CertificateErrorReport::INTERSTITIAL_MITM_SOFTWARE,
           ssl_info,
           request_url,
           std::move(ssl_cert_reporter),
@@ -79,6 +80,7 @@ MITMSoftwareBlockingPage::MITMSoftwareBlockingPage(
           std::make_unique<SSLErrorControllerClient>(
               web_contents,
               ssl_info,
+              cert_error,
               request_url,
               CreateMitmSoftwareMetricsHelper(web_contents, request_url))),
       callback_(callback),
@@ -143,8 +145,7 @@ void MITMSoftwareBlockingPage::OverrideRendererPrefs(
     content::RendererPreferences* prefs) {
   Profile* profile =
       Profile::FromBrowserContext(web_contents()->GetBrowserContext());
-  renderer_preferences_util::UpdateFromSystemSettings(prefs, profile,
-                                                      web_contents());
+  renderer_preferences_util::UpdateFromSystemSettings(prefs, profile);
 }
 
 void MITMSoftwareBlockingPage::OnDontProceed() {

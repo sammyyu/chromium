@@ -13,30 +13,45 @@
 namespace gpu {
 
 class DecoderClient;
+class ServiceTransferCache;
 
 namespace gles2 {
+class CopyTextureCHROMIUMResourceManager;
 class GLES2Util;
+class ImageManager;
 class Logger;
 class Outputter;
 }  // namespace gles2
 
 namespace raster {
+struct RasterDecoderContextState;
 
 // This class implements the AsyncAPIInterface interface, decoding
 // RasterInterface commands and calling GL.
 class GPU_GLES2_EXPORT RasterDecoder : public DecoderContext,
                                        public CommonDecoder {
  public:
-  static RasterDecoder* Create(DecoderClient* client,
-                               CommandBufferServiceBase* command_buffer_service,
-                               gles2::Outputter* outputter,
-                               gles2::ContextGroup* group);
+  static RasterDecoder* Create(
+      DecoderClient* client,
+      CommandBufferServiceBase* command_buffer_service,
+      gles2::Outputter* outputter,
+      gles2::ContextGroup* group,
+      scoped_refptr<RasterDecoderContextState> raster_decoder_context_state);
 
   ~RasterDecoder() override;
 
   // DecoderContext implementation.
   bool initialized() const override;
   TextureBase* GetTextureBase(uint32_t client_id) override;
+  void SetLevelInfo(uint32_t client_id,
+                    int level,
+                    unsigned internal_format,
+                    unsigned width,
+                    unsigned height,
+                    unsigned depth,
+                    unsigned format,
+                    unsigned type,
+                    const gfx::Rect& cleared_rect) override;
   void BeginDecoding() override;
   void EndDecoding() override;
   base::StringPiece GetLogPrefix() override;
@@ -45,6 +60,9 @@ class GPU_GLES2_EXPORT RasterDecoder : public DecoderContext,
   virtual gles2::Logger* GetLogger() = 0;
   virtual void SetIgnoreCachedStateForTest(bool ignore) = 0;
 
+  // Gets the ImageManager for this context.
+  virtual gles2::ImageManager* GetImageManagerForTest() = 0;
+
   void set_initialized() { initialized_ = true; }
 
   // Set to true to call glGetError after every command.
@@ -52,16 +70,28 @@ class GPU_GLES2_EXPORT RasterDecoder : public DecoderContext,
   bool debug() const { return debug_; }
 
   // Set to true to LOG every command.
-  void set_log_commands(bool log_commands) { log_commands_ = log_commands; }
+  void SetLogCommands(bool log_commands) override;
+  gles2::Outputter* outputter() const override;
   bool log_commands() const { return log_commands_; }
 
+  virtual void SetCopyTextureResourceManagerForTest(
+      gles2::CopyTextureCHROMIUMResourceManager*
+          copy_texture_resource_manager) = 0;
+
+  virtual int DecoderIdForTest() = 0;
+  virtual ServiceTransferCache* GetTransferCacheForTest() = 0;
+
+  virtual void SetUpForRasterCHROMIUMForTest() = 0;
+
  protected:
-  RasterDecoder(CommandBufferServiceBase* command_buffer_service);
+  RasterDecoder(CommandBufferServiceBase* command_buffer_service,
+                gles2::Outputter* outputter);
 
  private:
-  bool initialized_;
-  bool debug_;
-  bool log_commands_;
+  bool initialized_ = false;
+  bool debug_ = false;
+  bool log_commands_ = false;
+  gles2::Outputter* outputter_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(RasterDecoder);
 };

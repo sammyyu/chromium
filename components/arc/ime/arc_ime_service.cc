@@ -11,6 +11,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "components/arc/arc_browser_context_keyed_service_factory_base.h"
+#include "components/arc/arc_util.h"
 #include "components/arc/ime/arc_ime_bridge_impl.h"
 #include "components/exo/shell_surface.h"
 #include "components/exo/surface.h"
@@ -19,14 +20,19 @@
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host.h"
 #include "ui/base/ime/input_method.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/event.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 #include "ui/gfx/range/range.h"
+#include "ui/keyboard/keyboard_controller.h"
 
 namespace arc {
 
 namespace {
+
+constexpr char kArcNotificationAppId[] =
+    "org.chromium.arc.ArcNotificationService";
 
 base::Optional<double> g_override_default_device_scale_factor;
 
@@ -45,10 +51,31 @@ class ArcWindowDelegateImpl : public ArcImeService::ArcWindowDelegate {
 
   ~ArcWindowDelegateImpl() override = default;
 
-  bool IsArcWindow(
-      const aura::Window* window) const override {
+  bool IsExoWindow(const aura::Window* window) const override {
     return exo::Surface::AsSurface(window) ||
            exo::ShellSurface::GetMainSurface(window);
+  }
+
+  bool IsArcWindow(const aura::Window* window) const override {
+    if (!IsExoWindow(window))
+      return false;
+
+    aura::Window* active = exo::WMHelper::GetInstance()->GetActiveWindow();
+    if (!active || !active->Contains(window))
+      return false;
+    // If the ARC app is focused, the active window should be ARC app window.
+    if (IsArcAppWindow(active))
+      return true;
+
+    // If the ARC notification is focused, the active window is not ARC app
+    // window. Find an app id set to the window and check if it is the ARC
+    // notification app id.
+    for (; window && window != active; window = window->parent()) {
+      const std::string* app_id = exo::ShellSurface::GetApplicationId(window);
+      if (app_id)
+        return *app_id == kArcNotificationAppId;
+    }
+    return false;
   }
 
   void RegisterFocusObserver() override {
@@ -112,8 +139,8 @@ ArcImeService::ArcImeService(content::BrowserContext* context,
     : ime_bridge_(new ArcImeBridgeImpl(this, bridge_service)),
       arc_window_delegate_(new ArcWindowDelegateImpl(this)),
       ime_type_(ui::TEXT_INPUT_TYPE_NONE),
+      is_personalized_learning_allowed_(false),
       has_composition_text_(false),
-      keyboard_controller_(nullptr),
       is_focus_observer_installed_(false) {
   aura::Env* env = aura::Env::GetInstanceDontCreate();
   if (env)
@@ -132,11 +159,13 @@ ArcImeService::~ArcImeService() {
   aura::Env* env = aura::Env::GetInstanceDontCreate();
   if (env)
     env->RemoveObserver(this);
-  // Removing |this| from KeyboardController.
-  keyboard::KeyboardController* keyboard_controller =
-      keyboard::KeyboardController::GetInstance();
-  if (keyboard_controller && keyboard_controller_ == keyboard_controller) {
-    keyboard_controller_->RemoveObserver(this);
+
+  // KeyboardController is destroyed before ArcImeService (except in tests),
+  // so check whether there is a KeyboardController first before removing |this|
+  // from KeyboardController observers.
+  if (keyboard::KeyboardController::HasInstance()) {
+    auto* keyboard_controller = keyboard::KeyboardController::Get();
+    keyboard_controller->RemoveObserver(this);
   }
 }
 
@@ -173,18 +202,24 @@ void ArcImeService::ReattachInputMethod(aura::Window* old_window,
 // Overridden from aura::EnvObserver:
 
 void ArcImeService::OnWindowInitialized(aura::Window* new_window) {
-  if (arc_window_delegate_->IsArcWindow(new_window)) {
+  // Register the focus observer when every exo window is created because an
+  // application id might not be set here yet.
+  if (arc_window_delegate_->IsExoWindow(new_window)) {
     if (!is_focus_observer_installed_) {
       arc_window_delegate_->RegisterFocusObserver();
       is_focus_observer_installed_ = true;
     }
   }
-  keyboard::KeyboardController* keyboard_controller =
-      keyboard::KeyboardController::GetInstance();
-  if (keyboard_controller && keyboard_controller_ != keyboard_controller) {
-    // Registering |this| as an observer only once per KeyboardController.
-    keyboard_controller_ = keyboard_controller;
-    keyboard_controller_->AddObserver(this);
+
+  // TODO(mash): Support virtual keyboard under MASH. There is no
+  // KeyboardController in the browser process under MASH.
+  if (features::IsAshInBrowserProcess() &&
+      keyboard::KeyboardController::HasInstance()) {
+    auto* keyboard_controller = keyboard::KeyboardController::Get();
+    if (keyboard_controller->enabled() &&
+        !keyboard_controller->HasObserver(this)) {
+      keyboard_controller->AddObserver(this);
+    }
   }
 }
 
@@ -234,10 +269,15 @@ void ArcImeService::OnWindowFocused(aura::Window* gained_focus,
 ////////////////////////////////////////////////////////////////////////////////
 // Overridden from arc::ArcImeBridge::Delegate
 
-void ArcImeService::OnTextInputTypeChanged(ui::TextInputType type) {
-  if (ime_type_ == type)
+void ArcImeService::OnTextInputTypeChanged(
+    ui::TextInputType type,
+    bool is_personalized_learning_allowed) {
+  if (ime_type_ == type &&
+      is_personalized_learning_allowed_ == is_personalized_learning_allowed) {
     return;
+  }
   ime_type_ = type;
+  is_personalized_learning_allowed_ = is_personalized_learning_allowed;
 
   ui::InputMethod* const input_method = GetInputMethod();
   if (input_method)
@@ -262,10 +302,10 @@ void ArcImeService::OnCancelComposition() {
     input_method->CancelComposition(this);
 }
 
-void ArcImeService::ShowImeIfNeeded() {
+void ArcImeService::ShowVirtualKeyboardIfEnabled() {
   ui::InputMethod* const input_method = GetInputMethod();
   if (input_method && input_method->GetTextInputClient() == this) {
-    input_method->ShowImeIfNeeded();
+    input_method->ShowVirtualKeyboardIfEnabled();
   }
 }
 
@@ -287,6 +327,17 @@ void ArcImeService::OnCursorRectChangedWithSurroundingText(
     input_method->OnCaretBoundsChanged(this);
 }
 
+void ArcImeService::RequestHideIme() {
+  // TODO(mash): Support virtual keyboard under MASH. There is no
+  // KeyboardController in the browser process under MASH.
+  if (features::IsAshInBrowserProcess() &&
+      keyboard::KeyboardController::HasInstance()) {
+    auto* keyboard_controller = keyboard::KeyboardController::Get();
+    if (keyboard_controller->enabled())
+      keyboard_controller->HideKeyboardImplicitlyBySystem();
+  }
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // Overridden from keyboard::KeyboardControllerObserver
 void ArcImeService::OnKeyboardAppearanceChanged(
@@ -304,8 +355,7 @@ void ArcImeService::OnKeyboardAppearanceChanged(
   gfx::Rect bounds_in_px =
       gfx::ScaleToEnclosingRect(new_bounds, GetDefaultDeviceScaleFactor());
 
-  ime_bridge_->SendOnKeyboardAppearanceChanging(bounds_in_px,
-                                                state.is_available);
+  ime_bridge_->SendOnKeyboardAppearanceChanging(bounds_in_px, state.is_visible);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
@@ -443,6 +493,13 @@ bool ArcImeService::HasCompositionText() const {
   return has_composition_text_;
 }
 
+ui::TextInputClient::FocusReason ArcImeService::GetFocusReason() const {
+  // TODO(https://crbug.com/824604): Determine how the current input client got
+  // focused.
+  NOTIMPLEMENTED_LOG_ONCE();
+  return ui::TextInputClient::FOCUS_REASON_OTHER;
+}
+
 bool ArcImeService::GetCompositionTextRange(gfx::Range* range) const {
   return false;
 }
@@ -465,10 +522,14 @@ bool ArcImeService::IsTextEditCommandEnabled(
   return false;
 }
 
-const std::string& ArcImeService::GetClientSourceInfo() const {
+ukm::SourceId ArcImeService::GetClientSourceForMetrics() const {
   // TODO(yhanada): Implement this method. crbug.com/752657
   NOTIMPLEMENTED_LOG_ONCE();
-  return base::EmptyString();
+  return ukm::SourceId();
+}
+
+bool ArcImeService::ShouldDoLearning() {
+  return is_personalized_learning_allowed_;
 }
 
 // static

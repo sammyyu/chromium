@@ -132,7 +132,6 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/location.h"
-#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_base.h"
 #include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
@@ -257,6 +256,7 @@ void MetricsService::InitializeMetricsRecordingState() {
       base::Bind(&MetricsServiceClient::GetStandardUploadInterval,
                  base::Unretained(client_))));
 
+  // Init() has to be called after LogCrash() in order for LogCrash() to work.
   delegating_provider_.Init();
 }
 
@@ -563,7 +563,7 @@ void MetricsService::FinishedInitTask() {
   state_ = INIT_TASK_DONE;
 
   // Create the initial log.
-  if (!initial_metrics_log_.get()) {
+  if (!initial_metrics_log_) {
     initial_metrics_log_ = CreateLog(MetricsLog::ONGOING_LOG);
     delegating_provider_.OnDidCreateMetricsLog();
   }

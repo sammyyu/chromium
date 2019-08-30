@@ -32,13 +32,8 @@ const int kReloadMenuItems[]  = {
   IDS_RELOAD_MENU_EMPTY_AND_HARD_RELOAD_ITEM,
 };
 
-// Returns true if the touch-optimized UI is enabled.
-bool IsTouchOptimized() {
-  return ui::MaterialDesignController::IsTouchOptimizedUiEnabled();
-}
-
 const gfx::VectorIcon& GetIconForMode(bool is_reload) {
-  if (IsTouchOptimized())
+  if (ui::MaterialDesignController::IsTouchOptimizedUiEnabled())
     return is_reload ? kReloadTouchIcon : kNavigateStopTouchIcon;
 
   return is_reload ? vector_icons::kReloadIcon : kNavigateStopIcon;
@@ -51,8 +46,8 @@ const gfx::VectorIcon& GetIconForMode(bool is_reload) {
 // static
 const char ReloadButton::kViewClassName[] = "ReloadButton";
 
-ReloadButton::ReloadButton(Profile* profile, CommandUpdater* command_updater)
-    : ToolbarButton(profile, this, CreateMenuModel()),
+ReloadButton::ReloadButton(CommandUpdater* command_updater)
+    : ToolbarButton(this, CreateMenuModel(), nullptr),
       command_updater_(command_updater),
       double_click_timer_delay_(
           base::TimeDelta::FromMilliseconds(views::GetDoubleClickInterval())),
@@ -140,9 +135,10 @@ void ReloadButton::ButtonPressed(views::Button* /* button */,
   ClearPendingMenu();
 
   if (visible_mode_ == Mode::kStop) {
-    if (command_updater_)
+    if (command_updater_) {
       command_updater_->ExecuteCommandWithDisposition(
           IDC_STOP, WindowOpenDisposition::CURRENT_TAB);
+    }
     // The user has clicked, so we can feel free to update the button, even if
     // the mouse is still hovering.
     ChangeMode(Mode::kReload, true);
@@ -221,8 +217,8 @@ void ReloadButton::ExecuteCommand(int command_id, int event_flags) {
 
 std::unique_ptr<ui::SimpleMenuModel> ReloadButton::CreateMenuModel() {
   auto menu_model = std::make_unique<ui::SimpleMenuModel>(this);
-  for (size_t i = 0; i < arraysize(kReloadMenuItems); ++i)
-    menu_model->AddItemWithStringId(kReloadMenuItems[i], kReloadMenuItems[i]);
+  for (int item : kReloadMenuItems)
+    menu_model->AddItemWithStringId(item, item);
   return menu_model;
 }
 
@@ -246,7 +242,6 @@ void ReloadButton::ChangeModeInternal(Mode mode) {
              gfx::CreateVectorIcon(icon, normal_color));
     SetImage(views::Button::STATE_DISABLED,
              gfx::CreateVectorIcon(icon, disabled_color));
-    set_ink_drop_base_color(normal_color);
   }
 
   visible_mode_ = mode;

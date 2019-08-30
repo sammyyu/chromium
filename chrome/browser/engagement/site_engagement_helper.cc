@@ -16,7 +16,7 @@
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
-#include "third_party/WebKit/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -67,7 +67,7 @@ void SiteEngagementService::Helper::OnEngagementLevelChanged(
 
 SiteEngagementService::Helper::PeriodicTracker::PeriodicTracker(
     SiteEngagementService::Helper* helper)
-    : helper_(helper), pause_timer_(new base::Timer(true, false)) {}
+    : helper_(helper), pause_timer_(new base::OneShotTimer()) {}
 
 SiteEngagementService::Helper::PeriodicTracker::~PeriodicTracker() {}
 
@@ -92,7 +92,7 @@ bool SiteEngagementService::Helper::PeriodicTracker::IsTimerRunning() {
 }
 
 void SiteEngagementService::Helper::PeriodicTracker::SetPauseTimerForTesting(
-    std::unique_ptr<base::Timer> timer) {
+    std::unique_ptr<base::OneShotTimer> timer) {
   pause_timer_ = std::move(timer);
 }
 
@@ -146,9 +146,6 @@ void SiteEngagementService::Helper::InputTracker::DidGetUserInteraction(
       break;
     case blink::WebInputEvent::kGestureScrollBegin:
       helper()->RecordUserInput(SiteEngagementService::ENGAGEMENT_SCROLL);
-      break;
-    case blink::WebInputEvent::kUndefined:
-      // Explicitly ignore browser-initiated navigation input.
       break;
     default:
       NOTREACHED();

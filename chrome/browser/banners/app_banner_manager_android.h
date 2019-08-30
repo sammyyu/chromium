@@ -46,6 +46,8 @@ class AppBannerManagerAndroid
   explicit AppBannerManagerAndroid(content::WebContents* web_contents);
   ~AppBannerManagerAndroid() override;
 
+  using content::WebContentsUserData<AppBannerManagerAndroid>::FromWebContents;
+
   // Returns a reference to the Java-side AppBannerManager owned by this object.
   const base::android::ScopedJavaLocalRef<jobject> GetJavaBannerManager() const;
 
@@ -86,6 +88,7 @@ class AppBannerManagerAndroid
 
   // InstallableAmbientBadgeInfoBarAndroid::Client overrides.
   void AddToHomescreenFromBadge() override;
+  void BadgeDismissed() override;
 
  protected:
   // AppBannerManager overrides.
@@ -123,9 +126,12 @@ class AppBannerManagerAndroid
                                        const GURL& url,
                                        const std::string& id);
 
+  // Returns the appropriate app name based on whether we have a native/web app.
+  base::string16 GetAppName() const override;
+
   // Shows the ambient badge if the current page advertises a native app or is
   // a PWA.
-  void ShowAmbientBadge(bool is_installed);
+  void MaybeShowAmbientBadge();
 
   // Hides the ambient badge if it is showing.
   void HideAmbientBadge();

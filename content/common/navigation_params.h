@@ -15,6 +15,7 @@
 #include "base/time/time.h"
 #include "build/build_config.h"
 #include "content/common/content_export.h"
+#include "content/common/content_security_policy/content_security_policy.h"
 #include "content/common/content_security_policy/csp_disposition_enum.h"
 #include "content/common/frame_message_enums.h"
 #include "content/common/service_worker/service_worker_types.h"
@@ -25,8 +26,9 @@
 #include "content/public/common/request_context_type.h"
 #include "net/url_request/redirect_info.h"
 #include "services/network/public/cpp/resource_request_body.h"
+#include "services/network/public/cpp/resource_response.h"
 #include "services/network/public/cpp/resource_response_info.h"
-#include "third_party/WebKit/public/platform/WebMixedContentContextType.h"
+#include "third_party/blink/public/platform/web_mixed_content_context_type.h"
 #include "ui/base/page_transition_types.h"
 #include "url/gurl.h"
 #include "url/origin.h"
@@ -64,8 +66,6 @@ struct CONTENT_EXPORT CommonNavigationParams {
       FrameMsg_Navigate_Type::Value navigation_type,
       bool allow_download,
       bool should_replace_current_entry,
-      base::TimeTicks ui_timestamp,
-      FrameMsg_UILoadMetricsReportType::Value report_type,
       const GURL& base_url_for_data_url,
       const GURL& history_url_for_data_url,
       PreviewsState previews_state,
@@ -76,7 +76,8 @@ struct CONTENT_EXPORT CommonNavigationParams {
       CSPDisposition should_check_main_world_csp,
       bool started_from_context_menu,
       bool has_user_gesture,
-      const base::Optional<std::string>& suggested_filename);
+      const std::vector<ContentSecurityPolicy>& initiator_csp,
+      const base::Optional<CSPSource>& initiator_self_source);
   CommonNavigationParams(const CommonNavigationParams& other);
   ~CommonNavigationParams();
 
@@ -105,15 +106,6 @@ struct CONTENT_EXPORT CommonNavigationParams {
   // PlzNavigate: this is used by client-side redirects to indicate that when
   // the navigation commits, it should commit in the existing page.
   bool should_replace_current_entry = false;
-
-  // Timestamp of the user input event that triggered this navigation. Empty if
-  // the navigation was not triggered by clicking on a link or by receiving an
-  // intent on Android.
-  base::TimeTicks ui_timestamp;
-
-  // The report type to be used when recording the metric using |ui_timestamp|.
-  FrameMsg_UILoadMetricsReportType::Value report_type =
-      FrameMsg_UILoadMetricsReportType::NO_REPORT;
 
   // Base URL for use in Blink's SubstituteData.
   // Is only used with data: URLs.
@@ -161,10 +153,13 @@ struct CONTENT_EXPORT CommonNavigationParams {
   // True if the request was user initiated.
   bool has_user_gesture = false;
 
-  // If the navigation started in response to a HTML anchor element with a
-  // download attribute, this is the (possible empty) value of the download
-  // attribute.
-  base::Optional<std::string> suggested_filename;
+  // We require a copy of the relevant CSP to perform navigation checks.
+  std::vector<ContentSecurityPolicy> initiator_csp;
+  base::Optional<CSPSource> initiator_self_source;
+
+  // The current origin policy for this request's origin.
+  // (Empty if none applies.)
+  std::string origin_policy;
 };
 
 // Provided by the browser -----------------------------------------------------
@@ -211,7 +206,7 @@ struct CONTENT_EXPORT RequestNavigationParams {
   std::vector<GURL> redirects;
 
   // The ResourceResponseInfos received during redirects.
-  std::vector<network::ResourceResponseInfo> redirect_response;
+  std::vector<network::ResourceResponseHead> redirect_response;
 
   // PlzNavigate
   // The RedirectInfos received during redirects.

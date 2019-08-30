@@ -9,7 +9,6 @@
 #include "base/process/process_handle.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/memory_dump_request_args.h"
-#include "mojo/common/common_custom_types_struct_traits.h"
 #include "services/resource_coordinator/public/mojom/memory_instrumentation/memory_instrumentation.mojom.h"
 
 namespace mojo {
@@ -32,16 +31,6 @@ struct COMPONENT_EXPORT(RESOURCE_COORDINATOR_PUBLIC_MOJOM)
       base::trace_event::MemoryDumpLevelOfDetail level_of_detail);
   static bool FromMojom(memory_instrumentation::mojom::LevelOfDetail input,
                         base::trace_event::MemoryDumpLevelOfDetail* out);
-};
-
-template <>
-struct COMPONENT_EXPORT(RESOURCE_COORDINATOR_PUBLIC_MOJOM)
-    EnumTraits<memory_instrumentation::mojom::HeapProfilingMode,
-               base::trace_event::HeapProfilingMode> {
-  static memory_instrumentation::mojom::HeapProfilingMode ToMojom(
-      base::trace_event::HeapProfilingMode mode);
-  static bool FromMojom(memory_instrumentation::mojom::HeapProfilingMode input,
-                        base::trace_event::HeapProfilingMode* out);
 };
 
 template <>

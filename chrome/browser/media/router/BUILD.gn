@@ -57,6 +57,8 @@ static_library("router") {
     "presentation/render_frame_host_id.h",
     "route_message_observer.cc",
     "route_message_observer.h",
+    "route_message_util.cc",
+    "route_message_util.h",
   ]
 
   if (enable_extensions) {
@@ -99,6 +101,14 @@ static_library("router") {
       "providers/cast/chrome_cast_message_handler.h",
       "providers/cast/dual_media_sink_service.cc",
       "providers/cast/dual_media_sink_service.h",
+      "providers/common/buffered_message_sender.cc",
+      "providers/common/buffered_message_sender.h",
+      "providers/dial/dial_activity_manager.cc",
+      "providers/dial/dial_activity_manager.h",
+      "providers/dial/dial_internal_message_util.cc",
+      "providers/dial/dial_internal_message_util.h",
+      "providers/dial/dial_media_route_provider.cc",
+      "providers/dial/dial_media_route_provider.h",
       "providers/extension/extension_media_route_provider_proxy.cc",
       "providers/extension/extension_media_route_provider_proxy.h",
       "providers/wired_display/wired_display_media_route_provider.cc",

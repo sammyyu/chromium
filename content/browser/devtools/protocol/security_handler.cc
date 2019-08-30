@@ -20,7 +20,7 @@
 #include "content/public/browser/web_contents_delegate.h"
 #include "net/cert/x509_certificate.h"
 #include "net/cert/x509_util.h"
-#include "third_party/WebKit/public/platform/WebMixedContentContextType.h"
+#include "third_party/blink/public/platform/web_mixed_content_context_type.h"
 
 namespace content {
 namespace protocol {
@@ -208,7 +208,7 @@ bool SecurityHandler::NotifyCertificateError(int cert_error,
                                              CertErrorCallback handler) {
   if (cert_error_override_mode_ == CertErrorOverrideMode::kIgnoreAll) {
     if (handler)
-      handler.Run(content::CERTIFICATE_REQUEST_RESULT_TYPE_CONTINUE);
+      std::move(handler).Run(content::CERTIFICATE_REQUEST_RESULT_TYPE_CONTINUE);
     return true;
   }
 
@@ -224,7 +224,7 @@ bool SecurityHandler::NotifyCertificateError(int cert_error,
     return false;
   }
 
-  cert_error_callbacks_[last_cert_error_id_] = handler;
+  cert_error_callbacks_[last_cert_error_id_] = std::move(handler);
   return true;
 }
 

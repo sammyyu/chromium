@@ -63,10 +63,6 @@ class StatisticsRecorderTest : public testing::TestWithParam<bool> {
   const int32_t kAllocatorMemorySize = 64 << 10;  // 64 KiB
 
   StatisticsRecorderTest() : use_persistent_histogram_allocator_(GetParam()) {
-    // Get this first so it never gets created in persistent storage and will
-    // not appear in the StatisticsRecorder after it is re-initialized.
-    PersistentHistogramAllocator::GetCreateHistogramResultHistogram();
-
     // Each test will have a clean state (no Histogram / BucketRanges
     // registered).
     InitializeStatisticsRecorder();
@@ -711,12 +707,14 @@ TEST_P(StatisticsRecorderTest, ImportHistogramsTest) {
 }
 
 TEST_P(StatisticsRecorderTest, RecordHistogramChecker) {
-  // Record checker isn't set
-  EXPECT_TRUE(base::StatisticsRecorder::ShouldRecordHistogram(0));
+  // Before record checker is set all histograms should be recorded.
+  EXPECT_TRUE(StatisticsRecorder::ShouldRecordHistogram(1));
+  EXPECT_TRUE(StatisticsRecorder::ShouldRecordHistogram(2));
+
   auto record_checker = std::make_unique<OddRecordHistogramChecker>();
-  base::StatisticsRecorder::SetRecordChecker(std::move(record_checker));
-  EXPECT_TRUE(base::StatisticsRecorder::ShouldRecordHistogram(1));
-  EXPECT_FALSE(base::StatisticsRecorder::ShouldRecordHistogram(2));
+  StatisticsRecorder::SetRecordChecker(std::move(record_checker));
+  EXPECT_TRUE(StatisticsRecorder::ShouldRecordHistogram(1));
+  EXPECT_FALSE(StatisticsRecorder::ShouldRecordHistogram(2));
 }
 
 }  // namespace base

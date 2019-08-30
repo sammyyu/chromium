@@ -10,11 +10,14 @@
 #include "ash/host/transformer_helper.h"
 #include "ash/shell.h"
 #include "ash/shell_delegate.h"
+#include "base/feature_list.h"
 #include "base/trace_event/trace_event.h"
 #include "services/ui/public/cpp/input_devices/input_device_controller_client.h"
 #include "services/ui/public/interfaces/window_manager.mojom.h"
+#include "ui/aura/mus/input_method_mus.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_tree_host_platform.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/events/event_sink.h"
 #include "ui/events/null_event_targeter.h"
 #include "ui/events/ozone/chromeos/cursor_controller.h"
@@ -22,20 +25,27 @@
 #include "ui/gfx/geometry/rect_conversions.h"
 #include "ui/gfx/geometry/rect_f.h"
 #include "ui/gfx/transform.h"
+#include "ui/platform_window/mojo/ime_type_converters.h"
+#include "ui/platform_window/platform_ime_controller.h"
 #include "ui/platform_window/platform_window.h"
+#include "ui/platform_window/platform_window_init_properties.h"
+#include "ui/platform_window/text_input_state.h"
 
 namespace ash {
 
 AshWindowTreeHostPlatform::AshWindowTreeHostPlatform(
-    const gfx::Rect& initial_bounds)
-    : aura::WindowTreeHostPlatform(initial_bounds), transformer_helper_(this) {
+    ui::PlatformWindowInitProperties properties)
+    : aura::WindowTreeHostPlatform(std::move(properties)),
+      transformer_helper_(this) {
   transformer_helper_.Init();
+  InitInputMethodIfNecessary();
 }
 
 AshWindowTreeHostPlatform::AshWindowTreeHostPlatform()
     : transformer_helper_(this) {
   CreateCompositor();
   transformer_helper_.Init();
+  InitInputMethodIfNecessary();
 }
 
 AshWindowTreeHostPlatform::~AshWindowTreeHostPlatform() = default;
@@ -44,7 +54,10 @@ void AshWindowTreeHostPlatform::ConfineCursorToRootWindow() {
   if (!allow_confine_cursor())
     return;
 
-  gfx::Rect confined_bounds(GetBoundsInPixels().size());
+  // We want to limit the cursor to what is visible, which is the size of the
+  // compositor. |GetBoundsInPixels()| may include pixels that are not used.
+  // See https://crbug.com/843354
+  gfx::Rect confined_bounds(GetCompositorSizeInPixels());
   confined_bounds.Inset(transformer_helper_.GetHostInsets());
   last_cursor_confine_bounds_in_pixels_ = confined_bounds;
   platform_window()->ConfineCursorToBounds(confined_bounds);
@@ -83,6 +96,17 @@ void AshWindowTreeHostPlatform::SetCursorConfig(
 void AshWindowTreeHostPlatform::ClearCursorConfig() {
   ui::CursorController::GetInstance()->ClearCursorConfigForWindow(
       GetAcceleratedWidget());
+}
+
+void AshWindowTreeHostPlatform::UpdateTextInputState(
+    ui::mojom::TextInputStatePtr state) {
+  SetTextInputState(std::move(state));
+}
+
+void AshWindowTreeHostPlatform::UpdateImeVisibility(
+    bool visible,
+    ui::mojom::TextInputStatePtr state) {
+  SetImeVisibility(visible, std::move(state));
 }
 
 void AshWindowTreeHostPlatform::SetRootWindowTransformer(
@@ -125,18 +149,47 @@ gfx::Transform AshWindowTreeHostPlatform::GetInverseRootTransform() const {
   return transformer_helper_.GetInverseTransform();
 }
 
-void AshWindowTreeHostPlatform::UpdateRootWindowSizeInPixels(
-    const gfx::Size& host_size_in_pixels) {
-  transformer_helper_.UpdateWindowSize(host_size_in_pixels);
+gfx::Rect AshWindowTreeHostPlatform::GetTransformedRootWindowBoundsInPixels(
+    const gfx::Size& host_size_in_pixels) const {
+  return transformer_helper_.GetTransformedWindowBounds(host_size_in_pixels);
 }
 
 void AshWindowTreeHostPlatform::OnCursorVisibilityChangedNative(bool show) {
   SetTapToClickPaused(!show);
 }
 
-void AshWindowTreeHostPlatform::SetBoundsInPixels(const gfx::Rect& bounds) {
-  WindowTreeHostPlatform::SetBoundsInPixels(bounds);
+void AshWindowTreeHostPlatform::SetBoundsInPixels(
+    const gfx::Rect& bounds,
+    const viz::LocalSurfaceId& local_surface_id) {
+  WindowTreeHostPlatform::SetBoundsInPixels(bounds, local_surface_id);
   ConfineCursorToRootWindow();
+}
+
+gfx::Size AshWindowTreeHostPlatform::GetCompositorSizeInPixels() const {
+  // For Chrome OS, the platform window size may be slightly different from the
+  // compositor pixel size. This is to prevent any trailing 1px line at the
+  // right or bottom edge due to rounding. This means we may not be using ALL
+  // the pixels on a display, however this is a temporary fix until we figure
+  // out a way to prevent these rounding artifacts.
+  // See https://crbug.com/843354 and https://crbug.com/862424 for more info.
+  if (device_scale_factor() == 1.f)
+    return GetBoundsInPixels().size();
+  return gfx::ScaleToRoundedSize(
+      gfx::ScaleToFlooredSize(GetBoundsInPixels().size(),
+                              1.f / device_scale_factor()),
+      device_scale_factor());
+}
+
+void AshWindowTreeHostPlatform::OnBoundsChanged(const gfx::Rect& new_bounds) {
+  // We need to recompute the bounds in pixels based on the DIP size. This is a
+  // temporary fix needed because the root layer has the bounds in DIP which
+  // when scaled by the compositor does not match the display bounds in pixels.
+  // So we need to change the display bounds to match the root layer's scaled
+  // size.
+  // See https://crbug.com/843354 for more info.
+  const float new_scale = ui::GetScaleFactorForNativeView(window());
+  WindowTreeHostPlatform::OnBoundsChanged(gfx::ScaleToRoundedRect(
+      gfx::ScaleToEnclosedRect(new_bounds, 1.f / new_scale), new_scale));
 }
 
 void AshWindowTreeHostPlatform::DispatchEvent(ui::Event* event) {
@@ -144,6 +197,15 @@ void AshWindowTreeHostPlatform::DispatchEvent(ui::Event* event) {
   if (event->IsLocatedEvent())
     TranslateLocatedEvent(static_cast<ui::LocatedEvent*>(event));
   SendEventToSink(event);
+}
+
+void AshWindowTreeHostPlatform::InitInputMethodIfNecessary() {
+  if (!base::FeatureList::IsEnabled(features::kMash))
+    return;
+
+  input_method_ = std::make_unique<aura::InputMethodMus>(this, this);
+  input_method_->Init(Shell::Get()->connector());
+  SetSharedInputMethod(input_method_.get());
 }
 
 void AshWindowTreeHostPlatform::SetTapToClickPaused(bool state) {
@@ -154,6 +216,26 @@ void AshWindowTreeHostPlatform::SetTapToClickPaused(bool state) {
 
   // Temporarily pause tap-to-click when the cursor is hidden.
   input_device_controller_client->SetTapToClickPaused(state);
+}
+
+void AshWindowTreeHostPlatform::SetTextInputState(
+    ui::mojom::TextInputStatePtr state) {
+  ui::PlatformImeController* ime =
+      platform_window()->GetPlatformImeController();
+  if (ime)
+    ime->UpdateTextInputState(state.To<ui::TextInputState>());
+}
+
+void AshWindowTreeHostPlatform::SetImeVisibility(
+    bool visible,
+    ui::mojom::TextInputStatePtr state) {
+  if (!state.is_null())
+    SetTextInputState(std::move(state));
+
+  ui::PlatformImeController* ime =
+      platform_window()->GetPlatformImeController();
+  if (ime)
+    ime->SetImeVisibility(visible);
 }
 
 }  // namespace ash

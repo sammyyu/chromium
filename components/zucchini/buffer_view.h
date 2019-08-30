@@ -24,9 +24,9 @@ struct BufferRegion {
   size_t hi() const { return offset + size; }
 
   // Returns whether the Region fits in |[0, container_size)|. Special case:
-  // a size-0 region starting at |container_size| does not fit.
+  // a size-0 region starting at |container_size| fits.
   bool FitsIn(size_t container_size) const {
-    return offset < container_size && container_size - offset >= size;
+    return offset <= container_size && container_size - offset >= size;
   }
 
   // Returns |v| clipped to the inclusive range |[lo(), hi()]|.
@@ -105,6 +105,14 @@ class BufferViewBase {
     return region.FitsIn(size());
   }
 
+  // Returns whether the buffer is large enough to cover an array starting at
+  // |offset| with |num| elements, each taking |elt_size| bytes.
+  bool covers_array(size_t offset, size_t num, size_t elt_size) {
+    DCHECK_GT(elt_size, 0U);
+    // Use subtraction and division to avoid overflow.
+    return offset <= size() && (size() - offset) / elt_size >= num;
+  }
+
   // Element access
 
   // Returns the raw value at specified location |pos|.
@@ -176,7 +184,7 @@ class BufferViewBase {
     DCHECK_LE(origin.first_, first_);
     DCHECK_GE(origin.last_, last_);
     size_type aligned_size =
-        ceil(static_cast<size_type>(first_ - origin.first_), alignment);
+        AlignCeil(static_cast<size_type>(first_ - origin.first_), alignment);
     if (aligned_size > static_cast<size_type>(last_ - origin.first_))
       return false;
     first_ = origin.first_ + aligned_size;

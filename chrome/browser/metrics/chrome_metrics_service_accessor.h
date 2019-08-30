@@ -33,6 +33,11 @@ namespace chrome {
 void AttemptRestart();
 }
 
+namespace contextual_suggestions {
+struct ContextualSuggestionsResult;
+void RegisterSyntheticFieldTrials(const ContextualSuggestionsResult& result);
+}  // namespace contextual_suggestions
+
 namespace domain_reliability {
 class DomainReliabilityServiceFactory;
 }
@@ -56,7 +61,7 @@ namespace prerender {
 bool IsOmniboxEnabled(Profile* profile);
 }
 
-namespace profiling {
+namespace heap_profiling {
 class BackgroundProfilingTriggers;
 }
 
@@ -106,6 +111,8 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class ChromeBrowserMainParts;
   friend class ChromeMetricsServicesManagerClient;
   friend class ChromeRenderMessageFilter;
+  friend void contextual_suggestions::RegisterSyntheticFieldTrials(
+      const contextual_suggestions::ContextualSuggestionsResult& result);
   friend class DataReductionProxyChromeSettings;
   friend class domain_reliability::DomainReliabilityServiceFactory;
   friend class extensions::ChromeExtensionWebContentsObserver;
@@ -117,7 +124,7 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
       const OnMetricsReportingCallbackType&);
   friend class options::BrowserOptionsHandler;
   friend bool prerender::IsOmniboxEnabled(Profile* profile);
-  friend class profiling::BackgroundProfilingTriggers;
+  friend class heap_profiling::BackgroundProfilingTriggers;
   friend class settings::MetricsReportingHandler;
   friend class speech::ChromeSpeechRecognitionManagerDelegate;
   friend class system_logs::ChromeInternalLogSource;
@@ -129,7 +136,6 @@ class ChromeMetricsServiceAccessor : public metrics::MetricsServiceAccessor {
   friend class safe_browsing::SRTGlobalError;
   friend class safe_browsing::SafeBrowsingService;
   friend class safe_browsing::SafeBrowsingUIManager;
-  friend void SyzyASANRegisterExperiment(const char*, const char*);
   friend class ChromeMetricsServiceClient;
   friend class ChromePasswordManagerClient;
   friend class NavigationMetricsRecorder;

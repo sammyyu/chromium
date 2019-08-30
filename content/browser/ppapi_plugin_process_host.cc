@@ -13,7 +13,6 @@
 #include "base/command_line.h"
 #include "base/files/file_path.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/metrics/field_trial.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -26,17 +25,15 @@
 #include "content/public/browser/content_browser_client.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/content_switches.h"
-#include "content/public/common/mojo_channel_switches.h"
 #include "content/public/common/pepper_plugin_info.h"
 #include "content/public/common/process_type.h"
 #include "content/public/common/sandboxed_process_launcher_delegate.h"
 #include "content/public/common/service_names.mojom.h"
-#include "content/public/common/zygote_buildflags.h"
-#include "mojo/edk/embedder/embedder.h"
 #include "net/base/network_change_notifier.h"
 #include "ppapi/proxy/ppapi_messages.h"
 #include "services/service_manager/sandbox/sandbox_type.h"
 #include "services/service_manager/sandbox/switches.h"
+#include "services/service_manager/zygote/common/zygote_buildflags.h"
 #include "ui/base/ui_base_switches.h"
 
 #if defined(OS_WIN)
@@ -49,7 +46,7 @@
 #endif
 
 #if BUILDFLAG(USE_ZYGOTE_HANDLE)
-#include "content/public/common/zygote_handle.h"
+#include "services/service_manager/zygote/common/zygote_handle.h"  // nogncheck
 #endif
 
 namespace content {
@@ -59,8 +56,7 @@ class PpapiPluginSandboxedProcessLauncherDelegate
     : public content::SandboxedProcessLauncherDelegate {
  public:
   explicit PpapiPluginSandboxedProcessLauncherDelegate(bool is_broker)
-#if (defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_ANDROID)) || \
-    defined(OS_WIN)
+#if BUILDFLAG(USE_ZYGOTE_HANDLE) || defined(OS_WIN)
       : is_broker_(is_broker)
 #endif
   {
@@ -105,14 +101,14 @@ class PpapiPluginSandboxedProcessLauncherDelegate
 #endif  // OS_WIN
 
 #if BUILDFLAG(USE_ZYGOTE_HANDLE)
-  ZygoteHandle GetZygote() override {
+  service_manager::ZygoteHandle GetZygote() override {
     const base::CommandLine& browser_command_line =
         *base::CommandLine::ForCurrentProcess();
     base::CommandLine::StringType plugin_launcher = browser_command_line
         .GetSwitchValueNative(switches::kPpapiPluginLauncher);
     if (is_broker_ || !plugin_launcher.empty())
       return nullptr;
-    return GetGenericZygote();
+    return service_manager::GetGenericZygote();
   }
 #endif  // BUILDFLAG(USE_ZYGOTE_HANDLE)
 
@@ -125,8 +121,7 @@ class PpapiPluginSandboxedProcessLauncherDelegate
   }
 
  private:
-#if (defined(OS_POSIX) && !defined(OS_MACOSX) && !defined(OS_ANDROID)) || \
-    defined(OS_WIN)
+#if BUILDFLAG(USE_ZYGOTE_HANDLE) || defined(OS_WIN)
   bool is_broker_;
 #endif
 
@@ -351,6 +346,7 @@ bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
                               is_broker_ ? switches::kPpapiBrokerProcess
                                          : switches::kPpapiPluginProcess);
   BrowserChildProcessHostImpl::CopyFeatureAndFieldTrialFlags(cmd_line.get());
+  BrowserChildProcessHostImpl::CopyTraceStartupFlags(cmd_line.get());
 
 #if defined(OS_WIN)
   cmd_line->AppendArg(is_broker_ ? switches::kPrefetchArgumentPpapiBroker
@@ -367,10 +363,10 @@ bool PpapiPluginProcessHost::Init(const PepperPluginInfo& info) {
   if (!is_broker_) {
     static const char* const kPluginForwardSwitches[] = {
       service_manager::switches::kDisableSeccompFilterSandbox,
+      service_manager::switches::kNoSandbox,
 #if defined(OS_MACOSX)
-      switches::kEnableSandboxLogging,
+      service_manager::switches::kEnableSandboxLogging,
 #endif
-      switches::kNoSandbox,
       switches::kPpapiStartupDialog,
     };
     cmd_line->CopySwitchesFrom(browser_command_line, kPluginForwardSwitches,

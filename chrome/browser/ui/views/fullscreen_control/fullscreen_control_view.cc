@@ -21,14 +21,14 @@
 #include "ui/views/controls/button/button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/layout/fill_layout.h"
+#include "ui/views/vector_icons.h"
 
 namespace {
 
 // Partially-transparent background color.
-const SkColor kBackgroundColor = SkColorSetARGB(0xcc, 0x28, 0x2c, 0x32);
+const SkColor kButtonBackgroundColor = SkColorSetARGB(0xcc, 0x28, 0x2c, 0x32);
 
 constexpr int kCloseIconSize = 24;
-constexpr int kCircleButtonDiameter = 48;
 
 class CloseFullscreenButton : public views::Button {
  public:
@@ -37,7 +37,7 @@ class CloseFullscreenButton : public views::Button {
     std::unique_ptr<views::ImageView> close_image_view =
         std::make_unique<views::ImageView>();
     close_image_view->SetImage(gfx::CreateVectorIcon(
-        vector_icons::kCloseIcon, kCloseIconSize, SK_ColorWHITE));
+        views::kIcCloseIcon, kCloseIconSize, SK_ColorWHITE));
     SetAccessibleName(l10n_util::GetStringUTF16(IDS_EXIT_FULLSCREEN_MODE));
     AddChildView(close_image_view.release());
     SetLayoutManager(std::make_unique<views::FillLayout>());
@@ -48,9 +48,9 @@ class CloseFullscreenButton : public views::Button {
     // TODO(robliao): If we decide to move forward with this, use themes.
     cc::PaintFlags flags;
     flags.setAntiAlias(true);
-    flags.setColor(kBackgroundColor);
+    flags.setColor(kButtonBackgroundColor);
     flags.setStyle(cc::PaintFlags::kFill_Style);
-    float radius = kCircleButtonDiameter / 2.0f;
+    float radius = FullscreenControlView::kCircleButtonDiameter / 2.0f;
     canvas->DrawCircle(gfx::PointF(radius, radius), radius, flags);
   }
 

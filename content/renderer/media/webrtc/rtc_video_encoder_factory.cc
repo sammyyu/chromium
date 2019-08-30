@@ -12,7 +12,7 @@
 #include "content/public/common/content_switches.h"
 #include "content/public/common/feature_h264_with_openh264_ffmpeg.h"
 #include "content/renderer/media/webrtc/rtc_video_encoder.h"
-#include "media/media_features.h"
+#include "media/media_buildflags.h"
 #include "media/video/gpu_video_accelerator_factories.h"
 #include "third_party/webrtc/common_video/h264/profile_level_id.h"
 
@@ -73,7 +73,7 @@ base::Optional<cricket::VideoCodec> VEAToWebRTCCodec(
       const int fps = profile.max_framerate_numerator;
       DCHECK_EQ(1u, profile.max_framerate_denominator);
 
-      const rtc::Optional<webrtc::H264::Level> h264_level =
+      const absl::optional<webrtc::H264::Level> h264_level =
           webrtc::H264::SupportedLevel(width * height, fps);
       const webrtc::H264::ProfileLevelId profile_level_id(
           h264_profile, h264_level.value_or(webrtc::H264::kLevel1));

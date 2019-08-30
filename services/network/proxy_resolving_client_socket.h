@@ -50,32 +50,36 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ProxyResolvingClientSocket
   // any sensitive data (like embedded usernames and passwords), and local data
   // (i.e. reference fragment) will be sanitized by
   // net::ProxyResolutionService::ResolveProxyHelper() before the url is
-  // disclosed to the proxy. |network_session| must outlive |this|.
+  // disclosed to the proxy. If |use_tls|, this will try to do a tls connect
+  // instead of a regular tcp connect. |network_session| must outlive |this|.
   ProxyResolvingClientSocket(net::HttpNetworkSession* network_session,
                              const net::SSLConfig& ssl_config,
-                             const GURL& url);
+                             const GURL& url,
+                             bool use_tls);
   ~ProxyResolvingClientSocket() override;
 
   // net::StreamSocket implementation.
   int Read(net::IOBuffer* buf,
            int buf_len,
-           const net::CompletionCallback& callback) override;
+           net::CompletionOnceCallback callback) override;
+  int ReadIfReady(net::IOBuffer* buf,
+                  int buf_len,
+                  net::CompletionOnceCallback callback) override;
+  int CancelReadIfReady() override;
   int Write(
       net::IOBuffer* buf,
       int buf_len,
-      const net::CompletionCallback& callback,
+      net::CompletionOnceCallback callback,
       const net::NetworkTrafficAnnotationTag& traffic_annotation) override;
   int SetReceiveBufferSize(int32_t size) override;
   int SetSendBufferSize(int32_t size) override;
-  int Connect(const net::CompletionCallback& callback) override;
+  int Connect(net::CompletionOnceCallback callback) override;
   void Disconnect() override;
   bool IsConnected() const override;
   bool IsConnectedAndIdle() const override;
   int GetPeerAddress(net::IPEndPoint* address) const override;
   int GetLocalAddress(net::IPEndPoint* address) const override;
   const net::NetLogWithSource& NetLog() const override;
-  void SetSubresourceSpeculation() override;
-  void SetOmniboxSpeculation() override;
   bool WasEverUsed() const override;
   bool WasAlpnNegotiated() const override;
   net::NextProto GetNegotiatedProtocol() const override;
@@ -88,28 +92,52 @@ class COMPONENT_EXPORT(NETWORK_SERVICE) ProxyResolvingClientSocket
   void ApplySocketTag(const net::SocketTag& tag) override;
 
  private:
+  enum State {
+    STATE_PROXY_RESOLVE,
+    STATE_PROXY_RESOLVE_COMPLETE,
+    STATE_INIT_CONNECTION,
+    STATE_INIT_CONNECTION_COMPLETE,
+    STATE_RESTART_TUNNEL_AUTH,
+    STATE_RESTART_TUNNEL_AUTH_COMPLETE,
+    STATE_DONE,
+    STATE_NONE,
+  };
+
   FRIEND_TEST_ALL_PREFIXES(ProxyResolvingClientSocketTest, ConnectToProxy);
   FRIEND_TEST_ALL_PREFIXES(ProxyResolvingClientSocketTest, ReadWriteErrors);
+  FRIEND_TEST_ALL_PREFIXES(ProxyResolvingClientSocketTest,
+                           ResetSocketAfterTunnelAuth);
 
-  void ConnectToProxy(int net_error);
-  void ConnectToProxyDone(int net_error);
+  void OnIOComplete(int result);
 
-  void CloseTransportSocket();
+  int DoLoop(int result);
+  int DoProxyResolve();
+  int DoProxyResolveComplete(int result);
+  int DoInitConnection();
+  int DoInitConnectionComplete(int result);
+  int DoRestartTunnelAuth(int result);
+  int DoRestartTunnelAuthComplete(int result);
+
+  void CloseSocket(bool close_connection);
+
   int ReconsiderProxyAfterError(int error);
 
   net::HttpNetworkSession* network_session_;
 
-  // The transport socket.
-  std::unique_ptr<net::ClientSocketHandle> transport_;
+  std::unique_ptr<net::ClientSocketHandle> socket_handle_;
 
   const net::SSLConfig ssl_config_;
   net::ProxyResolutionService::Request* proxy_resolve_request_;
   net::ProxyInfo proxy_info_;
   const GURL url_;
+  const bool use_tls_;
+
   net::NetLogWithSource net_log_;
 
   // The callback passed to Connect().
-  net::CompletionCallback user_connect_callback_;
+  net::CompletionOnceCallback user_connect_callback_;
+
+  State next_state_;
 
   base::WeakPtrFactory<ProxyResolvingClientSocket> weak_factory_;
 

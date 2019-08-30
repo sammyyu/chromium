@@ -5,15 +5,30 @@
 #include "components/download/public/common/download_utils.h"
 
 #include "base/format_macros.h"
+#include "base/rand_util.h"
 #include "base/strings/stringprintf.h"
 #include "components/download/public/common/download_create_info.h"
 #include "components/download/public/common/download_interrupt_reasons_utils.h"
 #include "components/download/public/common/download_item.h"
 #include "components/download/public/common/download_save_info.h"
 #include "components/download/public/common/download_stats.h"
+#include "components/download/public/common/download_url_parameters.h"
+#include "net/base/load_flags.h"
+#include "net/http/http_request_headers.h"
 #include "net/http/http_status_code.h"
+#include "services/network/public/cpp/resource_request.h"
 
 namespace download {
+
+namespace {
+
+void AppendExtraHeaders(net::HttpRequestHeaders* headers,
+                        DownloadUrlParameters* params) {
+  for (const auto& header : params->request_headers())
+    headers->SetHeaderIfMissing(header.first, header.second);
+}
+
+}  // namespace
 
 const uint32_t DownloadItem::kInvalidId = 0;
 
@@ -206,6 +221,212 @@ void HandleResponseHeaders(const net::HttpResponseHeaders* headers,
       headers->HasHeaderValue("Accept-Ranges", "bytes") ||
       (headers->HasHeader("Content-Range") &&
        headers->response_code() == net::HTTP_PARTIAL_CONTENT);
+}
+
+std::unique_ptr<network::ResourceRequest> CreateResourceRequest(
+    DownloadUrlParameters* params) {
+  DCHECK(params->offset() >= 0);
+
+  std::unique_ptr<network::ResourceRequest> request(
+      new network::ResourceRequest);
+  request->method = params->method();
+  request->url = params->url();
+  request->request_initiator = params->initiator();
+  request->do_not_prompt_for_login = params->do_not_prompt_for_login();
+  request->site_for_cookies = params->url();
+  request->referrer = params->referrer();
+  request->referrer_policy = params->referrer_policy();
+  request->allow_download = true;
+  request->is_main_frame = true;
+
+  if (params->render_process_host_id() >= 0)
+    request->render_frame_id = params->render_frame_host_routing_id();
+
+  bool has_upload_data = false;
+  if (params->post_body()) {
+    request->request_body = params->post_body();
+    has_upload_data = true;
+  }
+
+  if (params->post_id() >= 0) {
+    // The POST in this case does not have an actual body, and only works
+    // when retrieving data from cache. This is done because we don't want
+    // to do a re-POST without user consent, and currently don't have a good
+    // plan on how to display the UI for that.
+    DCHECK(params->prefer_cache());
+    DCHECK_EQ("POST", params->method());
+    request->request_body = new network::ResourceRequestBody();
+    request->request_body->set_identifier(params->post_id());
+    has_upload_data = true;
+  }
+
+  request->load_flags = GetLoadFlags(params, has_upload_data);
+
+  // Add additional request headers.
+  std::unique_ptr<net::HttpRequestHeaders> headers =
+      GetAdditionalRequestHeaders(params);
+  request->headers.Swap(headers.get());
+
+  return request;
+}
+
+int GetLoadFlags(DownloadUrlParameters* params, bool has_upload_data) {
+  int load_flags = 0;
+  if (params->prefer_cache()) {
+    // If there is upload data attached, only retrieve from cache because there
+    // is no current mechanism to prompt the user for their consent for a
+    // re-post. For GETs, try to retrieve data from the cache and skip
+    // validating the entry if present.
+    if (has_upload_data)
+      load_flags |= net::LOAD_ONLY_FROM_CACHE | net::LOAD_SKIP_CACHE_VALIDATION;
+    else
+      load_flags |= net::LOAD_SKIP_CACHE_VALIDATION;
+  } else {
+    load_flags |= net::LOAD_DISABLE_CACHE;
+  }
+  return load_flags;
+}
+
+std::unique_ptr<net::HttpRequestHeaders> GetAdditionalRequestHeaders(
+    DownloadUrlParameters* params) {
+  auto headers = std::make_unique<net::HttpRequestHeaders>();
+  if (params->offset() == 0 &&
+      params->length() == DownloadSaveInfo::kLengthFullContent) {
+    AppendExtraHeaders(headers.get(), params);
+    return headers;
+  }
+
+  bool has_last_modified = !params->last_modified().empty();
+  bool has_etag = !params->etag().empty();
+
+  // Strong validator(i.e. etag or last modified) is required in range requests
+  // for download resumption and parallel download.
+  DCHECK(has_etag || has_last_modified);
+  if (!has_etag && !has_last_modified) {
+    DVLOG(1) << "Creating partial request without strong validators.";
+    AppendExtraHeaders(headers.get(), params);
+    return headers;
+  }
+
+  // Add "Range" header.
+  std::string range_header =
+      (params->length() == DownloadSaveInfo::kLengthFullContent)
+          ? base::StringPrintf("bytes=%" PRId64 "-", params->offset())
+          : base::StringPrintf("bytes=%" PRId64 "-%" PRId64, params->offset(),
+                               params->offset() + params->length() - 1);
+  headers->SetHeader(net::HttpRequestHeaders::kRange, range_header);
+
+  // Add "If-Range" headers.
+  if (params->use_if_range()) {
+    // In accordance with RFC 7233 Section 3.2, use If-Range to specify that
+    // the server return the entire entity if the validator doesn't match.
+    // Last-Modified can be used in the absence of ETag as a validator if the
+    // response headers satisfied the HttpUtil::HasStrongValidators()
+    // predicate.
+    //
+    // This function assumes that HasStrongValidators() was true and that the
+    // ETag and Last-Modified header values supplied are valid.
+    headers->SetHeader(net::HttpRequestHeaders::kIfRange,
+                       has_etag ? params->etag() : params->last_modified());
+    AppendExtraHeaders(headers.get(), params);
+    return headers;
+  }
+
+  // Add "If-Match"/"If-Unmodified-Since" headers.
+  if (has_etag)
+    headers->SetHeader(net::HttpRequestHeaders::kIfMatch, params->etag());
+
+  // According to RFC 7232 section 3.4, "If-Unmodified-Since" is mainly for
+  // old servers that didn't implement "If-Match" and must be ignored when
+  // "If-Match" presents.
+  if (has_last_modified) {
+    headers->SetHeader(net::HttpRequestHeaders::kIfUnmodifiedSince,
+                       params->last_modified());
+  }
+
+  AppendExtraHeaders(headers.get(), params);
+  return headers;
+}
+
+DownloadEntry CreateDownloadEntryFromItem(
+    const DownloadItem& item,
+    const std::string& request_origin,
+    DownloadSource download_source,
+    bool fetch_error_body,
+    const DownloadUrlParameters::RequestHeadersType& request_headers) {
+  return DownloadEntry(item.GetGuid(), request_origin, download_source,
+                       fetch_error_body, request_headers,
+                       GetUniqueDownloadId());
+}
+
+DownloadDBEntry CreateDownloadDBEntryFromItem(
+    const DownloadItem& item,
+    DownloadSource download_source,
+    bool fetch_error_body,
+    const DownloadUrlParameters::RequestHeadersType& request_headers) {
+  DownloadDBEntry entry;
+  DownloadInfo download_info;
+  download_info.guid = item.GetGuid();
+  download_info.id = item.GetId();
+  InProgressInfo in_progress_info;
+  in_progress_info.url_chain = item.GetUrlChain();
+  in_progress_info.referrer_url = item.GetReferrerUrl();
+  in_progress_info.site_url = item.GetSiteUrl();
+  in_progress_info.tab_url = item.GetTabUrl();
+  in_progress_info.tab_referrer_url = item.GetTabReferrerUrl();
+  in_progress_info.fetch_error_body = fetch_error_body;
+  in_progress_info.request_headers = request_headers;
+  in_progress_info.etag = item.GetETag();
+  in_progress_info.last_modified = item.GetLastModifiedTime();
+  in_progress_info.mime_type = item.GetMimeType();
+  in_progress_info.original_mime_type = item.GetOriginalMimeType();
+  in_progress_info.total_bytes = item.GetTotalBytes();
+  in_progress_info.current_path = item.GetFullPath();
+  in_progress_info.target_path = item.GetTargetFilePath();
+  in_progress_info.received_bytes = item.GetReceivedBytes();
+  in_progress_info.start_time = item.GetStartTime();
+  in_progress_info.end_time = item.GetEndTime();
+  in_progress_info.received_slices = item.GetReceivedSlices();
+  in_progress_info.hash = item.GetHash();
+  in_progress_info.transient = item.IsTransient();
+  in_progress_info.state = item.GetState();
+  in_progress_info.danger_type = item.GetDangerType();
+  in_progress_info.interrupt_reason = item.GetLastReason();
+  in_progress_info.paused = item.IsPaused();
+  in_progress_info.bytes_wasted = item.GetBytesWasted();
+
+  download_info.in_progress_info = in_progress_info;
+
+  UkmInfo ukm_info(download_source, GetUniqueDownloadId());
+  download_info.ukm_info = ukm_info;
+  entry.download_info = download_info;
+  return entry;
+}
+
+base::Optional<DownloadEntry> CreateDownloadEntryFromDownloadDBEntry(
+    base::Optional<DownloadDBEntry> entry) {
+  if (!entry || !entry->download_info)
+    return base::Optional<DownloadEntry>();
+
+  base::Optional<InProgressInfo> in_progress_info =
+      entry->download_info->in_progress_info;
+  base::Optional<UkmInfo> ukm_info = entry->download_info->ukm_info;
+  if (!ukm_info || !in_progress_info)
+    return base::Optional<DownloadEntry>();
+
+  return base::Optional<DownloadEntry>(DownloadEntry(
+      entry->download_info->guid, std::string(), ukm_info->download_source,
+      in_progress_info->fetch_error_body, in_progress_info->request_headers,
+      ukm_info->ukm_download_id));
+}
+
+uint64_t GetUniqueDownloadId() {
+  // Get a new UKM download_id that is not 0.
+  uint64_t download_id = 0;
+  do {
+    download_id = base::RandUint64();
+  } while (download_id == 0);
+  return download_id;
 }
 
 }  // namespace download

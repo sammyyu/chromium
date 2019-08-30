@@ -15,6 +15,7 @@
 #include "content/public/browser/web_contents.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/base/l10n/l10n_util.h"
+#include "ui/base/material_design/material_design_controller.h"
 #include "ui/views/controls/label.h"
 
 using content::WebContents;
@@ -67,16 +68,32 @@ bool LocationIconView::GetTooltipText(const gfx::Point& p,
 }
 
 SkColor LocationIconView::GetTextColor() const {
-  return location_bar_->GetColor(LocationBarView::SECURITY_CHIP_TEXT);
+  return location_bar_->GetSecurityChipColor(
+      location_bar_->GetToolbarModel()->GetSecurityLevel(false));
+}
+
+bool LocationIconView::ShouldShowSeparator() const {
+  return ShouldShowLabel() ||
+         (ui::MaterialDesignController::IsRefreshUi() &&
+          !location_bar_->GetOmniboxView()->IsEditingOrEmpty());
+}
+
+bool LocationIconView::ShouldShowExtraEndSpace() const {
+  return ui::MaterialDesignController::IsRefreshUi() &&
+         location_bar_->GetOmniboxView()->IsEditingOrEmpty();
 }
 
 bool LocationIconView::ShowBubble(const ui::Event& event) {
-  return ShowPageInfoDialog(location_bar_->GetWebContents());
+  auto* contents = location_bar_->GetWebContents();
+  if (!contents)
+    return false;
+  return location_bar_->ShowPageInfoDialog(contents);
 }
 
 void LocationIconView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   if (location_bar_->GetOmniboxView()->IsEditingOrEmpty()) {
-    node_data->role = ax::mojom::Role::kNone;
+    node_data->role = ax::mojom::Role::kImage;
+    node_data->SetName(l10n_util::GetStringUTF8(IDS_ACC_SEARCH_ICON));
     return;
   }
 
@@ -100,9 +117,17 @@ bool LocationIconView::IsBubbleShowing() const {
 
 gfx::Size LocationIconView::GetMinimumSizeForLabelText(
     const base::string16& text) const {
-  views::Label label(text, {font_list()});
-  return GetMinimumSizeForPreferredSize(
-      GetSizeForLabelWidth(label.GetPreferredSize().width()));
+  int width = 0;
+  if (text == label()->text()) {
+    // Optimize this common case by not creating a new label.
+    // GetPreferredSize is not dependent on the label's current
+    // width, so this returns the same value as the branch below.
+    width = label()->GetPreferredSize().width();
+  } else {
+    views::Label label(text, {font_list()});
+    width = label.GetPreferredSize().width();
+  }
+  return GetMinimumSizeForPreferredSize(GetSizeForLabelWidth(width));
 }
 
 void LocationIconView::SetTextVisibility(bool should_show,

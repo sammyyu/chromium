@@ -19,16 +19,16 @@ xr_session_promise_test( (session, t) => new Promise((resolve) => {
     setPose(VALID_POSE);
 
     let input_source = new MockXRInputSource();
-    input_source.pointerOrigin = "hand";
+    input_source.targetRayMode = "tracked-pointer";
     input_source.handedness = "right";
 
     // Don't set a grip matrix yet
 
     addInputSource(input_source);
 
-    // Must have a frameOfReference to get input poses. eyeLevel doesn't apply
+    // Must have a frameOfReference to get input poses. eye-level doesn't apply
     // any transforms to the given matrix.
-    session.requestFrameOfReference("eyeLevel").then( (frameOfRef) => {
+    session.requestFrameOfReference("eye-level").then( (frameOfRef) => {
 
       function CheckInvalidGrip(time, xrFrame) {
         let source = session.getInputSources()[0];
@@ -37,7 +37,7 @@ xr_session_promise_test( (session, t) => new Promise((resolve) => {
 
         t.step( () => {
           // The input pose should be null when no grip matrix is provided.
-          assert_equals(source.pointerOrigin, "hand");
+          assert_equals(source.targetRayMode, "tracked-pointer");
           assert_equals(input_pose, null);
         });
 
@@ -82,7 +82,7 @@ xr_session_promise_test( (session, t) => new Promise((resolve) => {
       // Can only request input poses in an xr frame.
       session.requestAnimationFrame(CheckInvalidGrip);
     });
-  }), fakeDevices["FakeGooglePixelPhone"], [ { exclusive: true } ],
+  }), fakeDevices["FakeGooglePixelPhone"], [ { immersive: true } ],
 "XRInputSources with a pointer origin of 'hand' properly communicate their poses");
 
 </script>

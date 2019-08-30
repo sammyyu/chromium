@@ -80,7 +80,7 @@ class Value;
 //   }
 class BASE_EXPORT Value {
  public:
-  using BlobStorage = std::vector<char>;
+  using BlobStorage = std::vector<uint8_t>;
   using DictStorage = flat_map<std::string, std::unique_ptr<Value>>;
   using ListStorage = std::vector<Value>;
 
@@ -130,7 +130,8 @@ class BASE_EXPORT Value {
   explicit Value(const char16* in_string16);
   explicit Value(StringPiece16 in_string16);
 
-  explicit Value(const BlobStorage& in_blob);
+  explicit Value(const std::vector<char>& in_blob);
+  explicit Value(base::span<const uint8_t> in_blob);
   explicit Value(BlobStorage&& in_blob) noexcept;
 
   explicit Value(const DictStorage& in_dict);
@@ -295,6 +296,11 @@ class BASE_EXPORT Value {
   // Note: This fatally asserts if type() is not Type::DICTIONARY.
   dict_iterator_proxy DictItems();
   const_dict_iterator_proxy DictItems() const;
+
+  // Returns the size of the dictionary, and if the dictionary is empty.
+  // Note: This fatally asserts if type() is not Type::DICTIONARY.
+  size_t DictSize() const;
+  bool DictEmpty() const;
 
   // These methods allow the convenient retrieval of the contents of the Value.
   // If the current object can be converted into the given type, the value is

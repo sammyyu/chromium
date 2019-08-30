@@ -16,10 +16,13 @@ class Bus;
 
 namespace chromeos {
 
+class ArcAppfuseProviderClient;
 class ArcMidisClient;
 class ArcObbMounterClient;
 class ArcOemCryptoClient;
 class AuthPolicyClient;
+class CiceroneClient;
+class ConciergeClient;
 class CrosDisksClient;
 class DebugDaemonClient;
 class EasyUnlockClient;
@@ -45,10 +48,13 @@ class CHROMEOS_EXPORT DBusClientsBrowser {
   friend class DBusThreadManager;
   friend class DBusThreadManagerSetter;
 
+  std::unique_ptr<ArcAppfuseProviderClient> arc_appfuse_provider_client_;
   std::unique_ptr<ArcMidisClient> arc_midis_client_;
   std::unique_ptr<ArcObbMounterClient> arc_obb_mounter_client_;
   std::unique_ptr<ArcOemCryptoClient> arc_oemcrypto_client_;
   std::unique_ptr<AuthPolicyClient> auth_policy_client_;
+  std::unique_ptr<CiceroneClient> cicerone_client_;
+  std::unique_ptr<ConciergeClient> concierge_client_;
   std::unique_ptr<CrosDisksClient> cros_disks_client_;
   std::unique_ptr<DebugDaemonClient> debug_daemon_client_;
   std::unique_ptr<EasyUnlockClient> easy_unlock_client_;

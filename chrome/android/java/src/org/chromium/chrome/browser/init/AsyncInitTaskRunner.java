@@ -4,8 +4,7 @@
 
 package org.chromium.chrome.browser.init;
 
-import android.os.AsyncTask;
-
+import org.chromium.base.AsyncTask;
 import org.chromium.base.Callback;
 import org.chromium.base.ContextUtils;
 import org.chromium.base.ThreadUtils;
@@ -16,7 +15,7 @@ import org.chromium.base.library_loader.ProcessInitException;
 import org.chromium.chrome.browser.ChromeActivitySessionTracker;
 import org.chromium.chrome.browser.ChromeVersionInfo;
 import org.chromium.components.variations.firstrun.VariationsSeedFetcher;
-import org.chromium.content.browser.ChildProcessLauncherHelper;
+import org.chromium.content_public.browser.ChildProcessLauncherHelper;
 
 import java.util.concurrent.Executor;
 
@@ -128,8 +127,7 @@ public abstract class AsyncInitTaskRunner {
      */
     private static boolean loadNativeLibrary() {
         try {
-            LibraryLoader libraryLoader = LibraryLoader.get(LibraryProcessType.PROCESS_BROWSER);
-            libraryLoader.ensureInitialized();
+            LibraryLoader.getInstance().ensureInitialized(LibraryProcessType.PROCESS_BROWSER);
             // The prefetch is done after the library load for two reasons:
             // - It is easier to know the library location after it has
             // been loaded.
@@ -140,7 +138,7 @@ public abstract class AsyncInitTaskRunner {
             // generally startup on some devices, most likely by
             // competing for IO.
             // For experimental results, see http://crbug.com/460438.
-            libraryLoader.asyncPrefetchLibrariesToMemory();
+            LibraryLoader.getInstance().asyncPrefetchLibrariesToMemory();
         } catch (ProcessInitException e) {
             return false;
         }

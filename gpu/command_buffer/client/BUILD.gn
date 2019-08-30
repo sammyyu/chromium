@@ -135,6 +135,8 @@ gles2_implementation_source_files = [
   "program_info_manager.h",
   "query_tracker.cc",
   "query_tracker.h",
+  "readback_buffer_shadow_tracker.cc",
+  "readback_buffer_shadow_tracker.h",
   "share_group.cc",
   "share_group.h",
   "vertex_array_object_manager.cc",
@@ -217,6 +219,8 @@ source_set("raster_sources") {
     "//ui/gfx/ipc/color",
   ]
   sources = [
+    "client_font_manager.cc",
+    "client_font_manager.h",
     "raster_cmd_helper.cc",
     "raster_cmd_helper.h",
     "raster_cmd_helper_autogen.h",

@@ -10,10 +10,11 @@
 #include <string>
 
 #include "base/macros.h"
+#include "base/stl_util.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/time/time.h"
 #include "chrome_elf/sha1/sha1.h"
-#include "chrome_elf/third_party_dlls/packed_list_format.h"
+#include "chrome_elf/third_party_dlls/logging_api.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace third_party_dlls {
@@ -28,36 +29,14 @@ struct NotificationHandlerArguments {
 };
 
 struct TestEntry {
-  uint8_t basename_hash[elf_sha1::kSHA1Length];
-  uint8_t code_id_hash[elf_sha1::kSHA1Length];
+  uint32_t image_size;
+  uint32_t time_date_stamp;
 };
 
-// Sample TestEntries - hashes are the same, except for first bytes.
+// Sample TestEntries
 TestEntry kTestLogs[] = {
-    {{0x11, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71},
-     {0x22, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71}},
-    {{0x33, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71},
-     {0x44, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71}},
-    {{0x55, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71},
-     {0x66, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71}},
-    {{0x77, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71},
-     {0x88, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71}},
-    {{0x99, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71},
-     {0xaa, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71}},
-    {{0xbb, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71},
-     {0xcc, 0xab, 0x9e, 0xa4, 0xbe, 0xf5, 0xf3, 0x6e, 0x7f, 0x20,
-      0xc3, 0xaf, 0x63, 0x9c, 0x6f, 0x0e, 0xfe, 0x5f, 0x27, 0x71}},
+    {0x9901, 0x12345678}, {0x9902, 0x12345678}, {0x9903, 0x12345678},
+    {0x9904, 0x12345678}, {0x9905, 0x12345678}, {0x9906, 0x12345678},
 };
 
 // Be sure to test the padding/alignment issues well here.
@@ -66,28 +45,25 @@ const std::string kTestPaths[] = {
 };
 
 static_assert(
-    arraysize(kTestLogs) == arraysize(kTestPaths),
+    base::size(kTestLogs) == base::size(kTestPaths),
     "Some tests currently expect these two arrays to be the same size.");
 
 // Ensure |buffer_size| passed in is the actual bytes written by DrainLog().
 void VerifyBuffer(uint8_t* buffer, uint32_t buffer_size) {
   uint32_t total_logs = 0;
   size_t index = 0;
-  size_t array_size = arraysize(kTestLogs);
+  size_t array_size = base::size(kTestLogs);
 
-  // Verify against kTestLogs/kTestPaths.  Expect 2 * arraysize(kTestLogs)
+  // Verify against kTestLogs/kTestPaths.  Expect 2 * base::size(kTestLogs)
   // entries: first half are "blocked", second half are "allowed".
   LogEntry* entry = nullptr;
   uint8_t* tracker = buffer;
   while (tracker < buffer + buffer_size) {
     entry = reinterpret_cast<LogEntry*>(tracker);
 
-    EXPECT_EQ(elf_sha1::CompareHashes(entry->basename_hash,
-                                      kTestLogs[index].basename_hash),
-              0);
-    EXPECT_EQ(elf_sha1::CompareHashes(entry->code_id_hash,
-                                      kTestLogs[index].code_id_hash),
-              0);
+    EXPECT_EQ(entry->module_size, kTestLogs[index].image_size);
+    EXPECT_EQ(entry->time_date_stamp, kTestLogs[index].time_date_stamp);
+
     if (entry->path_len)
       EXPECT_STREQ(entry->path, kTestPaths[index].c_str());
 
@@ -148,16 +124,16 @@ DWORD WINAPI NotificationHandler(LPVOID parameter) {
 // Test successful initialization and module lookup.
 TEST(ThirdParty, Logs) {
   // Init.
-  ASSERT_EQ(InitLogs(), LogStatus::kSuccess);
+  ASSERT_EQ(InitLogs(), ThirdPartyStatus::kSuccess);
 
-  for (size_t i = 0; i < arraysize(kTestLogs); ++i) {
+  for (size_t i = 0; i < base::size(kTestLogs); ++i) {
     // Add some blocked entries.
-    LogLoadAttempt(LogType::kBlocked, kTestLogs[i].basename_hash,
-                   kTestLogs[i].code_id_hash, nullptr);
+    LogLoadAttempt(LogType::kBlocked, kTestLogs[i].image_size,
+                   kTestLogs[i].time_date_stamp, std::string());
 
     // Add some allowed entries.
-    LogLoadAttempt(LogType::kAllowed, kTestLogs[i].basename_hash,
-                   kTestLogs[i].code_id_hash, kTestPaths[i].c_str());
+    LogLoadAttempt(LogType::kAllowed, kTestLogs[i].image_size,
+                   kTestLogs[i].time_date_stamp, kTestPaths[i]);
   }
 
   uint32_t initial_log = 0;
@@ -172,13 +148,13 @@ TEST(ThirdParty, Logs) {
 
   VerifyBuffer(&buffer[0], bytes_written);
 
-  DeinitLogsForTesting();
+  DeinitLogs();
 }
 
 // Test notifications.
 TEST(ThirdParty, LogNotifications) {
   // Init.
-  ASSERT_EQ(InitLogs(), LogStatus::kSuccess);
+  ASSERT_EQ(InitLogs(), ThirdPartyStatus::kSuccess);
 
   uint32_t initial_log = 0;
   DrainLog(nullptr, 0, &initial_log);
@@ -186,7 +162,7 @@ TEST(ThirdParty, LogNotifications) {
 
   // Set up the required arguments for the test thread.
   NotificationHandlerArguments handler_data;
-  handler_data.logs_expected = arraysize(kTestLogs);
+  handler_data.logs_expected = base::size(kTestLogs);
   handler_data.notification_event.reset(
       new base::WaitableEvent(base::WaitableEvent::ResetPolicy::AUTOMATIC,
                               base::WaitableEvent::InitialState::NOT_SIGNALED));
@@ -201,8 +177,8 @@ TEST(ThirdParty, LogNotifications) {
 
   for (size_t i = 0; i < handler_data.logs_expected; ++i) {
     // Add blocked entries - type doesn't matter in this test.
-    LogLoadAttempt(LogType::kBlocked, kTestLogs[i].basename_hash,
-                   kTestLogs[i].code_id_hash, nullptr);
+    LogLoadAttempt(LogType::kBlocked, kTestLogs[i].image_size,
+                   kTestLogs[i].time_date_stamp, std::string());
   }
 
   EXPECT_EQ(::WaitForSingleObject(thread.Get(), kWaitTimeoutMs * 2),
@@ -211,7 +187,63 @@ TEST(ThirdParty, LogNotifications) {
   EXPECT_TRUE(::GetExitCodeThread(thread.Get(), &exit_code));
   EXPECT_EQ(exit_code, DWORD{0});
 
-  DeinitLogsForTesting();
+  DeinitLogs();
+}
+
+// Test that "spam", duplicate block logs are handled as expected across drains.
+TEST(ThirdParty, BlockedLogDuplicates) {
+  // Init.
+  ASSERT_EQ(InitLogs(), ThirdPartyStatus::kSuccess);
+
+  for (size_t i = 0; i < base::size(kTestLogs); ++i) {
+    // Add some blocked entries.
+    LogLoadAttempt(LogType::kBlocked, kTestLogs[i].image_size,
+                   kTestLogs[i].time_date_stamp, kTestPaths[i]);
+
+    // Add some allowed entries.
+    LogLoadAttempt(LogType::kAllowed, kTestLogs[i].image_size,
+                   kTestLogs[i].time_date_stamp, kTestPaths[i]);
+  }
+
+  uint32_t initial_log = 0;
+  DrainLog(nullptr, 0, &initial_log);
+  ASSERT_TRUE(initial_log);
+
+  auto buffer = std::unique_ptr<uint8_t[]>(new uint8_t[initial_log]);
+  uint32_t remaining_log = 0;
+  uint32_t bytes_written = DrainLog(&buffer[0], initial_log, &remaining_log);
+  EXPECT_EQ(bytes_written, initial_log);
+  EXPECT_EQ(remaining_log, uint32_t{0});
+
+  // Validate that all of the logs have been drained.
+  EXPECT_EQ(GetLogCount(&buffer[0], bytes_written), base::size(kTestLogs) * 2);
+
+  // Now the real test.  Add the same log entries again, and expect that the
+  // blocked logs will NOT be re-added and drained this time.
+  for (size_t i = 0; i < base::size(kTestLogs); ++i) {
+    // Add some blocked entries.
+    LogLoadAttempt(LogType::kBlocked, kTestLogs[i].image_size,
+                   kTestLogs[i].time_date_stamp, kTestPaths[i]);
+
+    // Add some allowed entries.
+    LogLoadAttempt(LogType::kAllowed, kTestLogs[i].image_size,
+                   kTestLogs[i].time_date_stamp, kTestPaths[i]);
+  }
+
+  initial_log = 0;
+  DrainLog(nullptr, 0, &initial_log);
+  ASSERT_TRUE(initial_log);
+
+  buffer = std::unique_ptr<uint8_t[]>(new uint8_t[initial_log]);
+  remaining_log = 0;
+  bytes_written = DrainLog(&buffer[0], initial_log, &remaining_log);
+  EXPECT_EQ(bytes_written, initial_log);
+  EXPECT_EQ(remaining_log, uint32_t{0});
+
+  // Validate that only half of the logs have been drained.
+  EXPECT_EQ(GetLogCount(&buffer[0], bytes_written), base::size(kTestLogs));
+
+  DeinitLogs();
 }
 
 }  // namespace

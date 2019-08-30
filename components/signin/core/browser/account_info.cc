@@ -21,16 +21,7 @@ bool UpdateField(bool* field, bool new_value) {
 }
 }
 
-AccountInfo::AccountInfo()
-    : account_id(),
-      gaia(),
-      email(),
-      full_name(),
-      given_name(),
-      hosted_domain(),
-      locale(),
-      picture_url(),
-      is_child_account(false) {}
+AccountInfo::AccountInfo() : is_child_account(false) {}
 AccountInfo::AccountInfo(const AccountInfo& other) = default;
 AccountInfo::~AccountInfo() {}
 
@@ -62,4 +53,12 @@ bool AccountInfo::UpdateWith(const AccountInfo& other) {
   modified |= UpdateField(&is_child_account, other.is_child_account);
 
   return modified;
+}
+
+AccountId AccountIdFromAccountInfo(const AccountInfo& account_info) {
+  if (account_info.IsEmpty())
+    return EmptyAccountId();
+
+  DCHECK(!account_info.email.empty() && !account_info.gaia.empty());
+  return AccountId::FromUserEmailGaiaId(account_info.email, account_info.gaia);
 }

@@ -45,7 +45,6 @@ DataReductionProxyDelegate::DataReductionProxyDelegate(
       event_creator_(event_creator),
       bypass_stats_(bypass_stats),
       tick_clock_(base::DefaultTickClock::GetInstance()),
-      first_data_saver_request_recorded_(false),
       io_data_(nullptr),
       net_log_(net_log) {
   DCHECK(config_);
@@ -59,14 +58,14 @@ DataReductionProxyDelegate::DataReductionProxyDelegate(
 
 DataReductionProxyDelegate::~DataReductionProxyDelegate() {
   DCHECK(thread_checker_.CalledOnValidThread());
-  net::NetworkChangeNotifier::RemoveIPAddressObserver(this);
+  net::NetworkChangeNotifier::RemoveNetworkChangeObserver(this);
 }
 
 void DataReductionProxyDelegate::InitializeOnIOThread(
     DataReductionProxyIOData* io_data) {
   DCHECK(io_data);
   DCHECK(thread_checker_.CalledOnValidThread());
-  net::NetworkChangeNotifier::AddIPAddressObserver(this);
+  net::NetworkChangeNotifier::AddNetworkChangeObserver(this);
   io_data_ = io_data;
 }
 
@@ -78,7 +77,7 @@ void DataReductionProxyDelegate::OnResolveProxy(
   DCHECK(thread_checker_.CalledOnValidThread());
   DCHECK(result);
   DCHECK(result->is_empty() || result->is_direct() ||
-         !config_->IsDataReductionProxy(result->proxy_server(), nullptr));
+         !config_->FindConfiguredDataReductionProxy(result->proxy_server()));
 
   if (!params::IsIncludedInQuicFieldTrial())
     RecordQuicProxyStatus(QUIC_PROXY_DISABLED_VIA_FIELD_TRIAL);
@@ -143,25 +142,19 @@ void DataReductionProxyDelegate::OnResolveProxy(
     result->OverrideProxyList(data_reduction_proxy_info.proxy_list());
 
     GetAlternativeProxy(url, proxy_retry_info, result);
-
-    if (!first_data_saver_request_recorded_) {
-      UMA_HISTOGRAM_MEDIUM_TIMES(
-          "DataReductionProxy.TimeToFirstDataSaverRequest",
-          tick_clock_->NowTicks() - last_network_change_time_);
-      first_data_saver_request_recorded_ = true;
-    }
   }
 
   DCHECK_GT(ResourceTypeProvider::CONTENT_TYPE_MAX, content_type);
-  UMA_HISTOGRAM_ENUMERATION("DataReductionProxy.ResourceContentType",
-                            content_type,
-                            ResourceTypeProvider::CONTENT_TYPE_MAX);
 
   if (config_->enabled_by_user_and_reachable() &&
       url.SchemeIs(url::kHttpScheme) && !net::IsLocalhost(url) &&
       !params::IsIncludedInHoldbackFieldTrial()) {
     UMA_HISTOGRAM_BOOLEAN("DataReductionProxy.ConfigService.HTTPRequests",
                           !config_->GetProxiesForHttp().empty());
+    if (content_type == ResourceTypeProvider::CONTENT_TYPE_MAIN_FRAME) {
+      UMA_HISTOGRAM_BOOLEAN("DataReductionProxy.ConfigService.MainFrames",
+                            !config_->GetProxiesForHttp().empty());
+    }
   }
 }
 
@@ -169,7 +162,7 @@ void DataReductionProxyDelegate::OnFallback(const net::ProxyServer& bad_proxy,
                                             int net_error) {
   DCHECK(thread_checker_.CalledOnValidThread());
   if (bad_proxy.is_valid() &&
-      config_->IsDataReductionProxy(bad_proxy, nullptr)) {
+      config_->FindConfiguredDataReductionProxy(bad_proxy)) {
     event_creator_->AddProxyFallbackEvent(net_log_, bad_proxy.ToURI(),
                                           net_error);
   }
@@ -179,7 +172,7 @@ void DataReductionProxyDelegate::OnFallback(const net::ProxyServer& bad_proxy,
 }
 
 void DataReductionProxyDelegate::SetTickClockForTesting(
-    base::TickClock* tick_clock) {
+    const base::TickClock* tick_clock) {
   tick_clock_ = tick_clock;
   // Update |last_network_change_time_| to the provided tick clock's current
   // time for testing.
@@ -194,7 +187,7 @@ void DataReductionProxyDelegate::GetAlternativeProxy(
 
   net::ProxyServer resolved_proxy_server = result->proxy_server();
   DCHECK(resolved_proxy_server.is_valid());
-  DCHECK(config_->IsDataReductionProxy(resolved_proxy_server, nullptr));
+  DCHECK(config_->FindConfiguredDataReductionProxy(resolved_proxy_server));
 
   if (!url.is_valid() || !url.SchemeIsHTTPOrHTTPS() ||
       url.SchemeIsCryptographic()) {
@@ -245,9 +238,13 @@ void DataReductionProxyDelegate::RecordQuicProxyStatus(
                             QUIC_PROXY_STATUS_BOUNDARY);
 }
 
-void DataReductionProxyDelegate::OnIPAddressChanged() {
+void DataReductionProxyDelegate::OnNetworkChanged(
+    net::NetworkChangeNotifier::ConnectionType type) {
   DCHECK(thread_checker_.CalledOnValidThread());
-  first_data_saver_request_recorded_ = false;
+
+  if (type == net::NetworkChangeNotifier::CONNECTION_NONE)
+    return;
+
   last_network_change_time_ = tick_clock_->NowTicks();
 }
 

@@ -21,7 +21,7 @@
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/synchronization/waitable_event.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/time/clock.h"
@@ -62,7 +62,7 @@
 #include "components/location/android/location_settings_dialog_outcome.h"
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/permission_type.h"
-#include "third_party/WebKit/public/platform/modules/permissions/permission_status.mojom.h"
+#include "third_party/blink/public/platform/modules/permissions/permission_status.mojom.h"
 #endif
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
@@ -218,17 +218,18 @@ void GeolocationPermissionContextTests::CheckPermissionMessageSentInternal(
 }
 
 void GeolocationPermissionContextTests::AddNewTab(const GURL& url) {
-  content::WebContents* new_tab = CreateTestWebContents();
-  content::NavigationSimulator::NavigateAndCommitFromBrowser(new_tab, url);
+  std::unique_ptr<content::WebContents> new_tab = CreateTestWebContents();
+  content::NavigationSimulator::NavigateAndCommitFromBrowser(new_tab.get(),
+                                                             url);
 
   // Set up required helpers, and make this be as "tabby" as the code requires.
 #if BUILDFLAG(ENABLE_EXTENSIONS)
-  extensions::SetViewType(new_tab, extensions::VIEW_TYPE_TAB_CONTENTS);
+  extensions::SetViewType(new_tab.get(), extensions::VIEW_TYPE_TAB_CONTENTS);
 #endif
 
-  SetupRequestManager(new_tab);
+  SetupRequestManager(new_tab.get());
 
-  extra_tabs_.push_back(base::WrapUnique(new_tab));
+  extra_tabs_.push_back(std::move(new_tab));
 }
 
 void GeolocationPermissionContextTests::CheckTabContentsState(

@@ -6,7 +6,6 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/memory/ptr_util.h"
 #include "base/optional.h"
 #include "base/strings/stringprintf.h"
 #include "base/values.h"
@@ -19,8 +18,8 @@
 #include "gin/public/context_holder.h"
 #include "gin/public/isolate_holder.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/WebKit/public/web/WebScopedUserGesture.h"
-#include "third_party/WebKit/public/web/WebUserGestureIndicator.h"
+#include "third_party/blink/public/web/web_scoped_user_gesture.h"
+#include "third_party/blink/public/web/web_user_gesture_indicator.h"
 
 namespace extensions {
 
@@ -429,6 +428,35 @@ TEST_F(APIRequestHandlerTest, SettingLastError) {
     int request_id = request_handler.StartRequest(
         context, kMethod, std::make_unique<base::ListValue>(), callback,
         v8::Local<v8::Function>(), binding::RequestThread::UI);
+    request_handler.CompleteRequest(request_id, base::ListValue(),
+                                    "some error");
+    ASSERT_TRUE(logged_error);
+    EXPECT_EQ("Unchecked runtime.lastError: some error", *logged_error);
+    logged_error.reset();
+  }
+
+  {
+    // Test a function call resulting in an error with only a custom callback,
+    // and no author-script-provided callback. The error should be logged.
+    v8::Local<v8::Function> custom_callback =
+        FunctionFromString(context, "(function() {})");
+    int request_id = request_handler.StartRequest(
+        context, kMethod, std::make_unique<base::ListValue>(),
+        v8::Local<v8::Function>(), custom_callback, binding::RequestThread::UI);
+    request_handler.CompleteRequest(request_id, base::ListValue(),
+                                    "some error");
+    ASSERT_TRUE(logged_error);
+    EXPECT_EQ("Unchecked runtime.lastError: some error", *logged_error);
+    logged_error.reset();
+  }
+
+  {
+    // Test a function call resulting in an error that does not have an
+    // associated callback callback. The error should be logged.
+    int request_id = request_handler.StartRequest(
+        context, kMethod, std::make_unique<base::ListValue>(),
+        v8::Local<v8::Function>(), v8::Local<v8::Function>(),
+        binding::RequestThread::UI);
     request_handler.CompleteRequest(request_id, base::ListValue(),
                                     "some error");
     ASSERT_TRUE(logged_error);

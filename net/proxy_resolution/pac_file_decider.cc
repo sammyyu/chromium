@@ -15,6 +15,7 @@
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
+#include "net/base/completion_repeating_callback.h"
 #include "net/base/net_errors.h"
 #include "net/log/net_log_capture_mode.h"
 #include "net/log/net_log_event_type.h"
@@ -101,7 +102,7 @@ PacFileDecider::~PacFileDecider() {
 int PacFileDecider::Start(const ProxyConfigWithAnnotation& config,
                           const base::TimeDelta wait_delay,
                           bool fetch_pac_bytes,
-                          const CompletionCallback& callback) {
+                          CompletionOnceCallback callback) {
   DCHECK_EQ(STATE_NONE, next_state_);
   DCHECK(!callback.is_null());
   DCHECK(config.value().HasAutomaticSettings());
@@ -127,7 +128,7 @@ int PacFileDecider::Start(const ProxyConfigWithAnnotation& config,
 
   int rv = DoLoop(OK);
   if (rv == ERR_IO_PENDING)
-    callback_ = callback;
+    callback_ = std::move(callback);
   else
     DidComplete();
 
@@ -139,13 +140,13 @@ void PacFileDecider::OnShutdown() {
   if (next_state_ == STATE_NONE)
     return;
 
-  CompletionCallback callback = std::move(callback_);
+  CompletionOnceCallback callback = std::move(callback_);
 
   // Just cancel any pending work.
   Cancel();
 
   if (callback)
-    callback.Run(ERR_CONTEXT_SHUT_DOWN);
+    std::move(callback).Run(ERR_CONTEXT_SHUT_DOWN);
 }
 
 const ProxyConfigWithAnnotation& PacFileDecider::effective_config() const {
@@ -179,7 +180,7 @@ void PacFileDecider::OnIOCompletion(int result) {
   int rv = DoLoop(result);
   if (rv != ERR_IO_PENDING) {
     DidComplete();
-    DoCallback(rv);
+    std::move(callback_).Run(rv);
   }
 }
 
@@ -227,12 +228,6 @@ int PacFileDecider::DoLoop(int result) {
   return rv;
 }
 
-void PacFileDecider::DoCallback(int result) {
-  DCHECK_NE(ERR_IO_PENDING, result);
-  DCHECK(!callback_.is_null());
-  callback_.Run(result);
-}
-
 int PacFileDecider::DoWait() {
   next_state_ = STATE_WAIT_COMPLETE;
 
@@ -273,13 +268,13 @@ int PacFileDecider::DoQuickCheck() {
   std::string host = current_pac_source().url.host();
   HostResolver::RequestInfo reqinfo(HostPortPair(host, 80));
   reqinfo.set_host_resolver_flags(HOST_RESOLVER_SYSTEM_ONLY);
-  CompletionCallback callback =
-      base::Bind(&PacFileDecider::OnIOCompletion, base::Unretained(this));
+  CompletionRepeatingCallback callback = base::BindRepeating(
+      &PacFileDecider::OnIOCompletion, base::Unretained(this));
 
   next_state_ = STATE_QUICK_CHECK_COMPLETE;
   quick_check_timer_.Start(
       FROM_HERE, base::TimeDelta::FromMilliseconds(kQuickCheckDelayMs),
-      base::Bind(callback, ERR_NAME_NOT_RESOLVED));
+      base::BindRepeating(callback, ERR_NAME_NOT_RESOLVED));
 
   HostResolver* host_resolver =
       pac_file_fetcher_->GetRequestContext()->host_resolver();
@@ -328,7 +323,7 @@ int PacFileDecider::DoFetchPacScript() {
     return dhcp_pac_file_fetcher_->Fetch(
         &pac_script_,
         base::Bind(&PacFileDecider::OnIOCompletion, base::Unretained(this)),
-        net_log_);
+        net_log_, NetworkTrafficAnnotationTag(traffic_annotation_));
   }
 
   if (!pac_file_fetcher_) {
@@ -338,7 +333,8 @@ int PacFileDecider::DoFetchPacScript() {
 
   return pac_file_fetcher_->Fetch(
       effective_pac_url, &pac_script_,
-      base::Bind(&PacFileDecider::OnIOCompletion, base::Unretained(this)));
+      base::Bind(&PacFileDecider::OnIOCompletion, base::Unretained(this)),
+      NetworkTrafficAnnotationTag(traffic_annotation_));
 }
 
 int PacFileDecider::DoFetchPacScriptComplete(int result) {

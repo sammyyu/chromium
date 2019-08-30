@@ -13,6 +13,7 @@ namespace vr {
 
 namespace {
 
+constexpr float kDragThresholdDegrees = 3.0f;
 constexpr float kHeadUpTransitionStartDegrees = 60.0f;
 constexpr float kHeadUpTransitionEndDegrees = 30.0f;
 constexpr gfx::Vector3dF kUp = {0, 1, 0};
@@ -45,6 +46,11 @@ gfx::Vector3dF GetEffectiveUpVector(const gfx::Vector3dF& forward,
 Repositioner::Repositioner() = default;
 Repositioner::~Repositioner() = default;
 
+bool Repositioner::ShouldUpdateWorldSpaceTransform(
+    bool parent_transform_changed) const {
+  return true;
+}
+
 gfx::Transform Repositioner::LocalTransform() const {
   return transform_;
 }
@@ -58,20 +64,30 @@ void Repositioner::SetEnabled(bool enabled) {
   if (enabled) {
     initial_transform_ = transform_;
     initial_laser_direction_ = laser_direction_;
+    has_moved_beyond_threshold_ = false;
   }
 }
 
 void Repositioner::Reset() {
-  transform_.MakeIdentity();
+  reset_yaw_ = true;
 }
 
 void Repositioner::UpdateTransform(const gfx::Transform& head_pose) {
+  set_world_space_transform_dirty();
+
   gfx::Vector3dF head_up = vr::GetUpVector(head_pose);
   gfx::Vector3dF head_forward = vr::GetForwardVector(head_pose);
 
-  transform_ = initial_transform_;
-  transform_.ConcatTransform(gfx::Transform(
-      gfx::Quaternion(initial_laser_direction_, laser_direction_)));
+  if (reset_yaw_) {
+    gfx::Vector3dF current_right = {1, 0, 0};
+    transform_.TransformVector(&current_right);
+    transform_.ConcatTransform(
+        gfx::Transform(gfx::Quaternion(current_right, {1, 0, 0})));
+  } else {
+    transform_ = initial_transform_;
+    transform_.ConcatTransform(gfx::Transform(
+        gfx::Quaternion(initial_laser_direction_, laser_direction_)));
+  }
 
   gfx::Vector3dF new_right = {1, 0, 0};
   transform_.TransformVector(&new_right);
@@ -93,6 +109,10 @@ void Repositioner::UpdateTransform(const gfx::Transform& head_pose) {
   gfx::Vector3dF expected_right = gfx::CrossProduct(new_forward, up);
   gfx::Quaternion rotate_to_expected_right(new_right, expected_right);
   transform_.ConcatTransform(gfx::Transform(rotate_to_expected_right));
+  if (gfx::AngleBetweenVectorsInDegrees(
+          initial_laser_direction_, laser_direction_) > kDragThresholdDegrees) {
+    has_moved_beyond_threshold_ = true;
+  }
 
   // Potentially bake our current transform, to avoid situations where
   // |laser_direction_| and |initial_laser_direction_| are nearly 180 degrees
@@ -112,10 +132,10 @@ void Repositioner::UpdateTransform(const gfx::Transform& head_pose) {
   }
 }
 
-bool Repositioner::OnBeginFrame(const base::TimeTicks& time,
-                                const gfx::Transform& head_pose) {
-  if (enabled_) {
+bool Repositioner::OnBeginFrame(const gfx::Transform& head_pose) {
+  if (enabled_ || reset_yaw_) {
     UpdateTransform(head_pose);
+    reset_yaw_ = false;
     return true;
   }
   return false;

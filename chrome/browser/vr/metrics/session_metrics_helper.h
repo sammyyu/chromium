@@ -9,12 +9,56 @@
 
 #include "base/time/time.h"
 #include "chrome/browser/vr/mode.h"
+#include "chrome/browser/vr/ui_browser_interface.h"
+#include "chrome/browser/vr/vr_export.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "services/metrics/public/cpp/ukm_builders.h"
 #include "services/metrics/public/cpp/ukm_source_id.h"
 #include "url/gurl.h"
 
 namespace vr {
+
+// This enum describes various ways a Chrome VR session started.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// Ensure that this stays in sync with VRSessionStartAction in enums.xml
+// GENERATED_JAVA_ENUM_PACKAGE: org.chromium.chrome.browser.vr
+enum class VrStartAction : int {
+  // The user activated a headset. For example, inserted phone in Daydream, or
+  // put on an Occulus or Vive.
+  kHeadsetActivation = 1,
+  // The user triggered a presentation request on a page, probably by clicking
+  // an enter VR button.
+  kPresentationRequest = 2,
+  // The user launched a deep linked app, probably from Daydream home.
+  kDeepLinkedApp = 3,
+  // Chrome VR was started by an intent from another app. Most likely the user
+  // clicked the icon in Daydream home.
+  kIntentLaunch = 4,
+  kMaxValue = kIntentLaunch,
+};
+
+// The source of a request to enter XR Presentation.
+// These values are persisted to logs. Entries should not be renumbered and
+// numeric values should never be reused.
+// Ensure that this stays in sync with VRPresentationStartAction in enums.xml.
+enum PresentationStartAction {
+  // A catch all for methods of Presentation entry that are not otherwise
+  // logged.
+  kOther = 0,
+  // The user triggered a presentation request on a page in 2D, probably by
+  // clicking an enter VR button.
+  kRequestFrom2dBrowsing = 1,
+  // The user triggered a presentation request on a page in VR browsing,
+  // probably by clicking an enter VR button.
+  kRequestFromVrBrowsing = 2,
+  // The user activated a headset on a page that listens for headset activations
+  // and requests presentation.
+  kHeadsetActivation = 3,
+  // The user opened a deep linked app, probably from the Daydream homescreen.
+  kDeepLinkedApp = 4,
+  kMaxValue = kDeepLinkedApp,
+};
 
 // SessionTimer will monitor the time between calls to StartSession and
 // StopSession.  It will combine multiple segments into a single session if they
@@ -103,7 +147,7 @@ class SessionTracker {
 // metrics that require state monitoring, such as durations, but also tracks
 // data we want attached to that, such as number of videos watched and how the
 // session was started.
-class SessionMetricsHelper : public content::WebContentsObserver {
+class VR_EXPORT SessionMetricsHelper : public content::WebContentsObserver {
  public:
   // Returns the SessionMetricsHelper singleton if it has been created for the
   // WebContents.
@@ -118,7 +162,11 @@ class SessionMetricsHelper : public content::WebContentsObserver {
   void SetWebVREnabled(bool is_webvr_presenting);
   void SetVRActive(bool is_vr_enabled);
   void RecordVoiceSearchStarted();
-  void RecordUrlRequestedByVoice(GURL url);
+  void RecordUrlRequested(GURL url, NavigationMethod method);
+
+  void RecordVrStartAction(VrStartAction action);
+  void RecordPresentationStartAction(PresentationStartAction action);
+  void ReportRequestPresent();
 
  private:
   SessionMetricsHelper(content::WebContents* contents,
@@ -139,6 +187,9 @@ class SessionMetricsHelper : public content::WebContentsObserver {
 
   void SetVrMode(Mode mode);
   void UpdateMode();
+
+  void LogVrStartAction(VrStartAction action);
+  void LogPresentationStartAction(PresentationStartAction action);
 
   void OnEnterAnyVr();
   void OnExitAllVr();
@@ -165,7 +216,11 @@ class SessionMetricsHelper : public content::WebContentsObserver {
   bool is_vr_enabled_ = false;
   bool started_with_autopresentation_ = false;
 
-  GURL url_requested_by_voice_;
+  GURL last_requested_url_;
+  NavigationMethod last_url_request_method_;
+
+  base::Optional<VrStartAction> pending_page_session_start_action_;
+  base::Optional<PresentationStartAction> pending_presentation_start_action_;
 
   int num_videos_playing_ = 0;
   int num_session_navigation_ = 0;

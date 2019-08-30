@@ -45,6 +45,7 @@
 #include "chrome/browser/chromeos/drive/drive_integration_service.h"
 #include "chrome/browser/chromeos/drive/file_system_util.h"
 #include "chrome/browser/chromeos/file_manager/path_util.h"
+#include "chromeos/dbus/cros_disks_client.h"
 #endif
 
 #if defined(OS_WIN)
@@ -73,7 +74,7 @@ bool DownloadPathIsDangerous(const base::FilePath& download_path) {
   return false;
 #else
   base::FilePath desktop_dir;
-  if (!PathService::Get(base::DIR_USER_DESKTOP, &desktop_dir)) {
+  if (!base::PathService::Get(base::DIR_USER_DESKTOP, &desktop_dir)) {
     NOTREACHED();
     return false;
   }
@@ -89,13 +90,13 @@ class DefaultDownloadDirectory {
   friend struct base::LazyInstanceTraitsBase<DefaultDownloadDirectory>;
 
   DefaultDownloadDirectory() {
-    if (!PathService::Get(chrome::DIR_DEFAULT_DOWNLOADS, &path_)) {
+    if (!base::PathService::Get(chrome::DIR_DEFAULT_DOWNLOADS, &path_)) {
       NOTREACHED();
     }
     if (DownloadPathIsDangerous(path_)) {
       // This is only useful on platforms that support
       // DIR_DEFAULT_DOWNLOADS_SAFE.
-      if (!PathService::Get(chrome::DIR_DEFAULT_DOWNLOADS_SAFE, &path_)) {
+      if (!base::PathService::Get(chrome::DIR_DEFAULT_DOWNLOADS_SAFE, &path_)) {
         NOTREACHED();
       }
     }
@@ -161,6 +162,16 @@ DownloadPrefs::DownloadPrefs(Profile* profile) : profile_(profile) {
   prompt_for_download_.Init(prefs::kPromptForDownload, prefs);
 #if defined(OS_ANDROID)
   prompt_for_download_android_.Init(prefs::kPromptForDownloadAndroid, prefs);
+
+  // If |kDownloadsLocationChange| is not enabled, always uses the default
+  // download location, in case that the feature is enabled and then disabled
+  // from finch config and the user may stuck at other download locations.
+  if (!base::FeatureList::IsEnabled(features::kDownloadsLocationChange)) {
+    prefs->SetFilePath(prefs::kDownloadDefaultDirectory,
+                       GetDefaultDownloadDirectoryForProfile());
+    prefs->SetFilePath(prefs::kSaveFileDefaultDirectory,
+                       GetDefaultDownloadDirectoryForProfile());
+  }
 #endif
   download_path_.Init(prefs::kDownloadDefaultDirectory, prefs);
   save_file_path_.Init(prefs::kSaveFileDefaultDirectory, prefs);
@@ -232,11 +243,14 @@ void DownloadPrefs::RegisterProfilePrefs(
 #endif
 #if defined(OS_ANDROID)
   DownloadPromptStatus download_prompt_status =
-      (base::FeatureList::IsEnabled(features::kDownloadsLocationChange))
+      base::FeatureList::IsEnabled(features::kDownloadsLocationChange)
           ? DownloadPromptStatus::SHOW_INITIAL
           : DownloadPromptStatus::DONT_SHOW;
   registry->RegisterIntegerPref(prefs::kPromptForDownloadAndroid,
                                 static_cast<int>(download_prompt_status));
+  registry->RegisterBooleanPref(
+      prefs::kShowMissingSdCardErrorAndroid,
+      base::FeatureList::IsEnabled(features::kDownloadsLocationChange));
 #endif
 }
 
@@ -291,7 +305,7 @@ base::FilePath DownloadPrefs::DownloadPath() const {
       return GetDefaultDownloadDirectoryForProfile();
   }
 #endif
-  return *download_path_;
+  return SanitizeDownloadTargetPath(*download_path_);
 }
 
 void DownloadPrefs::SetDownloadPath(const base::FilePath& path) {
@@ -300,7 +314,7 @@ void DownloadPrefs::SetDownloadPath(const base::FilePath& path) {
 }
 
 base::FilePath DownloadPrefs::SaveFilePath() const {
-  return *save_file_path_;
+  return SanitizeDownloadTargetPath(*save_file_path_);
 }
 
 void DownloadPrefs::SetSaveFilePath(const base::FilePath& path) {
@@ -427,6 +441,39 @@ void DownloadPrefs::SaveAutoOpenState() {
     extensions.erase(extensions.size() - 1);
 
   profile_->GetPrefs()->SetString(prefs::kDownloadExtensionsToOpen, extensions);
+}
+
+base::FilePath DownloadPrefs::SanitizeDownloadTargetPath(
+    const base::FilePath& path) const {
+#if defined(OS_CHROMEOS)
+  // If |path| isn't absolute, fall back to the default directory.
+  base::FilePath profile_download_dir = GetDefaultDownloadDirectoryForProfile();
+  if (!path.IsAbsolute())
+    return profile_download_dir;
+
+  // Allow paths that are under the default download directory.
+  base::FilePath relative;
+  if (profile_download_dir.AppendRelativePath(path, &relative) &&
+      !relative.ReferencesParent()) {
+    return profile_download_dir.Append(relative);
+  }
+
+  // Allow paths under the drive mount point.
+  if (drive::util::IsUnderDriveMountPoint(path) && !path.ReferencesParent())
+    return path;
+
+  // Allow removable media.
+  base::FilePath media_mount_point =
+      chromeos::CrosDisksClient::GetRemovableDiskMountPoint();
+  if (media_mount_point.AppendRelativePath(path, &relative) &&
+      !relative.ReferencesParent()) {
+    return media_mount_point.Append(relative);
+  }
+
+  // Fall back to the default download directory for all other paths.
+  return profile_download_dir;
+#endif
+  return path;
 }
 
 bool DownloadPrefs::AutoOpenCompareFunctor::operator()(

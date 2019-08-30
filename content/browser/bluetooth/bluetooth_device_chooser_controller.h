@@ -14,7 +14,7 @@
 #include "base/timer/timer.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/bluetooth_chooser.h"
-#include "third_party/WebKit/public/platform/modules/bluetooth/web_bluetooth.mojom.h"
+#include "third_party/blink/public/platform/modules/bluetooth/web_bluetooth.mojom.h"
 
 namespace device {
 class BluetoothAdapter;
@@ -147,7 +147,7 @@ class CONTENT_EXPORT BluetoothDeviceChooserController final {
 
   // Automatically stops Bluetooth discovery a set amount of time after it was
   // started.
-  base::Timer discovery_session_timer_;
+  base::RetainingOneShotTimer discovery_session_timer_;
 
   // The last discovery session to be started.
   // TODO(ortuno): This should be null unless there is an active discovery

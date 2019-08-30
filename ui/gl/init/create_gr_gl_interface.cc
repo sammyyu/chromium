@@ -45,7 +45,7 @@ const char* kBlacklistExtensions[] = {
 
 }  // anonymous namespace
 
-sk_sp<const GrGLInterface> CreateGrGLInterface(
+sk_sp<GrGLInterface> CreateGrGLInterface(
     const gl::GLVersionInfo& version_info) {
   gl::ProcsGL* gl = &gl::g_current_gl_driver->fn;
   gl::GLApi* api = gl::g_current_gl_context;
@@ -293,6 +293,8 @@ sk_sp<const GrGLInterface> CreateGrGLInterface(
       gl->glStencilThenCoverStrokePathInstancedNVFn;
   functions->fProgramPathFragmentInputGen =
       gl->glProgramPathFragmentInputGenNVFn;
+  functions->fBindFragmentInputLocation =
+      gl->glBindFragmentInputLocationCHROMIUMFn;
 
   functions->fCoverageModulation = gl->glCoverageModulationNVFn;
 
@@ -460,13 +462,8 @@ sk_sp<const GrGLInterface> CreateGrGLInterface(
 
   functions->fDebugMessageControl = gl->glDebugMessageControlFn;
   functions->fDebugMessageInsert = gl->glDebugMessageInsertFn;
-  // TODO(piman): Our GL headers are out-of-date and define GLDEBUGPROC
-  // incorrectly wrt const-ness.
-  functions->fDebugMessageCallback =
-      reinterpret_cast<GrGLDebugMessageCallbackProc>(
-          gl->glDebugMessageCallbackFn);
-  functions->fGetDebugMessageLog =
-      reinterpret_cast<GrGLGetDebugMessageLogProc>(gl->glGetDebugMessageLogFn);
+  functions->fDebugMessageCallback = gl->glDebugMessageCallbackFn;
+  functions->fGetDebugMessageLog = gl->glGetDebugMessageLogFn;
   functions->fPushDebugGroup = gl->glPushDebugGroupFn;
   functions->fPopDebugGroup = gl->glPopDebugGroupFn;
   functions->fObjectLabel = gl->glObjectLabelFn;
@@ -491,7 +488,7 @@ sk_sp<const GrGLInterface> CreateGrGLInterface(
 
   interface->fStandard = standard;
   interface->fExtensions.swap(&extensions);
-  sk_sp<const GrGLInterface> returned(interface);
+  sk_sp<GrGLInterface> returned(interface);
   return returned;
 }
 

@@ -14,11 +14,10 @@
 #include "base/lazy_instance.h"
 #include "base/location.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/ref_counted_memory.h"
-#include "base/memory/weak_ptr.h"
 #include "base/single_thread_task_runner.h"
+#include "base/stl_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -26,7 +25,6 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
 #include "content/browser/blob_storage/chrome_blob_storage_context.h"
-#include "content/browser/histogram_internals_request_job.h"
 #include "content/browser/net/view_blob_internals_job_factory.h"
 #include "content/browser/resource_context_impl.h"
 #include "content/browser/webui/shared_resources_data_source.h"
@@ -65,7 +63,7 @@ const char kNetworkErrorKey[] = "netError";
 
 bool SchemeIsInSchemes(const std::string& scheme,
                        const std::vector<std::string>& schemes) {
-  return std::find(schemes.begin(), schemes.end(), scheme) != schemes.end();
+  return base::ContainsValue(schemes, scheme);
 }
 
 // Returns a value of 'Origin:' header for the |request| if the header is set.
@@ -359,12 +357,6 @@ class ChromeProtocolHandler
           request, network_delegate, blob_storage_context_->context());
     }
 
-    // Next check for chrome://histograms/, which uses its own job type.
-    if (request->url().SchemeIs(kChromeUIScheme) &&
-        request->url().host_piece() == kChromeUIHistogramHost) {
-      return new HistogramInternalsRequestJob(request, network_delegate);
-    }
-
     // Check for chrome://network-error/, which uses its own job type.
     if (request->url().SchemeIs(kChromeUIScheme) &&
         request->url().host_piece() == kChromeUINetworkErrorHost) {
@@ -412,18 +404,14 @@ class ChromeProtocolHandler
 }  // namespace
 
 URLDataManagerBackend::URLDataManagerBackend()
-    : next_request_id_(0) {
+    : next_request_id_(0), weak_factory_(this) {
   URLDataSource* shared_source = new SharedResourcesDataSource();
   URLDataSourceImpl* source_impl =
       new URLDataSourceImpl(shared_source->GetSource(), shared_source);
   AddDataSource(source_impl);
 }
 
-URLDataManagerBackend::~URLDataManagerBackend() {
-  for (const auto& i : data_sources_)
-    i.second->backend_ = nullptr;
-  data_sources_.clear();
-}
+URLDataManagerBackend::~URLDataManagerBackend() = default;
 
 // static
 std::unique_ptr<net::URLRequestJobFactory::ProtocolHandler>
@@ -438,14 +426,13 @@ URLDataManagerBackend::CreateProtocolHandler(
 void URLDataManagerBackend::AddDataSource(
     URLDataSourceImpl* source) {
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
-  DataSourceMap::iterator i = data_sources_.find(source->source_name());
-  if (i != data_sources_.end()) {
-    if (!source->source()->ShouldReplaceExistingSource())
+  if (!source->source()->ShouldReplaceExistingSource()) {
+    DataSourceMap::iterator i = data_sources_.find(source->source_name());
+    if (i != data_sources_.end())
       return;
-    i->second->backend_ = nullptr;
   }
   data_sources_[source->source_name()] = source;
-  source->backend_ = this;
+  source->backend_ = weak_factory_.GetWeakPtr();
 }
 
 void URLDataManagerBackend::UpdateWebUIDataSource(
@@ -519,15 +506,15 @@ bool URLDataManagerBackend::StartRequest(const net::URLRequest* request,
     // on for this path.  Call directly into it from this thread, the IO
     // thread.
     source->source()->StartDataRequest(
-        path, wc_getter,
+        path, std::move(wc_getter),
         base::Bind(&URLDataSourceImpl::SendResponse, source, request_id));
   } else {
     // The DataSource wants StartDataRequest to be called on a specific thread,
     // usually the UI thread, for this path.
     target_runner->PostTask(
-        FROM_HERE,
-        base::BindOnce(&URLDataManagerBackend::CallStartRequest,
-                       base::RetainedRef(source), path, wc_getter, request_id));
+        FROM_HERE, base::BindOnce(&URLDataManagerBackend::CallStartRequest,
+                                  base::RetainedRef(source), path,
+                                  std::move(wc_getter), request_id));
   }
   return true;
 }

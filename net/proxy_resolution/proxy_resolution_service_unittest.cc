@@ -15,6 +15,7 @@
 #include "base/run_loop.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "net/base/net_errors.h"
 #include "net/base/proxy_delegate.h"
 #include "net/base/proxy_server.h"
@@ -31,6 +32,7 @@
 #include "net/proxy_resolution/proxy_config_service.h"
 #include "net/proxy_resolution/proxy_resolver.h"
 #include "net/test/gtest_util.h"
+#include "net/test/test_with_scoped_task_environment.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -114,7 +116,7 @@ class ImmediateAfterActivityPollPolicy
 //
 // The tests which verify the polling code re-enable the polling behavior but
 // are careful to avoid timing problems.
-class ProxyServiceTest : public testing::Test {
+class ProxyResolutionServiceTest : public TestWithScopedTaskEnvironment {
  protected:
   void SetUp() override {
     testing::Test::SetUp();
@@ -168,6 +170,12 @@ class MockProxyConfigService: public ProxyConfigService {
     config_ = config;
     for (auto& observer : observers_)
       observer.OnProxyConfigChanged(config_, availability_);
+  }
+
+  void SetPacUrlConfig(base::StringPiece pac_url) {
+    SetConfig(ProxyConfigWithAnnotation(
+        ProxyConfig::CreateFromCustomPacURL(GURL(pac_url)),
+        TRAFFIC_ANNOTATION_FOR_TESTS));
   }
 
  private:
@@ -332,9 +340,45 @@ JobMap GetCancelledJobsForURLs(const MockAsyncProxyResolver& resolver,
   return GetJobsForURLs(map, urls);
 }
 
+// Helper class to verify the bucket counts for PacUrlScheme histogram.
+class PacUrlSchemeHistogramTester {
+ public:
+  void VerifyHistogram() const {
+    const char kPacUrlSchemeHistogram[] =
+        "Net.ProxyResolutionService.PacUrlScheme";
+
+    int total = GetTotal();
+
+    histograms_.ExpectTotalCount(kPacUrlSchemeHistogram, total);
+
+    if (total > 0) {
+      histograms_.ExpectBucketCount(kPacUrlSchemeHistogram, 0, num_other);
+      histograms_.ExpectBucketCount(kPacUrlSchemeHistogram, 1, num_http);
+      histograms_.ExpectBucketCount(kPacUrlSchemeHistogram, 2, num_https);
+      histograms_.ExpectBucketCount(kPacUrlSchemeHistogram, 3, num_ftp);
+      histograms_.ExpectBucketCount(kPacUrlSchemeHistogram, 4, num_file);
+      histograms_.ExpectBucketCount(kPacUrlSchemeHistogram, 5, num_data);
+    }
+  }
+
+  int num_http = 0;
+  int num_https = 0;
+  int num_ftp = 0;
+  int num_data = 0;
+  int num_file = 0;
+  int num_other = 0;
+
+ private:
+  int GetTotal() const {
+    return num_http + num_https + num_ftp + num_data + num_file + num_other;
+  }
+
+  base::HistogramTester histograms_;
+};
+
 }  // namespace
 
-TEST_F(ProxyServiceTest, Direct) {
+TEST_F(ProxyResolutionServiceTest, Direct) {
   MockAsyncProxyResolverFactory* factory =
       new MockAsyncProxyResolverFactory(false);
   ProxyResolutionService service(
@@ -369,7 +413,7 @@ TEST_F(ProxyServiceTest, Direct) {
                                   NetLogEventType::PROXY_RESOLUTION_SERVICE));
 }
 
-TEST_F(ProxyServiceTest, OnResolveProxyCallbackAddProxy) {
+TEST_F(ProxyResolutionServiceTest, OnResolveProxyCallbackAddProxy) {
   ProxyConfig config;
   config.proxy_rules().ParseFromString("badproxy:8080,foopy1:8080");
   config.set_auto_detect(false);
@@ -429,7 +473,7 @@ TEST_F(ProxyServiceTest, OnResolveProxyCallbackAddProxy) {
   EXPECT_TRUE(info.is_direct());
 }
 
-TEST_F(ProxyServiceTest, OnResolveProxyCallbackRemoveProxy) {
+TEST_F(ProxyResolutionServiceTest, OnResolveProxyCallbackRemoveProxy) {
   // Same as OnResolveProxyCallbackAddProxy, but verify that the
   // ProxyDelegate's behavior is stateless across invocations after it
   // *removes* a proxy.
@@ -474,7 +518,7 @@ TEST_F(ProxyServiceTest, OnResolveProxyCallbackRemoveProxy) {
   EXPECT_TRUE(info.is_direct());
 }
 
-TEST_F(ProxyServiceTest, PAC) {
+TEST_F(ProxyResolutionServiceTest, PAC) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
 
@@ -538,7 +582,7 @@ TEST_F(ProxyServiceTest, PAC) {
 
 // Test that the proxy resolver does not see the URL's username/password
 // or its reference section.
-TEST_F(ProxyServiceTest, PAC_NoIdentityOrHash) {
+TEST_F(ProxyResolutionServiceTest, PAC_NoIdentityOrHash) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
 
@@ -570,7 +614,7 @@ TEST_F(ProxyServiceTest, PAC_NoIdentityOrHash) {
   // ProxyResolutionService will cancel the outstanding request.
 }
 
-TEST_F(ProxyServiceTest, PAC_FailoverWithoutDirect) {
+TEST_F(ProxyResolutionServiceTest, PAC_FailoverWithoutDirect) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
   MockAsyncProxyResolver resolver;
@@ -617,7 +661,7 @@ TEST_F(ProxyServiceTest, PAC_FailoverWithoutDirect) {
 
 // Test that if the execution of the PAC script fails (i.e. javascript runtime
 // error), and the PAC settings are non-mandatory, that we fall-back to direct.
-TEST_F(ProxyServiceTest, PAC_RuntimeError) {
+TEST_F(ProxyResolutionServiceTest, PAC_RuntimeError) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
   MockAsyncProxyResolver resolver;
@@ -674,7 +718,7 @@ TEST_F(ProxyServiceTest, PAC_RuntimeError) {
 //
 // The important check of this test is to make sure that DIRECT is not somehow
 // cached as being a bad proxy.
-TEST_F(ProxyServiceTest, PAC_FailoverAfterDirect) {
+TEST_F(ProxyResolutionServiceTest, PAC_FailoverAfterDirect) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
   MockAsyncProxyResolver resolver;
@@ -726,7 +770,7 @@ TEST_F(ProxyServiceTest, PAC_FailoverAfterDirect) {
   EXPECT_TRUE(info.is_empty());
 }
 
-TEST_F(ProxyServiceTest, PAC_ConfigSourcePropagates) {
+TEST_F(ProxyResolutionServiceTest, PAC_ConfigSourcePropagates) {
   // Test whether the ProxyConfigSource set by the ProxyConfigService is applied
   // to ProxyInfo after the proxy is resolved via a PAC script.
   ProxyConfig config =
@@ -763,7 +807,7 @@ TEST_F(ProxyServiceTest, PAC_ConfigSourcePropagates) {
   EXPECT_LE(info.proxy_resolve_start_time(), info.proxy_resolve_end_time());
 }
 
-TEST_F(ProxyServiceTest, ProxyResolverFails) {
+TEST_F(ProxyResolutionServiceTest, ProxyResolverFails) {
   // Test what happens when the ProxyResolver fails. The download and setting
   // of the PAC script have already succeeded, so this corresponds with a
   // javascript runtime error while calling FindProxyForURL().
@@ -826,7 +870,7 @@ TEST_F(ProxyServiceTest, ProxyResolverFails) {
   EXPECT_EQ("foopy_valid:8080", info.proxy_server().ToURI());
 }
 
-TEST_F(ProxyServiceTest, ProxyResolverTerminatedDuringRequest) {
+TEST_F(ProxyResolutionServiceTest, ProxyResolverTerminatedDuringRequest) {
   // Test what happens when the ProxyResolver fails with a fatal error while
   // a GetProxyForURL() call is in progress.
 
@@ -895,7 +939,7 @@ TEST_F(ProxyServiceTest, ProxyResolverTerminatedDuringRequest) {
   EXPECT_EQ("foopy_valid:8080", info.proxy_server().ToURI());
 }
 
-TEST_F(ProxyServiceTest,
+TEST_F(ProxyResolutionServiceTest,
        ProxyResolverTerminatedDuringRequestWithConcurrentRequest) {
   // Test what happens when the ProxyResolver fails with a fatal error while
   // a GetProxyForURL() call is in progress.
@@ -965,7 +1009,7 @@ TEST_F(ProxyServiceTest,
   EXPECT_EQ("foopy_valid:8080", info.proxy_server().ToURI());
 }
 
-TEST_F(ProxyServiceTest, PacFileFetcherFailsDownloadingMandatoryPac) {
+TEST_F(ProxyResolutionServiceTest, PacFileFetcherFailsDownloadingMandatoryPac) {
   // Test what happens when the ProxyResolver fails to download a mandatory PAC
   // script.
 
@@ -1011,7 +1055,8 @@ TEST_F(ProxyServiceTest, PacFileFetcherFailsDownloadingMandatoryPac) {
   EXPECT_FALSE(info.is_direct());
 }
 
-TEST_F(ProxyServiceTest, ProxyResolverFailsParsingJavaScriptMandatoryPac) {
+TEST_F(ProxyResolutionServiceTest,
+       ProxyResolverFailsParsingJavaScriptMandatoryPac) {
   // Test what happens when the ProxyResolver fails that is configured to use a
   // mandatory PAC script. The download of the PAC script has already
   // succeeded but the PAC script contains no valid javascript.
@@ -1059,7 +1104,7 @@ TEST_F(ProxyServiceTest, ProxyResolverFailsParsingJavaScriptMandatoryPac) {
   EXPECT_FALSE(info.is_direct());
 }
 
-TEST_F(ProxyServiceTest, ProxyResolverFailsInJavaScriptMandatoryPac) {
+TEST_F(ProxyResolutionServiceTest, ProxyResolverFailsInJavaScriptMandatoryPac) {
   // Test what happens when the ProxyResolver fails that is configured to use a
   // mandatory PAC script. The download and setting of the PAC script have
   // already succeeded, so this corresponds with a javascript runtime error
@@ -1122,7 +1167,7 @@ TEST_F(ProxyServiceTest, ProxyResolverFailsInJavaScriptMandatoryPac) {
   EXPECT_EQ("foopy_valid:8080", info.proxy_server().ToURI());
 }
 
-TEST_F(ProxyServiceTest, ProxyFallback) {
+TEST_F(ProxyResolutionServiceTest, ProxyFallback) {
   // Test what happens when we specify multiple proxy servers and some of them
   // are bad.
 
@@ -1259,7 +1304,7 @@ TEST_F(ProxyServiceTest, ProxyFallback) {
 
 // This test is similar to ProxyFallback, but this time we have an explicit
 // fallback choice to DIRECT.
-TEST_F(ProxyServiceTest, ProxyFallbackToDirect) {
+TEST_F(ProxyResolutionServiceTest, ProxyFallbackToDirect) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
 
@@ -1318,7 +1363,7 @@ TEST_F(ProxyServiceTest, ProxyFallbackToDirect) {
   EXPECT_FALSE(info.Fallback(ERR_PROXY_CONNECTION_FAILED, NetLogWithSource()));
 }
 
-TEST_F(ProxyServiceTest, ProxyFallback_BadConfig) {
+TEST_F(ProxyResolutionServiceTest, ProxyFallback_BadConfig) {
   // Test proxy failover when the configuration is bad.
 
   MockProxyConfigService* config_service =
@@ -1413,7 +1458,7 @@ TEST_F(ProxyServiceTest, ProxyFallback_BadConfig) {
   EXPECT_LE(info.proxy_resolve_start_time(), info.proxy_resolve_end_time());
 }
 
-TEST_F(ProxyServiceTest, ProxyFallback_BadConfigMandatory) {
+TEST_F(ProxyResolutionServiceTest, ProxyFallback_BadConfigMandatory) {
   // Test proxy failover when the configuration is bad.
 
   ProxyConfig config(
@@ -1508,7 +1553,7 @@ TEST_F(ProxyServiceTest, ProxyFallback_BadConfigMandatory) {
   EXPECT_EQ(2u, info3.proxy_list().size());
 }
 
-TEST_F(ProxyServiceTest, ProxyBypassList) {
+TEST_F(ProxyResolutionServiceTest, ProxyBypassList) {
   // Test that the proxy bypass rules are consulted.
 
   TestCompletionCallback callback[2];
@@ -1540,7 +1585,7 @@ TEST_F(ProxyServiceTest, ProxyBypassList) {
   EXPECT_EQ("foopy1:8080", info[1].proxy_server().ToURI());
 }
 
-TEST_F(ProxyServiceTest, MarkProxiesAsBadTests) {
+TEST_F(ProxyResolutionServiceTest, MarkProxiesAsBadTests) {
   ProxyConfig config;
   config.proxy_rules().ParseFromString(
       "http=foopy1:8080;http=foopy2:8080;http=foopy3.8080;http=foopy4:8080");
@@ -1575,7 +1620,7 @@ TEST_F(ProxyServiceTest, MarkProxiesAsBadTests) {
   }
 }
 
-TEST_F(ProxyServiceTest, PerProtocolProxyTests) {
+TEST_F(ProxyResolutionServiceTest, PerProtocolProxyTests) {
   ProxyConfig config;
   config.proxy_rules().ParseFromString("http=foopy1:8080;https=foopy2:8080");
   config.set_auto_detect(false);
@@ -1634,7 +1679,7 @@ TEST_F(ProxyServiceTest, PerProtocolProxyTests) {
   }
 }
 
-TEST_F(ProxyServiceTest, ProxyConfigTrafficAnnotationPropagates) {
+TEST_F(ProxyResolutionServiceTest, ProxyConfigTrafficAnnotationPropagates) {
   // Test that the proxy config source is set correctly when resolving proxies
   // using manual proxy rules. Namely, the config source should only be set if
   // any of the rules were applied.
@@ -1689,7 +1734,7 @@ TEST_F(ProxyServiceTest, ProxyConfigTrafficAnnotationPropagates) {
 
 // If only HTTP and a SOCKS proxy are specified, check if ftp/https queries
 // fall back to the SOCKS proxy.
-TEST_F(ProxyServiceTest, DefaultProxyFallbackToSOCKS) {
+TEST_F(ProxyResolutionServiceTest, DefaultProxyFallbackToSOCKS) {
   ProxyConfig config;
   config.proxy_rules().ParseFromString("http=foopy1:8080;socks=foopy2:1080");
   config.set_auto_detect(false);
@@ -1751,7 +1796,7 @@ TEST_F(ProxyServiceTest, DefaultProxyFallbackToSOCKS) {
 }
 
 // Test cancellation of an in-progress request.
-TEST_F(ProxyServiceTest, CancelInProgressRequest) {
+TEST_F(ProxyResolutionServiceTest, CancelInProgressRequest) {
   const GURL url1("http://request1");
   const GURL url2("http://request2");
   const GURL url3("http://request3");
@@ -1821,7 +1866,7 @@ TEST_F(ProxyServiceTest, CancelInProgressRequest) {
 }
 
 // Test the initial PAC download for resolver that expects bytes.
-TEST_F(ProxyServiceTest, InitialPACScriptDownload) {
+TEST_F(ProxyResolutionServiceTest, InitialPACScriptDownload) {
   const GURL url1("http://request1");
   const GURL url2("http://request2");
   const GURL url3("http://request3");
@@ -1926,7 +1971,8 @@ TEST_F(ProxyServiceTest, InitialPACScriptDownload) {
 }
 
 // Test changing the PacFileFetcher while PAC download is in progress.
-TEST_F(ProxyServiceTest, ChangeScriptFetcherWhilePACDownloadInProgress) {
+TEST_F(ProxyResolutionServiceTest,
+       ChangeScriptFetcherWhilePACDownloadInProgress) {
   const GURL url1("http://request1");
   const GURL url2("http://request2");
   MockProxyConfigService* config_service =
@@ -1988,7 +2034,7 @@ TEST_F(ProxyServiceTest, ChangeScriptFetcherWhilePACDownloadInProgress) {
 }
 
 // Test cancellation of a request, while the PAC script is being fetched.
-TEST_F(ProxyServiceTest, CancelWhilePACFetching) {
+TEST_F(ProxyResolutionServiceTest, CancelWhilePACFetching) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
 
@@ -2084,7 +2130,7 @@ TEST_F(ProxyServiceTest, CancelWhilePACFetching) {
 }
 
 // Test that if auto-detect fails, we fall-back to the custom pac.
-TEST_F(ProxyServiceTest, FallbackFromAutodetectToCustomPac) {
+TEST_F(ProxyResolutionServiceTest, FallbackFromAutodetectToCustomPac) {
   const GURL url1("http://request1");
   const GURL url2("http://request2");
   ProxyConfig config;
@@ -2167,7 +2213,7 @@ TEST_F(ProxyServiceTest, FallbackFromAutodetectToCustomPac) {
 
 // This is the same test as FallbackFromAutodetectToCustomPac, except
 // the auto-detect script fails parsing rather than downloading.
-TEST_F(ProxyServiceTest, FallbackFromAutodetectToCustomPac2) {
+TEST_F(ProxyResolutionServiceTest, FallbackFromAutodetectToCustomPac2) {
   const GURL url1("http://request1");
   const GURL url2("http://request2");
   ProxyConfig config;
@@ -2246,7 +2292,7 @@ TEST_F(ProxyServiceTest, FallbackFromAutodetectToCustomPac2) {
 
 // Test that if all of auto-detect, a custom PAC script, and manual settings
 // are given, then we will try them in that order.
-TEST_F(ProxyServiceTest, FallbackFromAutodetectToCustomToManual) {
+TEST_F(ProxyResolutionServiceTest, FallbackFromAutodetectToCustomToManual) {
   ProxyConfig config;
   config.set_auto_detect(true);
   config.set_pac_url(GURL("http://foopy/proxy.pac"));
@@ -2306,7 +2352,7 @@ TEST_F(ProxyServiceTest, FallbackFromAutodetectToCustomToManual) {
 }
 
 // Test that the bypass rules are NOT applied when using autodetect.
-TEST_F(ProxyServiceTest, BypassDoesntApplyToPac) {
+TEST_F(ProxyResolutionServiceTest, BypassDoesntApplyToPac) {
   ProxyConfig config;
   config.set_auto_detect(true);
   config.set_pac_url(GURL("http://foopy/proxy.pac"));
@@ -2379,7 +2425,8 @@ TEST_F(ProxyServiceTest, BypassDoesntApplyToPac) {
 // request to the script fetcher. When run under valgrind, should not
 // have any memory errors (used to be that the PacFileFetcher was
 // being deleted prior to the InitProxyResolver).
-TEST_F(ProxyServiceTest, DeleteWhileInitProxyResolverHasOutstandingFetch) {
+TEST_F(ProxyResolutionServiceTest,
+       DeleteWhileInitProxyResolverHasOutstandingFetch) {
   ProxyConfig config =
     ProxyConfig::CreateFromCustomPacURL(GURL("http://foopy/proxy.pac"));
 
@@ -2415,7 +2462,8 @@ TEST_F(ProxyServiceTest, DeleteWhileInitProxyResolverHasOutstandingFetch) {
 // request to the proxy resolver. When run under valgrind, should not
 // have any memory errors (used to be that the ProxyResolver was
 // being deleted prior to the InitProxyResolver).
-TEST_F(ProxyServiceTest, DeleteWhileInitProxyResolverHasOutstandingSet) {
+TEST_F(ProxyResolutionServiceTest,
+       DeleteWhileInitProxyResolverHasOutstandingSet) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
 
@@ -2437,7 +2485,7 @@ TEST_F(ProxyServiceTest, DeleteWhileInitProxyResolverHasOutstandingSet) {
             factory->pending_requests()[0]->script_data()->url());
 }
 
-TEST_F(ProxyServiceTest, ResetProxyConfigService) {
+TEST_F(ProxyResolutionServiceTest, ResetProxyConfigService) {
   ProxyConfig config1;
   config1.proxy_rules().ParseFromString("foopy1:8080");
   config1.set_auto_detect(false);
@@ -2466,7 +2514,7 @@ TEST_F(ProxyServiceTest, ResetProxyConfigService) {
 
 // Test that when going from a configuration that required PAC to one
 // that does NOT, we unset the variable |should_use_proxy_resolver_|.
-TEST_F(ProxyServiceTest, UpdateConfigFromPACToDirect) {
+TEST_F(ProxyResolutionServiceTest, UpdateConfigFromPACToDirect) {
   ProxyConfig config = ProxyConfig::CreateAutoDetect();
 
   MockProxyConfigService* config_service = new MockProxyConfigService(config);
@@ -2517,7 +2565,7 @@ TEST_F(ProxyServiceTest, UpdateConfigFromPACToDirect) {
   EXPECT_TRUE(info2.is_direct());
 }
 
-TEST_F(ProxyServiceTest, NetworkChangeTriggersPacRefetch) {
+TEST_F(ProxyResolutionServiceTest, NetworkChangeTriggersPacRefetch) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
 
@@ -2636,7 +2684,7 @@ TEST_F(ProxyServiceTest, NetworkChangeTriggersPacRefetch) {
 // periodically polled for changes. Specifically, if the initial fetch fails due
 // to a network error, we will eventually re-configure the service to use the
 // script once it becomes available.
-TEST_F(ProxyServiceTest, PACScriptRefetchAfterFailure) {
+TEST_F(ProxyResolutionServiceTest, PACScriptRefetchAfterFailure) {
   // Change the retry policy to wait a mere 1 ms before retrying, so the test
   // runs quickly.
   ImmediatePollPolicy poll_policy;
@@ -2743,7 +2791,7 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterFailure) {
 // periodically polled for changes. Specifically, if the initial fetch succeeds,
 // however at a later time its *contents* change, we will eventually
 // re-configure the service to use the new script.
-TEST_F(ProxyServiceTest, PACScriptRefetchAfterContentChange) {
+TEST_F(ProxyResolutionServiceTest, PACScriptRefetchAfterContentChange) {
   // Change the retry policy to wait a mere 1 ms before retrying, so the test
   // runs quickly.
   ImmediatePollPolicy poll_policy;
@@ -2856,7 +2904,7 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterContentChange) {
 // periodically polled for changes. Specifically, if the initial fetch succeeds
 // and so does the next poll, however the contents of the downloaded script
 // have NOT changed, then we do not bother to re-initialize the proxy resolver.
-TEST_F(ProxyServiceTest, PACScriptRefetchAfterContentUnchanged) {
+TEST_F(ProxyResolutionServiceTest, PACScriptRefetchAfterContentUnchanged) {
   // Change the retry policy to wait a mere 1 ms before retrying, so the test
   // runs quickly.
   ImmediatePollPolicy poll_policy;
@@ -2966,7 +3014,7 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterContentUnchanged) {
 // periodically polled for changes. Specifically, if the initial fetch succeeds,
 // however at a later time it starts to fail, we should re-configure the
 // ProxyResolutionService to stop using that PAC script.
-TEST_F(ProxyServiceTest, PACScriptRefetchAfterSuccess) {
+TEST_F(ProxyResolutionServiceTest, PACScriptRefetchAfterSuccess) {
   // Change the retry policy to wait a mere 1 ms before retrying, so the test
   // runs quickly.
   ImmediatePollPolicy poll_policy;
@@ -3060,7 +3108,7 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterSuccess) {
 
 // Tests that the code which decides at what times to poll the PAC
 // script follows the expected policy.
-TEST_F(ProxyServiceTest, PACScriptPollingPolicy) {
+TEST_F(ProxyResolutionServiceTest, PACScriptPollingPolicy) {
   // Retrieve the internal polling policy implementation used by
   // ProxyResolutionService.
   std::unique_ptr<ProxyResolutionService::PacPollPolicy> policy =
@@ -3131,7 +3179,7 @@ TEST_F(ProxyServiceTest, PACScriptPollingPolicy) {
 
 // This tests the polling of the PAC script. Specifically, it tests that
 // polling occurs in response to user activity.
-TEST_F(ProxyServiceTest, PACScriptRefetchAfterActivity) {
+TEST_F(ProxyResolutionServiceTest, PACScriptRefetchAfterActivity) {
   ImmediateAfterActivityPollPolicy poll_policy;
   ProxyResolutionService::set_pac_script_poll_policy(&poll_policy);
 
@@ -3237,7 +3285,7 @@ TEST_F(ProxyServiceTest, PACScriptRefetchAfterActivity) {
 }
 
 // Test that the synchronous resolution fails when a PAC script is active.
-TEST_F(ProxyServiceTest, SynchronousWithPAC) {
+TEST_F(ProxyResolutionServiceTest, SynchronousWithPAC) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
 
@@ -3263,7 +3311,7 @@ TEST_F(ProxyServiceTest, SynchronousWithPAC) {
 
 // Test that synchronous results are returned correctly if a fixed proxy
 // configuration is active.
-TEST_F(ProxyServiceTest, SynchronousWithFixedConfiguration) {
+TEST_F(ProxyResolutionServiceTest, SynchronousWithFixedConfiguration) {
   ProxyConfig config;
   config.proxy_rules().ParseFromString("foopy1:8080");
   config.set_auto_detect(false);
@@ -3375,7 +3423,7 @@ class SanitizeUrlHelper {
   std::unique_ptr<ProxyResolutionService> service_;
 };
 
-TEST_F(ProxyServiceTest, SanitizeUrlDefaultsToSafe) {
+TEST_F(ProxyResolutionServiceTest, SanitizeUrlDefaultsToSafe) {
   SanitizeUrlHelper helper;
 
   // Without changing the URL sanitization policy, the default should be to
@@ -3388,7 +3436,7 @@ TEST_F(ProxyServiceTest, SanitizeUrlDefaultsToSafe) {
 // Tests URL sanitization with input URLs that have a // non-cryptographic
 // scheme (i.e. http://). The sanitized result is consistent regardless of the
 // stripping mode selected.
-TEST_F(ProxyServiceTest, SanitizeUrlForPacScriptNonCryptographic) {
+TEST_F(ProxyResolutionServiceTest, SanitizeUrlForPacScriptNonCryptographic) {
   const struct {
     const char* raw_url;
     const char* sanitized_url;
@@ -3447,7 +3495,7 @@ TEST_F(ProxyServiceTest, SanitizeUrlForPacScriptNonCryptographic) {
 // Tests URL sanitization using input URLs that have a cryptographic schemes
 // (i.e. https://). The sanitized result differs depending on the sanitization
 // mode chosen.
-TEST_F(ProxyServiceTest, SanitizeUrlForPacScriptCryptographic) {
+TEST_F(ProxyResolutionServiceTest, SanitizeUrlForPacScriptCryptographic) {
   const struct {
     // Input URL.
     const char* raw_url;
@@ -3510,7 +3558,7 @@ TEST_F(ProxyServiceTest, SanitizeUrlForPacScriptCryptographic) {
   }
 }
 
-TEST_F(ProxyServiceTest, OnShutdownWithLiveRequest) {
+TEST_F(ProxyResolutionServiceTest, OnShutdownWithLiveRequest) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
 
@@ -3543,7 +3591,7 @@ TEST_F(ProxyServiceTest, OnShutdownWithLiveRequest) {
   EXPECT_TRUE(info.is_direct());
 }
 
-TEST_F(ProxyServiceTest, OnShutdownFollowedByRequest) {
+TEST_F(ProxyResolutionServiceTest, OnShutdownFollowedByRequest) {
   MockProxyConfigService* config_service =
       new MockProxyConfigService("http://foopy/proxy.pac");
 
@@ -3569,6 +3617,60 @@ TEST_F(ProxyServiceTest, OnShutdownFollowedByRequest) {
   EXPECT_THAT(rv, IsOk());
   EXPECT_FALSE(fetcher->has_pending_request());
   EXPECT_TRUE(info.is_direct());
+}
+
+// Tests that the URL scheme for PAC files gets output to the histogram.
+TEST_F(ProxyResolutionServiceTest, PacUrlSchemeHistogram) {
+  PacUrlSchemeHistogramTester pac_histogram;
+
+  MockProxyConfigService* config_service =
+      new MockProxyConfigService(ProxyConfig::CreateDirect());
+
+  ProxyResolutionService service(
+      base::WrapUnique(config_service),
+      std::make_unique<MockAsyncProxyResolverFactory>(false), nullptr);
+
+  pac_histogram.VerifyHistogram();
+
+  // Set an http:// PAC.
+  config_service->SetPacUrlConfig("http://example.test/");
+  pac_histogram.num_http++;
+  pac_histogram.VerifyHistogram();
+
+  // Set an https:// PAC.
+  config_service->SetPacUrlConfig("hTTps://example.test/wpad.dat");
+  pac_histogram.num_https++;
+  pac_histogram.VerifyHistogram();
+
+  // Set an ftp:// PAC.
+  config_service->SetPacUrlConfig("ftp://example.test/pac.js");
+  pac_histogram.num_ftp++;
+  pac_histogram.VerifyHistogram();
+
+  // Set an file:// PAC.
+  config_service->SetPacUrlConfig("file://example.test/boo");
+  pac_histogram.num_file++;
+  pac_histogram.VerifyHistogram();
+
+  // Set an mailto: PAC.
+  config_service->SetPacUrlConfig("mailto:foo@example.test");
+  pac_histogram.num_other++;
+  pac_histogram.VerifyHistogram();
+
+  // Set an data: PAC.
+  config_service->SetPacUrlConfig("data:,Hello%2C%20World!");
+  pac_histogram.num_data++;
+  pac_histogram.VerifyHistogram();
+
+  // Set an filesystem: PAC.
+  config_service->SetPacUrlConfig("filesystem:http://example.test/pac.js");
+  pac_histogram.num_other++;
+  pac_histogram.VerifyHistogram();
+
+  // Set another https:// as PAC.
+  config_service->SetPacUrlConfig("https://example2.test/wpad.dat");
+  pac_histogram.num_https++;
+  pac_histogram.VerifyHistogram();
 }
 
 }  // namespace net

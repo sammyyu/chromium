@@ -43,4 +43,11 @@ void TestImeControllerClient::SetCapsLockEnabled(bool enabled) {
   ++set_caps_lock_count_;
 }
 
+void TestImeControllerClient::OverrideKeyboardKeyset(
+    chromeos::input_method::mojom::ImeKeyset keyset,
+    OverrideKeyboardKeysetCallback callback) {
+  last_keyset_ = keyset;
+  std::move(callback).Run();
+}
+
 }  // namespace ash

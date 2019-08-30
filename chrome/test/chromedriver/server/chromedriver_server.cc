@@ -17,6 +17,7 @@
 #include "base/callback.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
+#include "base/files/file_util.h"
 #include "base/lazy_instance.h"
 #include "base/logging.h"
 #include "base/macros.h"
@@ -35,7 +36,6 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "build/build_config.h"
 #include "chrome/test/chromedriver/logging.h"
-#include "chrome/test/chromedriver/net/port_server.h"
 #include "chrome/test/chromedriver/server/http_handler.h"
 #include "chrome/test/chromedriver/version.h"
 #include "net/base/ip_address.h"
@@ -78,22 +78,20 @@ class HttpServer : public net::HttpServer::Delegate {
 
   ~HttpServer() override {}
 
-  bool Start(uint16_t port, bool allow_remote) {
+  int Start(uint16_t port, bool allow_remote, bool use_ipv4) {
     std::unique_ptr<net::ServerSocket> server_socket(
         new net::TCPServerSocket(NULL, net::NetLogSource()));
-    if (ListenOnIPv4(server_socket.get(), port, allow_remote) != net::OK) {
-      // This will work on an IPv6-only host, but we will be IPv4-only on
-      // dual-stack hosts.
-      // TODO(samuong): change this to listen on both IPv4 and IPv6.
-      VLOG(0) << "listen on IPv4 failed, trying IPv6";
-      if (ListenOnIPv6(server_socket.get(), port, allow_remote) != net::OK) {
-        VLOG(1) << "listen on both IPv4 and IPv6 failed, giving up";
-        return false;
-      }
+    int status = use_ipv4
+                     ? ListenOnIPv4(server_socket.get(), port, allow_remote)
+                     : ListenOnIPv6(server_socket.get(), port, allow_remote);
+    if (status != net::OK) {
+      VLOG(0) << "listen on " << (use_ipv4 ? "IPv4" : "IPv6")
+              << " failed with error " << net::ErrorToShortString(status);
+      return status;
     }
     server_.reset(new net::HttpServer(std::move(server_socket), this));
     net::IPEndPoint address;
-    return server_->GetLocalAddress(&address) == net::OK;
+    return server_->GetLocalAddress(&address);
   }
 
   // Overridden from net::HttpServer::Delegate:
@@ -175,32 +173,102 @@ void HandleRequestOnIOThread(
 }
 
 base::LazyInstance<base::ThreadLocalPointer<HttpServer>>::DestructorAtExit
-    lazy_tls_server = LAZY_INSTANCE_INITIALIZER;
+    lazy_tls_server_ipv4 = LAZY_INSTANCE_INITIALIZER;
+base::LazyInstance<base::ThreadLocalPointer<HttpServer>>::DestructorAtExit
+    lazy_tls_server_ipv6 = LAZY_INSTANCE_INITIALIZER;
 
 void StopServerOnIOThread() {
   // Note, |server| may be NULL.
-  HttpServer* server = lazy_tls_server.Pointer()->Get();
-  lazy_tls_server.Pointer()->Set(NULL);
+  HttpServer* server = lazy_tls_server_ipv4.Pointer()->Get();
+  lazy_tls_server_ipv4.Pointer()->Set(NULL);
+  delete server;
+
+  server = lazy_tls_server_ipv6.Pointer()->Get();
+  lazy_tls_server_ipv6.Pointer()->Set(NULL);
   delete server;
 }
 
 void StartServerOnIOThread(uint16_t port,
                            bool allow_remote,
                            const HttpRequestHandlerFunc& handle_request_func) {
-  std::unique_ptr<HttpServer> temp_server(new HttpServer(handle_request_func));
-  if (!temp_server->Start(port, allow_remote)) {
-    printf("Port not available. Exiting...\n");
+  std::unique_ptr<HttpServer> temp_server;
+
+  temp_server.reset(new HttpServer(handle_request_func));
+  int ipv6_status = temp_server->Start(port, allow_remote, false);
+  if (ipv6_status == net::OK) {
+    lazy_tls_server_ipv6.Pointer()->Set(temp_server.release());
+  } else if (ipv6_status == net::ERR_ADDRESS_IN_USE) {
+    printf("IPv6 port not available. Exiting...\n");
     exit(1);
   }
-  lazy_tls_server.Pointer()->Set(temp_server.release());
+
+  // In some cases, binding to an IPv6 port also binds to the same IPv4 port.
+  // The following code determines if it is necessary to bind to IPv4 port.
+  enum class NeedIPv4 { NOT_NEEDED, UNKNOWN, NEEDED } need_ipv4;
+  // Dual-protocol bind deosn't work while binding to localhost (!allow_remote).
+  if (!allow_remote || ipv6_status != net::OK) {
+    need_ipv4 = NeedIPv4::NEEDED;
+  } else {
+// Currently, the network layer provides no way for us to control dual-protocol
+// bind option, or to query the current setting of that option, so we do our
+// best to determine the current setting. See https://crbug.com/858892.
+#if defined(OS_MACOSX)
+    need_ipv4 = NeedIPv4::NEEDED;
+#elif defined(OS_LINUX)
+    // On Linux, dual-protocol bind is controlled by a system file.
+    // ChromeOS builds also have OS_LINUX defined, so the code below applies.
+    std::string bindv6only;
+    base::FilePath bindv6only_filename("/proc/sys/net/ipv6/bindv6only");
+    if (!base::ReadFileToString(bindv6only_filename, &bindv6only)) {
+      LOG(WARNING) << "Unable to read " << bindv6only_filename << ".";
+      need_ipv4 = NeedIPv4::UNKNOWN;
+    } else if (bindv6only == "1\n") {
+      need_ipv4 = NeedIPv4::NEEDED;
+    } else if (bindv6only == "0\n") {
+      need_ipv4 = NeedIPv4::NOT_NEEDED;
+    } else {
+      LOG(WARNING) << "Unexpected " << bindv6only_filename << " contents.";
+      need_ipv4 = NeedIPv4::UNKNOWN;
+    }
+#elif defined(OS_WIN)
+    // On Windows, the net component always enables dual-protocol bind. See
+    // https://chromium.googlesource.com/chromium/src/+/69.0.3464.0/net/socket/socket_descriptor.cc#28.
+    need_ipv4 = NeedIPv4::NOT_NEEDED;
+#else
+    LOG(WARNING)
+        << "Running on a platform not officially supported by ChromeDriver.";
+    need_ipv4 = NeedIPv4::UNKNOWN;
+#endif
+  }
+  int ipv4_status;
+  if (need_ipv4 == NeedIPv4::NOT_NEEDED) {
+    ipv4_status = ipv6_status;
+  } else {
+    temp_server.reset(new HttpServer(handle_request_func));
+    ipv4_status = temp_server->Start(port, allow_remote, true);
+    if (ipv4_status == net::OK) {
+      lazy_tls_server_ipv4.Pointer()->Set(temp_server.release());
+    } else if (ipv4_status == net::ERR_ADDRESS_IN_USE) {
+      if (need_ipv4 == NeedIPv4::NEEDED) {
+        printf("IPv4 port not available. Exiting...\n");
+        exit(1);
+      } else {
+        printf("Unable to determine if bind to IPv4 port was successful.\n");
+      }
+    }
+  }
+
+  if (ipv4_status != net::OK && ipv6_status != net::OK) {
+    printf("Unable to start server with either IPv4 or IPv6. Exiting...\n");
+    exit(1);
+  }
 }
 
 void RunServer(uint16_t port,
                bool allow_remote,
                const std::vector<std::string>& whitelisted_ips,
                const std::string& url_base,
-               int adb_port,
-               std::unique_ptr<PortServer> port_server) {
+               int adb_port) {
   base::Thread io_thread("ChromeDriver IO");
   CHECK(io_thread.StartWithOptions(
       base::Thread::Options(base::MessageLoop::TYPE_IO, 0)));
@@ -208,7 +276,7 @@ void RunServer(uint16_t port,
   base::MessageLoop cmd_loop;
   base::RunLoop cmd_run_loop;
   HttpHandler handler(cmd_run_loop.QuitClosure(), io_thread.task_runner(),
-                      url_base, adb_port, std::move(port_server));
+                      url_base, adb_port);
   HttpRequestHandlerFunc handle_request_func =
       base::Bind(&HandleRequestOnCmdThread, &handler, whitelisted_ips);
 
@@ -248,7 +316,6 @@ int main(int argc, char *argv[]) {
   bool allow_remote = false;
   std::vector<std::string> whitelisted_ips;
   std::string url_base;
-  std::unique_ptr<PortServer> port_server;
   if (cmd_line->HasSwitch("h") || cmd_line->HasSwitch("help")) {
     std::string options;
     const char* const kOptionAndDescriptions[] = {
@@ -262,7 +329,6 @@ int main(int argc, char *argv[]) {
         "silent", "log nothing (equivalent to --log-level=OFF)",
         "version", "print the version number and exit",
         "url-base", "base URL path prefix for commands, e.g. wd/url",
-        "port-server", "address of server to contact for reserving a port",
         "whitelisted-ips", "comma-separated whitelist of remote IPv4 addresses "
             "which are allowed to connect to ChromeDriver",
     };
@@ -294,22 +360,6 @@ int main(int argc, char *argv[]) {
       printf("Invalid adb-port. Exiting...\n");
       return 1;
     }
-  }
-  if (cmd_line->HasSwitch("port-server")) {
-#if defined(OS_LINUX)
-    std::string address = cmd_line->GetSwitchValueASCII("port-server");
-    if (address.empty() || address[0] != '@') {
-      printf("Invalid port-server. Exiting...\n");
-      return 1;
-    }
-    std::string path;
-    // First character of path is \0 to use Linux's abstract namespace.
-    path.push_back(0);
-    path += address.substr(1);
-    port_server.reset(new PortServer(path));
-#else
-    printf("Warning: port-server not implemented for this platform.\n");
-#endif
   }
   if (cmd_line->HasSwitch("url-base"))
     url_base = cmd_line->GetSwitchValueASCII("url-base");
@@ -344,8 +394,7 @@ int main(int argc, char *argv[]) {
 
   base::TaskScheduler::CreateAndStartWithDefaultParams("ChromeDriver");
 
-  RunServer(port, allow_remote, whitelisted_ips, url_base, adb_port,
-            std::move(port_server));
+  RunServer(port, allow_remote, whitelisted_ips, url_base, adb_port);
 
   // clean up
   base::TaskScheduler::GetInstance()->Shutdown();

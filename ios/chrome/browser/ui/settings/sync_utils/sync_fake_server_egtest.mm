@@ -6,6 +6,7 @@
 #import <XCTest/XCTest.h>
 
 #include "base/strings/sys_string_conversions.h"
+#import "base/test/ios/wait_util.h"
 #include "components/bookmarks/browser/bookmark_model.h"
 #include "components/bookmarks/browser/titled_url_match.h"
 #include "components/browser_sync/profile_sync_service.h"
@@ -15,7 +16,8 @@
 #include "ios/chrome/browser/bookmarks/bookmarks_utils.h"
 #include "ios/chrome/browser/signin/authentication_service.h"
 #include "ios/chrome/browser/signin/authentication_service_factory.h"
-#include "ios/chrome/browser/sync/ios_chrome_profile_sync_service_factory.h"
+#include "ios/chrome/browser/sync/profile_sync_service_factory.h"
+#import "ios/chrome/browser/ui/authentication/signin_earl_grey_ui.h"
 #import "ios/chrome/browser/ui/authentication/signin_earlgrey_utils.h"
 #import "ios/chrome/browser/ui/authentication/signin_promo_view.h"
 #import "ios/chrome/browser/ui/settings/settings_collection_view_controller.h"
@@ -33,7 +35,6 @@
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #import "ios/public/provider/chrome/browser/signin/fake_chrome_identity.h"
 #import "ios/public/provider/chrome/browser/signin/fake_chrome_identity_service.h"
-#import "ios/testing/wait_util.h"
 #import "ios/web/public/test/http_server/http_server.h"
 #include "ios/web/public/test/http_server/http_server_util.h"
 #import "net/base/mac/url_conversions.h"
@@ -44,24 +45,12 @@
 #error "This file requires ARC support."
 #endif
 
-using chrome_test_util::NavigationBarDoneButton;
+using chrome_test_util::SettingsDoneButton;
 
 namespace {
 
 // Constant for timeout while waiting for asynchronous sync operations.
 const NSTimeInterval kSyncOperationTimeout = 10.0;
-
-// Signs in the identity for the specific |userEmail|. This is performed via the
-// UI and must be called from the NTP.
-void SignInIdentity(NSString* userEmail) {
-  [ChromeEarlGreyUI openSettingsMenu];
-  [ChromeEarlGreyUI
-      tapSettingsMenuButton:chrome_test_util::SecondarySignInButton()];
-  [ChromeEarlGreyUI signInToIdentityByEmail:userEmail];
-  [ChromeEarlGreyUI confirmSigninConfirmationDialog];
-  [[EarlGrey selectElementWithMatcher:NavigationBarDoneButton()]
-      performAction:grey_tap()];
-}
 
 // Waits for sync to be initialized or not, based on |isSyncInitialized| and
 // fails with a GREYAssert if that condition is never met.
@@ -69,9 +58,9 @@ void AssertSyncInitialized(bool is_initialized) {
   ConditionBlock condition = ^{
     return chrome_test_util::IsSyncInitialized() == is_initialized;
   };
-  GREYAssert(
-      testing::WaitUntilConditionOrTimeout(kSyncOperationTimeout, condition),
-      @"Sync was not initialized");
+  GREYAssert(base::test::ios::WaitUntilConditionOrTimeout(kSyncOperationTimeout,
+                                                          condition),
+             @"Sync was not initialized");
 }
 
 // Waits for |entity_count| entities of type |entity_type|, and fails with
@@ -81,9 +70,9 @@ void AssertNumberOfEntities(int entity_count, syncer::ModelType entity_type) {
     return chrome_test_util::GetNumberOfSyncEntities(entity_type) ==
            entity_count;
   };
-  GREYAssert(
-      testing::WaitUntilConditionOrTimeout(kSyncOperationTimeout, condition),
-      @"Expected %d entities of the specified type", entity_count);
+  GREYAssert(base::test::ios::WaitUntilConditionOrTimeout(kSyncOperationTimeout,
+                                                          condition),
+             @"Expected %d entities of the specified type", entity_count);
 }
 
 // Waits for |entity_count| entities of type |entity_type| with name |name|, and
@@ -99,9 +88,9 @@ void AssertNumberOfEntitiesWithName(int entity_count,
     DCHECK(success || error);
     return !!success;
   };
-  GREYAssert(
-      testing::WaitUntilConditionOrTimeout(kSyncOperationTimeout, condition),
-      @"Expected %d entities of the specified type", entity_count);
+  GREYAssert(base::test::ios::WaitUntilConditionOrTimeout(kSyncOperationTimeout,
+                                                          condition),
+             @"Expected %d entities of the specified type", entity_count);
 }
 }  // namespace
 
@@ -131,16 +120,15 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 
 // Tests that a bookmark added on the client (before Sync is enabled) is
 // uploaded to the Sync server once Sync is turned on.
-// TODO(crbug.com/814990): Reenable the simulator test.
-// TODO(crbug.com/821490): Reenable the device test.
-- (void)FLAKY_testSyncUploadBookmarkOnFirstSync {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncUploadBookmarkOnFirstSync {
   [self addBookmark:GURL("https://www.foo.com") withTitle:@"foo"];
 
   // Sign in to sync, after a bookmark has been added.
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
 
   // Assert that the correct number of bookmarks have been synced.
   AssertSyncInitialized(true);
@@ -148,13 +136,12 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 }
 
 // Tests that a bookmark added on the client is uploaded to the Sync server.
-// TODO(crbug.com/814990): Reenable the simulator test.
-// TODO(crbug.com/821490): Reenable the device test.
-- (void)FLAKY_testSyncUploadBookmark {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncUploadBookmark {
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
 
   // Add a bookmark after sync is initialized.
   AssertSyncInitialized(true);
@@ -164,9 +151,8 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 
 // Tests that a bookmark injected in the FakeServer is synced down to the
 // client.
-// TODO(crbug.com/814990): Reenable the simulator test.
-// TODO(crbug.com/821490): Reenable the device test.
-- (void)FLAKY_testSyncDownloadBookmark {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncDownloadBookmark {
   [[self class] assertBookmarksWithTitle:@"hoo" expectedCount:0];
   chrome_test_util::InjectBookmarkOnFakeSyncServer("http://www.hoo.com", "hoo");
 
@@ -174,19 +160,20 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
   AssertSyncInitialized(true);
 
   [[self class] assertBookmarksWithTitle:@"hoo" expectedCount:1];
 }
 
 // Tests that the local cache guid does not change when sync is restarted.
-- (void)testSyncCheckSameCacheGuid_SyncRestarted {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncCheckSameCacheGuid_SyncRestarted {
   // Sign in the fake identity.
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
   AssertSyncInitialized(true);
 
   // Store the original guid, then restart sync.
@@ -203,12 +190,13 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 
 // Tests that the local cache guid changes when the user signs out and then
 // signs back in with the same account.
-- (void)testSyncCheckDifferentCacheGuid_SignOutAndSignIn {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncCheckDifferentCacheGuid_SignOutAndSignIn {
   // Sign in a fake identity, and store the initial sync guid.
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
   AssertSyncInitialized(true);
   std::string original_guid = chrome_test_util::GetSyncCacheGuid();
 
@@ -223,7 +211,7 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   AssertSyncInitialized(false);
 
   // Sign the user back in, and verify the guid has changed.
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
   AssertSyncInitialized(true);
   GREYAssertTrue(
       chrome_test_util::GetSyncCacheGuid() != original_guid,
@@ -233,12 +221,13 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 // Tests that the local cache guid does not change when sync is restarted, if
 // a user previously signed out and back in.
 // Test for http://crbug.com/413611 .
-- (void)testSyncCheckSameCacheGuid_SyncRestartedAfterSignOutAndSignIn {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncCheckSameCacheGuid_SyncRestartedAfterSignOutAndSignIn {
   // Sign in a fake idenitty.
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
   AssertSyncInitialized(true);
 
   // Sign out the current user.
@@ -252,7 +241,7 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   AssertSyncInitialized(false);
 
   // Sign the user back in.
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
   AssertSyncInitialized(true);
 
   // Record the initial guid, before restarting sync.
@@ -268,14 +257,8 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 }
 
 // Tests that autofill profile injected in FakeServer gets synced to client.
-// TODO(crbug.com/821490): Reenable the device test.
-#if TARGET_IPHONE_SIMULATOR
-#define MAYBE_testSyncDownloadAutofillProfile testSyncDownloadAutofillProfile
-#else
-#define MAYBE_testSyncDownloadAutofillProfile \
-  FLAKY_testSyncDownloadAutofillProfile
-#endif
-- (void)MAYBE_testSyncDownloadAutofillProfile {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncDownloadAutofillProfile {
   const std::string kGuid = "2340E83B-5BEE-4560-8F95-5914EF7F539E";
   const std::string kFullName = "Peter Pan";
   GREYAssertFalse(chrome_test_util::IsAutofillProfilePresent(kGuid, kFullName),
@@ -290,7 +273,7 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
 
   // Verify that the autofill profile has been downloaded.
   AssertSyncInitialized(YES);
@@ -300,9 +283,8 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 
 // Test that update to autofill profile injected in FakeServer gets synced to
 // client.
-// TODO(crbug.com/814990): Reenable the simulator test.
-// TODO(crbug.com/821490): Reenable the device test.
-- (void)FLAKY_testSyncUpdateAutofillProfile {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncUpdateAutofillProfile {
   const std::string kGuid = "2340E83B-5BEE-4560-8F95-5914EF7F539E";
   const std::string kFullName = "Peter Pan";
   const std::string kUpdatedFullName = "Roger Rabbit";
@@ -318,7 +300,7 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
 
   // Verify that the autofill profile has been downloaded.
   AssertSyncInitialized(YES);
@@ -339,16 +321,15 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ConditionBlock condition = ^{
     return chrome_test_util::IsAutofillProfilePresent(kGuid, kUpdatedFullName);
   };
-  GREYAssert(
-      testing::WaitUntilConditionOrTimeout(kSyncOperationTimeout, condition),
-      errorMessage);
+  GREYAssert(base::test::ios::WaitUntilConditionOrTimeout(kSyncOperationTimeout,
+                                                          condition),
+             errorMessage);
 }
 
 // Test that autofill profile deleted from FakeServer gets deleted from client
 // as well.
-// TODO(crbug.com/814990): Reenable the simulator test.
-// TODO(crbug.com/821490): Reenable the device test.
-- (void)FLAKY_testSyncDeleteAutofillProfile {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncDeleteAutofillProfile {
   const std::string kGuid = "2340E83B-5BEE-4560-8F95-5914EF7F539E";
   const std::string kFullName = "Peter Pan";
   GREYAssertFalse(chrome_test_util::IsAutofillProfilePresent(kGuid, kFullName),
@@ -362,7 +343,7 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
 
   // Verify that the autofill profile has been downloaded
   AssertSyncInitialized(YES);
@@ -375,16 +356,15 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ConditionBlock condition = ^{
     return !chrome_test_util::IsAutofillProfilePresent(kGuid, kFullName);
   };
-  GREYAssert(
-      testing::WaitUntilConditionOrTimeout(kSyncOperationTimeout, condition),
-      @"Autofill profile was not deleted.");
+  GREYAssert(base::test::ios::WaitUntilConditionOrTimeout(kSyncOperationTimeout,
+                                                          condition),
+             @"Autofill profile was not deleted.");
 }
 
 // Tests that tabs opened on this client are committed to the Sync server and
 // that the created sessions entities are correct.
-// TODO(crbug.com/814990): Reenable the simulator test.
-// TODO(crbug.com/821490): Reenable the device test.
-- (void)FLAKY_testSyncUploadOpenTabs {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncUploadOpenTabs {
   // Create map of canned responses and set up the test HTML server.
   const GURL URL1 = web::test::HttpServer::MakeUrl("http://page1");
   const GURL URL2 = web::test::HttpServer::MakeUrl("http://page2");
@@ -402,7 +382,7 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
 
   // Verify the sessions on the sync server.
   AssertSyncInitialized(true);
@@ -418,9 +398,8 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 
 // Tests that a typed URL (after Sync is enabled) is uploaded to the Sync
 // server.
-// TODO(crbug.com/814990): Reenable the simulator test.
-// TODO(crbug.com/821490): Reenable the device test.
-- (void)FLAKY_testSyncTypedURLUpload {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncTypedURLUpload {
   const GURL mockURL("http://not-a-real-site/");
 
   GREYAssertTrue(chrome_test_util::ClearBrowsingHistory(),
@@ -436,7 +415,7 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
 
   AssertSyncInitialized(YES);
 
@@ -459,9 +438,8 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 }
 
 // Tests that typed url is downloaded from sync server.
-// TODO(crbug.com/814990): Reenable the simulator test.
-// TODO(crbug.com/821490): Reenable the device test.
-- (void)FLAKY_testSyncTypedUrlDownload {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncTypedUrlDownload {
   const GURL mockURL("http://not-a-real-site/");
 
   GREYAssertTrue(chrome_test_util::ClearBrowsingHistory(),
@@ -478,7 +456,7 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
 
   AssertSyncInitialized(YES);
 
@@ -498,9 +476,8 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 
 // Tests that when typed url is deleted on the client, sync the change gets
 // propagated to server.
-// TODO(crbug.com/814990): Reenable the simulator test.
-// TODO(crbug.com/821490): Reenable the device test.
-- (void)FLAKY_testSyncTypedURLDeleteFromClient {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncTypedURLDeleteFromClient {
   const GURL mockURL("http://not-a-real-site/");
 
   GREYAssertTrue(chrome_test_util::ClearBrowsingHistory(),
@@ -518,7 +495,7 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
 
   AssertSyncInitialized(YES);
 
@@ -548,9 +525,8 @@ void AssertNumberOfEntitiesWithName(int entity_count,
 
 // Test that typed url is deleted from client after server sends tombstone for
 // that typed url.
-// TODO(crbug.com/814990): Reenable the simulator test.
-// TODO(crbug.com/821490): Reenable the device test.
-- (void)FLAKY_testSyncTypedURLDeleteFromServer {
+// TODO(crbug.com/821490): Reenable the test.
+- (void)DISABLED_testSyncTypedURLDeleteFromServer {
   const GURL mockURL("http://not-a-real-site/");
 
   GREYAssertTrue(chrome_test_util::ClearBrowsingHistory(),
@@ -566,7 +542,7 @@ void AssertNumberOfEntitiesWithName(int entity_count,
   ChromeIdentity* identity = [SigninEarlGreyUtils fakeIdentity1];
   ios::FakeChromeIdentityService::GetInstanceFromChromeProvider()->AddIdentity(
       identity);
-  SignInIdentity(identity.userEmail);
+  [SigninEarlGreyUI signinWithIdentity:identity];
 
   AssertSyncInitialized(YES);
   chrome_test_util::TriggerSyncCycle(syncer::TYPED_URLS);

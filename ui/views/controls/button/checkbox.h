@@ -12,6 +12,7 @@
 #include "base/strings/string16.h"
 #include "cc/paint/paint_flags.h"
 #include "ui/views/controls/button/label_button.h"
+#include "ui/views/controls/focus_ring.h"
 
 namespace gfx {
 struct VectorIcon;
@@ -26,12 +27,10 @@ class VIEWS_EXPORT Checkbox : public LabelButton {
   static const char kViewClassName[];
 
   // |force_md| forces MD even when --secondary-ui-md flag is not set.
-  explicit Checkbox(const base::string16& label, bool force_md = false);
+  explicit Checkbox(const base::string16& label,
+                    ButtonListener* listener = nullptr,
+                    bool force_md = false);
   ~Checkbox() override;
-
-  // Sets a listener for this checkbox. Checkboxes aren't required to have them
-  // since their state can be read independently of them being toggled.
-  void set_listener(ButtonListener* listener) { listener_ = listener; }
 
   // Sets/Gets whether or not the checkbox is checked.
   virtual void SetChecked(bool checked);
@@ -63,6 +62,7 @@ class VIEWS_EXPORT Checkbox : public LabelButton {
   SkColor GetInkDropBaseColor() const override;
   gfx::ImageSkia GetImage(ButtonState for_state) const override;
   std::unique_ptr<LabelButtonBorder> CreateDefaultBorder() const override;
+  void Layout() override;
 
   // Set the image shown for each button state depending on whether it is
   // [checked] or [focused].
@@ -71,13 +71,11 @@ class VIEWS_EXPORT Checkbox : public LabelButton {
                       ButtonState for_state,
                       const gfx::ImageSkia& image);
 
-  // Paints a focus indicator for the view. Overridden in RadioButton.
-  virtual void PaintFocusRing(View* view,
-                              gfx::Canvas* canvas,
-                              const cc::PaintFlags& flags);
-
   // Gets the vector icon to use based on the current state of |checked_|.
   virtual const gfx::VectorIcon& GetVectorIcon() const;
+
+  // Returns the path to draw the focus ring around for this Checkbox.
+  virtual SkPath GetFocusRingPath() const;
 
  private:
   friend class IconFocusRing;
@@ -97,14 +95,14 @@ class VIEWS_EXPORT Checkbox : public LabelButton {
   // True if the checkbox is checked.
   bool checked_;
 
-  // FocusRing used in MD mode
-  View* focus_ring_ = nullptr;
-
   // The images for each button node_data.
   gfx::ImageSkia images_[2][2][STATE_COUNT];
 
   // The unique id for the associated label's accessible object.
   int32_t label_ax_id_;
+
+  // The focus ring to use for this Checkbox.
+  std::unique_ptr<FocusRing> focus_ring_;
 
   bool use_md_;
 

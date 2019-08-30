@@ -50,12 +50,13 @@ enum class KeywordModeEntryMethod {
 
 class OmniboxEditModel {
  public:
-  // Did the Omnibox focus originate via the user clicking on the Omnibox or on
-  // the Fakebox?
+  // Did the Omnibox focus originate via the user clicking on the Omnibox, on
+  // the Fakebox or the Search button?
   enum FocusSource {
     INVALID = 0,
     OMNIBOX = 1,
-    FAKEBOX = 2
+    FAKEBOX = 2,
+    SEARCH_BUTTON = 3
   };
 
   struct State {
@@ -79,6 +80,11 @@ class OmniboxEditModel {
     FocusSource focus_source;
     const AutocompleteInput autocomplete_input;
   };
+
+  // This is a mirror of content::kMaxURLDisplayChars because ios cannot depend
+  // on content. If clipboard contains more than kMaxPasteAndGoTextLength
+  // characters, then the paste & go option will be disabled.
+  static const size_t kMaxPasteAndGoTextLength = 32 * 1024;
 
   OmniboxEditModel(OmniboxView* view,
                    OmniboxEditController* controller,
@@ -130,17 +136,12 @@ class OmniboxEditModel {
   // URL/navigation, as opposed to a search.
   bool CurrentTextIsURL() const;
 
-  // Returns the match type for the current edit contents.
-  AutocompleteMatch::Type CurrentTextType() const;
-
   // Invoked to adjust the text before writting to the clipboard for a copy
   // (e.g. by adding 'http' to the front). |sel_min| gives the minimum position
   // of the selection e.g. min(selection_start, selection_end). |text| is the
-  // currently selected text. If |is_all_selected| is true all the text in the
-  // edit is selected. If the url should be copied to the clipboard |write_url|
-  // is set to true and |url_from_text| set to the url to write.
+  // currently selected text. If the url should be copied to the clipboard
+  // |write_url| is set to true and |url_from_text| set to the url to write.
   void AdjustTextForCopy(int sel_min,
-                         bool is_all_selected,
                          base::string16* text,
                          GURL* url_from_text,
                          bool* write_url);
@@ -194,9 +195,8 @@ class OmniboxEditModel {
   // Navigates to the destination last supplied to CanPasteAndGo.
   void PasteAndGo(const base::string16& text);
 
-  // Returns true if this is a paste-and-search rather than paste-and-go (or
-  // nothing).
-  bool IsPasteAndSearch(const base::string16& text) const;
+  // Returns true if |text| classifies as a Search rather than a URL.
+  bool ClassifiesAsSearch(const base::string16& text) const;
 
   // Asks the browser to load the popup's currently selected item, using the
   // supplied disposition.  This may close the popup. If |for_drop| is true,
@@ -230,6 +230,8 @@ class OmniboxEditModel {
 
   OmniboxFocusState focus_state() const { return focus_state_; }
   bool has_focus() const { return focus_state_ != OMNIBOX_FOCUS_NONE; }
+
+  // This is the same as when the Omnibox is visibly focused.
   bool is_caret_visible() const {
     return focus_state_ == OMNIBOX_FOCUS_VISIBLE;
   }
@@ -350,6 +352,9 @@ class OmniboxEditModel {
   // Called when the current match has changed in the OmniboxController.
   void OnCurrentMatchChanged();
 
+  // Used for testing purposes only.
+  base::string16 GetUserTextForTesting() const { return user_text_; }
+
   // Name of the histogram tracking cut or copy omnibox commands.
   static const char kCutOrCopyAllTextHistogram[];
 
@@ -441,9 +446,9 @@ class OmniboxEditModel {
 
   // Sets |match| and |alternate_nav_url| based on classifying |text|.
   // |alternate_nav_url| may be NULL.
-  void ClassifyStringForPasteAndGo(const base::string16& text,
-                                   AutocompleteMatch* match,
-                                   GURL* alternate_nav_url) const;
+  void ClassifyString(const base::string16& text,
+                      AutocompleteMatch* match,
+                      GURL* alternate_nav_url) const;
 
   // Sets the state of user_input_in_progress_. Returns whether said state
   // changed, so that the caller can evoke NotifyObserversInputInProgress().
@@ -471,8 +476,8 @@ class OmniboxEditModel {
   OmniboxFocusState focus_state_;
 
   // Used to keep track whether the input currently in progress originated by
-  // focusing in the Omnibox or in the Fakebox. This will be INVALID if no input
-  // is in progress or the Omnibox is not focused.
+  // focusing in the Omnibox, Fakebox or Search button. This will be INVALID if
+  // no input is in progress or the Omnibox is not focused.
   FocusSource focus_source_;
 
   // The text representing the current URL for steady state display. This may

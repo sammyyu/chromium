@@ -42,6 +42,12 @@ namespace extensions {
 
 namespace {
 
+bool IsExtensionProcessSharingAllowed() {
+  // TODO(nick): Currently, process sharing is allowed even in
+  // --site-per-process. Lock this down.  https://crbug.com/766267
+  return true;
+}
+
 class ProcessManagementTest : public ExtensionBrowserTest {
  private:
   // This is needed for testing isolated apps, which are still experimental.
@@ -268,12 +274,11 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, MAYBE_ProcessOverflow) {
   EXPECT_EQ(web1_host, web2_host);
   EXPECT_NE(web1_host, extension1_host);
 
-  if (!content::AreAllSitesIsolatedForTesting()) {
+  if (IsExtensionProcessSharingAllowed()) {
     // Extensions only share with each other ...
     EXPECT_EQ(extension1_host, extension2_host);
   } else {
-    // ... unless site-per-process is enabled - in this case no sharing
-    // is possible.
+    // Unless extensions are not allowed to share, even with each other.
     EXPECT_NE(extension1_host, extension2_host);
   }
 }
@@ -333,13 +338,13 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest, MAYBE_ExtensionProcessBalancing) {
 
   // We've loaded 5 extensions with background pages
   // (api_test/browser_action/*), 1 extension without background page
-  // (api_test/management), and one isolated app. We expect only 2 unique
-  // processes hosting the background pages/scripts of these extensions without
-  // site-per-process (which extension gets assigned to which process is
-  // randomized).  With site-per-process (which is not subject to the 1/3rd of
-  // process limit cap) each of the 5 background pages/scripts will be hosted in
-  // a separate process.
-  if (!content::AreAllSitesIsolatedForTesting())
+  // (api_test/management), and one isolated app. With extension process
+  // sharing, we expect only 2 unique processes hosting the background
+  // pages/scripts of these extensions (which extension gets assigned to which
+  // process is randomized).  If extension process sharing is disabled, there is
+  // no process limit, and each of the 5 background pages/scripts will be hosted
+  // in a separate process.
+  if (IsExtensionProcessSharingAllowed())
     EXPECT_EQ(2u, process_ids.size());
   else
     EXPECT_EQ(5u, process_ids.size());
@@ -542,6 +547,13 @@ IN_PROC_BROWSER_TEST_F(ProcessManagementTest,
   EXPECT_TRUE(new_site_instance->HasProcess());
   EXPECT_EQ(new_site_instance->GetProcess(),
             web_contents->GetSiteInstance()->GetProcess());
+
+  // Ensure that reloading a blocked error page completes.
+  content::TestNavigationObserver reload_observer(new_web_contents);
+  new_web_contents->GetController().Reload(content::ReloadType::NORMAL, false);
+  reload_observer.Wait();
+  EXPECT_EQ(reload_observer.last_navigation_url(), blocked_url);
+  EXPECT_FALSE(reload_observer.last_navigation_succeeded());
 }
 
 // Check that whether we can access the window object of a window.open()'d url

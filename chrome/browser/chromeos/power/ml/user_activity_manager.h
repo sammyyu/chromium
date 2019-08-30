@@ -10,9 +10,9 @@
 #include "base/scoped_observer.h"
 #include "base/sequenced_task_runner.h"
 #include "base/time/time.h"
-#include "base/timer/timer.h"
 #include "chrome/browser/chromeos/login/users/chrome_user_manager.h"
 #include "chrome/browser/chromeos/power/ml/idle_event_notifier.h"
+#include "chrome/browser/chromeos/power/ml/smart_dim_model.h"
 #include "chrome/browser/chromeos/power/ml/user_activity_event.pb.h"
 #include "chrome/browser/chromeos/power/ml/user_activity_ukm_logger.h"
 #include "chrome/browser/resource_coordinator/tab_metrics_event.pb.h"
@@ -35,18 +35,10 @@ namespace ml {
 class BootClock;
 
 struct TabProperty {
-  // Whether the tab is the selected one in its containing browser.
-  bool is_active;
-  // Whether the containing browser is in focus.
-  bool is_browser_focused;
-  // Whether the containing browser is visible.
-  bool is_browser_visible;
-  // Whether the containing browser is the topmost one on the screen.
-  bool is_topmost_browser;
+  ukm::SourceId source_id = -1;
+  std::string domain;
   // Tab URL's engagement score. -1 if engagement service is disabled.
-  int engagement_score;
-  // Tab content type.
-  metrics::TabMetricsEvent::ContentType content_type;
+  int engagement_score = -1;
   // Whether user has form entry, i.e. text input.
   bool has_form_entry;
 };
@@ -59,23 +51,14 @@ class UserActivityManager : public ui::UserActivityObserver,
                             public viz::mojom::VideoDetectorObserver,
                             public session_manager::SessionManagerObserver {
  public:
-  // Delay after screen idle event, used to trigger TIMEOUT for user activity
-  // logging.
-  static constexpr base::TimeDelta kIdleDelay =
-      base::TimeDelta::FromSeconds(10);
-
-  // If a suspend has sleep duration shorter than this, the suspend would be
-  // considered as cancelled and the event type will be REACTIVATE.
-  static constexpr base::TimeDelta kMinSuspendDuration =
-      base::TimeDelta::FromSeconds(10);
-
   UserActivityManager(UserActivityUkmLogger* ukm_logger,
                       IdleEventNotifier* idle_event_notifier,
                       ui::UserActivityDetector* detector,
                       chromeos::PowerManagerClient* power_manager_client,
                       session_manager::SessionManager* session_manager,
                       viz::mojom::VideoDetectorObserverRequest request,
-                      const chromeos::ChromeUserManager* user_manager);
+                      const chromeos::ChromeUserManager* user_manager,
+                      SmartDimModel* smart_dim_model);
   ~UserActivityManager() override;
 
   // ui::UserActivityObserver overrides.
@@ -90,7 +73,6 @@ class UserActivityManager : public ui::UserActivityObserver,
   void ScreenIdleStateChanged(
       const power_manager::ScreenIdleState& proto) override;
   void SuspendImminent(power_manager::SuspendImminent::Reason reason) override;
-  void SuspendDone(const base::TimeDelta& sleep_duration) override;
   void InactivityDelaysChanged(
       const power_manager::PowerManagementPolicy::Delays& delays) override;
 
@@ -108,6 +90,10 @@ class UserActivityManager : public ui::UserActivityObserver,
  private:
   friend class UserActivityManagerTest;
 
+  // Data structure associated with the 1st ScreenDimImminent event. See
+  // PopulatePreviousEventData function below.
+  struct PreviousIdleEventData;
+
   // Updates lid state and tablet mode from received switch states.
   void OnReceiveSwitchStates(
       base::Optional<chromeos::PowerManagerClient::SwitchStates> switch_states);
@@ -115,8 +101,8 @@ class UserActivityManager : public ui::UserActivityObserver,
   void OnReceiveInactivityDelays(
       base::Optional<power_manager::PowerManagementPolicy::Delays> delays);
 
-  // Updates |open_tabs_| to hold current information about all open tabs.
-  void UpdateOpenTabsURLs();
+  // Gets properties of active tab from visible focused/topmost browser.
+  TabProperty UpdateOpenTabURL();
 
   // Extracts features from last known activity data and from device states.
   void ExtractFeatures(const IdleEventNotifier::ActivityData& activity_data);
@@ -130,8 +116,15 @@ class UserActivityManager : public ui::UserActivityObserver,
       scoped_refptr<base::SequencedTaskRunner> task_runner,
       std::unique_ptr<BootClock> test_boot_clock);
 
-  // Open tab properties, indexed by the source IDs of their URLs.
-  std::map<ukm::SourceId, TabProperty> open_tabs_;
+  // We could have two consecutive idle events (i.e. two ScreenDimImminent)
+  // without a final event logged in between. This could happen when the 1st
+  // screen dim is deferred and after another idle period, powerd decides to
+  // dim the screen again. We want to log both events. Hence we record the
+  // event data associated with the 1st ScreenDimImminent using the method
+  // below.
+  void PopulatePreviousEventData(const base::TimeDelta& now);
+
+  void ResetAfterLogging();
 
   // Time when an idle event is received and we start logging. Null if an idle
   // event hasn't been observed.
@@ -158,14 +151,12 @@ class UserActivityManager : public ui::UserActivityObserver,
   // Features extracted when receives an idle event.
   UserActivityEvent::Features features_;
 
-  // This is the reason for the in-progress suspend, i.e. it's set by
-  // SuspendImminent and used by SuspendDone.
-  base::Optional<power_manager::SuspendImminent::Reason> suspend_reason_;
-
   // It is RealBootClock, but will be set to FakeBootClock for tests.
   std::unique_ptr<BootClock> boot_clock_;
 
   UserActivityUkmLogger* const ukm_logger_;
+
+  SmartDimModel* const smart_dim_model_;
 
   ScopedObserver<IdleEventNotifier, IdleEventNotifier::Observer>
       idle_event_observer_;
@@ -184,12 +175,40 @@ class UserActivityManager : public ui::UserActivityObserver,
 
   const chromeos::ChromeUserManager* const user_manager_;
 
-  // Timer to be triggered when a screen idle event is triggered.
-  base::OneShotTimer screen_idle_timer_;
+  chromeos::PowerManagerClient* const power_manager_client_;
 
   // Delays to dim and turn off the screen. Zero means disabled.
   base::TimeDelta screen_dim_delay_;
   base::TimeDelta screen_off_delay_;
+
+  // Whether screen is currently dimmed/off.
+  bool screen_dimmed_ = false;
+  bool screen_off_ = false;
+  // Whether screen dim/off occurred before final event was logged. They are
+  // reset to false at the start of each idle event.
+  bool screen_dim_occurred_ = false;
+  bool screen_off_occurred_ = false;
+  bool screen_lock_occurred_ = false;
+
+  // Number of positive/negative actions up to but excluding the current event.
+  // REACTIVATE is a negative action, all other event types (OFF, TIMEOUT) are
+  // positive actions.
+  int previous_negative_actions_count_ = 0;
+  int previous_positive_actions_count_ = 0;
+
+  // Whether screen-dim was deferred by the model when the previous
+  // ScreenDimImminent event arrived.
+  bool dim_deferred_ = false;
+  // Whether we are waiting for the final action after an idle event. It's only
+  // set to true after we've received an idle event, but haven't received final
+  // action to log the event.
+  bool waiting_for_final_action_ = false;
+
+  // Model prediction for the current ScreenDimImminent event. Unset if
+  // model prediction is disabled by an experiment.
+  base::Optional<UserActivityEvent::ModelPrediction> model_prediction_;
+
+  std::unique_ptr<PreviousIdleEventData> previous_idle_event_data_;
 
   base::WeakPtrFactory<UserActivityManager> weak_ptr_factory_;
 

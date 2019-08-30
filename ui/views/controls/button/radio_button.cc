@@ -22,7 +22,7 @@ const char RadioButton::kViewClassName[] = "RadioButton";
 RadioButton::RadioButton(const base::string16& label,
                          int group_id,
                          bool force_md)
-    : Checkbox(label, force_md) {
+    : Checkbox(label, nullptr, force_md) {
   SetGroup(group_id);
 
   if (!UseMd()) {
@@ -157,15 +157,14 @@ void RadioButton::SetChecked(bool checked) {
   Checkbox::SetChecked(checked);
 }
 
-void RadioButton::PaintFocusRing(View* view,
-                                 gfx::Canvas* canvas,
-                                 const cc::PaintFlags& flags) {
-  canvas->DrawCircle(gfx::RectF(view->GetLocalBounds()).CenterPoint(),
-                     image()->width() / 2, flags);
-}
-
 const gfx::VectorIcon& RadioButton::GetVectorIcon() const {
   return checked() ? kRadioButtonActiveIcon : kRadioButtonNormalIcon;
+}
+
+SkPath RadioButton::GetFocusRingPath() const {
+  SkPath path;
+  path.addOval(gfx::RectToSkRect(image()->GetMirroredBounds()));
+  return path;
 }
 
 }  // namespace views

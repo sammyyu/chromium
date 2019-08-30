@@ -152,7 +152,7 @@ bool NotificationBitmapToGfxImage(
     return false;
 
   // Ensure we have rgba data.
-  std::vector<char>* rgba_data = notification_bitmap.data.get();
+  std::vector<uint8_t>* rgba_data = notification_bitmap.data.get();
   if (!rgba_data)
     return false;
 
@@ -172,7 +172,7 @@ bool NotificationBitmapToGfxImage(
     return false;
 
   uint32_t* pixels = bitmap.getAddr32(0, 0);
-  const char* c_rgba_data = rgba_data->data();
+  const uint8_t* c_rgba_data = rgba_data->data();
 
   for (size_t t = 0; t < rgba_area; ++t) {
     // |c_rgba_data| is RGBA, pixels is ARGB.
@@ -358,13 +358,10 @@ bool NotificationsApiFunction::CreateNotification(
     }
   }
 
-  if (options->is_clickable.get())
-    optional_fields.clickable = *options->is_clickable;
-
   optional_fields.settings_button_handler =
       base::FeatureList::IsEnabled(message_center::kNewStyleNotifications)
           ? message_center::SettingsButtonHandler::INLINE
-          : message_center::SettingsButtonHandler::DELEGATE;
+          : message_center::SettingsButtonHandler::NONE;
 
   // TODO(crbug.com/772004): Remove the manual limitation in favor of an IDL
   // annotation once supported.
@@ -520,10 +517,6 @@ bool NotificationsApiFunction::UpdateNotification(
     }
     notification->set_items(items);
   }
-
-  // Then override if it's already set.
-  if (options->is_clickable.get())
-    notification->set_clickable(*options->is_clickable);
 
   // It's safe to follow the regular path for adding a new notification as it's
   // already been verified that there is a notification that can be updated.

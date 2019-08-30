@@ -36,6 +36,12 @@ class NavigationContext {
   // navigation when encountering a server redirect.
   virtual const GURL& GetUrl() const = 0;
 
+  // Whether the navigation was initiated by a user gesture. Note that this
+  // will return true for browser-initiated navigations (not a
+  // renderer-initiated navigation). May have false positives for
+  // renderer-initiated same-document or back-forward navigations.
+  virtual bool HasUserGesture() const = 0;
+
   // Returns the page transition type for this navigation.
   virtual ui::PageTransition GetPageTransition() const = 0;
 
@@ -47,8 +53,9 @@ class NavigationContext {
   virtual bool IsSameDocument() const = 0;
 
   // Whether the navigation has committed. Navigations that end up being
-  // downloads or return 204/205 response codes do not commit (i.e. the
-  // WebState stays at the existing URL).
+  // downloads, return 204/205 response codes or their response is rejected by
+  // the policy decider do not commit (i.e. the WebState stays at the existing
+  // URL).
   // This returns true for either successful commits or error pages that
   // replace the previous page, and false for errors that leave the user on the
   // previous page.

@@ -31,13 +31,14 @@ namespace history {
 class HistoryService;
 }  // namespace history
 
-namespace net {
-class URLRequestContextGetter;
-}  // namespace net
+namespace network {
+class SharedURLLoaderFactory;
+}  // namespace network
 
 namespace safe_browsing {
 
 class BaseUIManager;
+class ReferrerChainProvider;
 
 // Maps a URL to its Resource.
 class ThreatDetailsCacheCollector;
@@ -66,9 +67,7 @@ using FrameTreeIdToChildIdsMap = base::hash_map<int, std::unordered_set<int>>;
 // sending a report.
 using ThreatDetailsDoneCallback = base::Callback<void(content::WebContents*)>;
 
-class ThreatDetails : public base::RefCountedThreadSafe<
-                          ThreatDetails,
-                          content::BrowserThread::DeleteOnUIThread>,
+class ThreatDetails : public base::RefCounted<ThreatDetails>,
                       public content::WebContentsObserver {
  public:
   typedef security_interstitials::UnsafeResource UnsafeResource;
@@ -78,8 +77,9 @@ class ThreatDetails : public base::RefCountedThreadSafe<
       BaseUIManager* ui_manager,
       content::WebContents* web_contents,
       const UnsafeResource& resource,
-      net::URLRequestContextGetter* request_context_getter,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       history::HistoryService* history_service,
+      ReferrerChainProvider* referrer_chain_provider,
       bool trim_to_ad_tags,
       ThreatDetailsDoneCallback done_callback);
 
@@ -105,20 +105,21 @@ class ThreatDetails : public base::RefCountedThreadSafe<
   friend class ThreatDetailsFactoryImpl;
   friend class TestThreatDetailsFactory;
 
-  ThreatDetails(BaseUIManager* ui_manager,
-                content::WebContents* web_contents,
-                const UnsafeResource& resource,
-                net::URLRequestContextGetter* request_context_getter,
-                history::HistoryService* history_service,
-                bool trim_to_ad_tags,
-                ThreatDetailsDoneCallback done_callback);
+  ThreatDetails(
+      BaseUIManager* ui_manager,
+      content::WebContents* web_contents,
+      const UnsafeResource& resource,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
+      history::HistoryService* history_service,
+      ReferrerChainProvider* referrer_chain_provider,
+      bool trim_to_ad_tags,
+      ThreatDetailsDoneCallback done_callback);
 
   // Default constructor for testing only.
   ThreatDetails();
 
   ~ThreatDetails() override;
 
-  // Called on the IO thread with the DOM details.
   virtual void AddDOMDetails(const int frame_tree_node_id,
                              std::vector<mojom::ThreatDOMDetailsNodePtr> params,
                              const KeyToFrameTreeIdMap& child_frame_tree_map);
@@ -127,13 +128,10 @@ class ThreatDetails : public base::RefCountedThreadSafe<
   std::unique_ptr<ClientSafeBrowsingReportRequest> report_;
 
   // Used to get a pointer to the HTTP cache.
-  scoped_refptr<net::URLRequestContextGetter> request_context_getter_;
+  scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory_;
 
  private:
-  friend class base::RefCountedThreadSafe<ThreatDetails>;
-  friend struct content::BrowserThread::DeleteOnThread<
-      content::BrowserThread::UI>;
-  friend class base::DeleteHelper<ThreatDetails>;
+  friend class base::RefCounted<ThreatDetails>;
 
   // Starts the collection of the report.
   void StartCollection();
@@ -181,12 +179,19 @@ class ThreatDetails : public base::RefCountedThreadSafe<
                      const std::vector<mojom::AttributeNameValuePtr> attributes,
                      const ClientSafeBrowsingReportRequest::Resource* resource);
 
+  // Populates the referrer chain data in |report_|. This may be skipped if the
+  // referrer chain provider isn't available, or the type of report doesn't
+  // include the referrer chain.
+  void MaybeFillReferrerChain();
+
   // Called when the report is complete. Runs |done_callback_|.
   void AllDone();
 
   scoped_refptr<BaseUIManager> ui_manager_;
 
   const UnsafeResource resource_;
+
+  ReferrerChainProvider* referrer_chain_provider_;
 
   // For every Url we collect we create a Resource message. We keep
   // them in a map so we can avoid duplicates.
@@ -260,6 +265,8 @@ class ThreatDetails : public base::RefCountedThreadSafe<
   FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, HTTPCacheNoEntries);
   FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, HTTPCache);
   FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, ThreatDOMDetails_AmbiguousDOM);
+  FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest,
+                           ThreatDOMDetails_EmptyReportNotSent);
   FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, ThreatDOMDetails_MultipleFrames);
   FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, ThreatDOMDetails_TrimToAdTags);
   FRIEND_TEST_ALL_PREFIXES(ThreatDetailsTest, ThreatDOMDetails);
@@ -276,8 +283,9 @@ class ThreatDetailsFactory {
       BaseUIManager* ui_manager,
       content::WebContents* web_contents,
       const security_interstitials::UnsafeResource& unsafe_resource,
-      net::URLRequestContextGetter* request_context_getter,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       history::HistoryService* history_service,
+      ReferrerChainProvider* referrer_chain_provider,
       bool trim_to_ad_tags,
       ThreatDetailsDoneCallback done_callback) = 0;
 };

@@ -24,13 +24,13 @@ AwLoginDelegate::AwLoginDelegate(
     net::AuthChallengeInfo* auth_info,
     content::ResourceRequestInfo::WebContentsGetter web_contents_getter,
     bool first_auth_attempt,
-    const base::Callback<void(const base::Optional<net::AuthCredentials>&)>&
-        auth_required_callback)
-    : auth_info_(auth_info), auth_required_callback_(auth_required_callback) {
+    LoginAuthRequiredCallback auth_required_callback)
+    : auth_info_(auth_info),
+      auth_required_callback_(std::move(auth_required_callback)) {
   BrowserThread::PostTask(
       BrowserThread::UI, FROM_HERE,
-      base::Bind(&AwLoginDelegate::HandleHttpAuthRequestOnUIThread, this,
-                 first_auth_attempt, web_contents_getter));
+      base::BindOnce(&AwLoginDelegate::HandleHttpAuthRequestOnUIThread, this,
+                     first_auth_attempt, web_contents_getter));
 }
 
 AwLoginDelegate::~AwLoginDelegate() {
@@ -43,14 +43,15 @@ void AwLoginDelegate::Proceed(const base::string16& user,
                               const base::string16& password) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-      base::Bind(&AwLoginDelegate::ProceedOnIOThread,
-                 this, user, password));
+                          base::BindOnce(&AwLoginDelegate::ProceedOnIOThread,
+                                         this, user, password));
 }
 
 void AwLoginDelegate::Cancel() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  BrowserThread::PostTask(BrowserThread::IO, FROM_HERE,
-      base::Bind(&AwLoginDelegate::CancelOnIOThread, this));
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(&AwLoginDelegate::CancelOnIOThread, this));
 }
 
 void AwLoginDelegate::HandleHttpAuthRequestOnUIThread(
@@ -93,8 +94,9 @@ void AwLoginDelegate::OnRequestCancelled() {
 
 void AwLoginDelegate::DeleteAuthHandlerSoon() {
   if (!BrowserThread::CurrentlyOn(BrowserThread::UI)) {
-    BrowserThread::PostTask(BrowserThread::UI, FROM_HERE,
-        base::Bind(&AwLoginDelegate::DeleteAuthHandlerSoon, this));
+    BrowserThread::PostTask(
+        BrowserThread::UI, FROM_HERE,
+        base::BindOnce(&AwLoginDelegate::DeleteAuthHandlerSoon, this));
     return;
   }
   aw_http_auth_handler_.reset();

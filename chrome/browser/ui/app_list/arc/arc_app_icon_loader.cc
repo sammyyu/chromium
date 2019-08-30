@@ -4,10 +4,10 @@
 
 #include "chrome/browser/ui/app_list/arc/arc_app_icon_loader.h"
 
+#include "ash/public/cpp/app_list/app_list_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/app_list/arc/arc_app_list_prefs.h"
 #include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
-#include "ui/app_list/app_list_constants.h"
 
 ArcAppIconLoader::ArcAppIconLoader(Profile* profile,
                                    int icon_size,
@@ -34,8 +34,9 @@ void ArcAppIconLoader::FetchImage(const std::string& app_id) {
 
   // Note, ARC icon is available only for 48x48 dips. In case |icon_size_|
   // differs from this size, re-scale is required.
-  std::unique_ptr<ArcAppIcon> icon(
-      new ArcAppIcon(profile(), app_id, app_list::kGridIconDimension, this));
+  std::unique_ptr<ArcAppIcon> icon(new ArcAppIcon(
+      profile(), app_id,
+      app_list::AppListConfig::instance().grid_icon_dimension(), this));
   icon->image_skia().EnsureRepsForSupportedScales();
   icon_map_[app_id] = std::move(icon);
   UpdateImage(app_id);

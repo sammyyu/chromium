@@ -31,6 +31,14 @@ class RelaunchRequiredDialogView : views::DialogDelegateView {
 
   ~RelaunchRequiredDialogView() override;
 
+  // Returns the instance hosted by |widget|. |widget| must be an instance
+  // previously returned from Show().
+  static RelaunchRequiredDialogView* FromWidget(views::Widget* widget);
+
+  // Sets the relaunch deadline to |deadline| and refreshes the view's title
+  // accordingly.
+  void SetDeadline(base::TimeTicks deadline);
+
   // views::DialogDelegateView:
   bool Accept() override;
   bool Close() override;
@@ -60,6 +68,8 @@ class RelaunchRequiredDialogView : views::DialogDelegateView {
   RelaunchRequiredDialogView(base::TimeTicks deadline,
                              base::RepeatingClosure on_accept);
 
+  static constexpr int kTitleIconSize = 20;
+
   // Schedules a timer to fire the next time the title must be updated.
   void ScheduleNextTitleRefresh();
 
@@ -71,7 +81,7 @@ class RelaunchRequiredDialogView : views::DialogDelegateView {
   views::BubbleFrameView* GetBubbleFrameView();
 
   // The time at which Chrome will be forcefully relaunched.
-  const base::TimeTicks relaunch_deadline_;
+  base::TimeTicks relaunch_deadline_;
 
   // A callback to run if the user accepts the prompt to relaunch the browser.
   base::RepeatingClosure on_accept_;

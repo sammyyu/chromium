@@ -2,9 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#ifndef BASE_SAMPLING_HEAP_PROFILER_SAMPLING_HEAP_PROFILER_H
-#define BASE_SAMPLING_HEAP_PROFILER_SAMPLING_HEAP_PROFILER_H
+#ifndef BASE_SAMPLING_HEAP_PROFILER_SAMPLING_HEAP_PROFILER_H_
+#define BASE_SAMPLING_HEAP_PROFILER_SAMPLING_HEAP_PROFILER_H_
 
+#include <memory>
+#include <stack>
 #include <unordered_map>
 #include <vector>
 
@@ -17,6 +19,8 @@ namespace base {
 
 template <typename T>
 class NoDestructor;
+
+class LockFreeAddressHashSet;
 
 // The class implements sampling profiling of native memory heap.
 // It hooks on base::allocator and base::PartitionAlloc.
@@ -92,11 +96,16 @@ class BASE_EXPORT SamplingHeapProfiler {
                      uint32_t skip_frames);
   void DoRecordFree(void* address);
   void RecordStackTrace(Sample*, uint32_t skip_frames);
+  static LockFreeAddressHashSet& sampled_addresses_set();
+
+  void BalanceAddressesHashSet();
 
   base::ThreadLocalBoolean entered_;
   base::Lock mutex_;
+  std::stack<std::unique_ptr<LockFreeAddressHashSet>> sampled_addresses_stack_;
   std::unordered_map<void*, Sample> samples_;
   std::vector<SamplesObserver*> observers_;
+  uint32_t last_sample_ordinal_ = 1;
 
   static SamplingHeapProfiler* instance_;
 
@@ -107,4 +116,4 @@ class BASE_EXPORT SamplingHeapProfiler {
 
 }  // namespace base
 
-#endif  // BASE_SAMPLING_HEAP_PROFILER_SAMPLING_HEAP_PROFILER_H
+#endif  // BASE_SAMPLING_HEAP_PROFILER_SAMPLING_HEAP_PROFILER_H_

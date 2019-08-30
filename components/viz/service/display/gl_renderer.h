@@ -33,12 +33,6 @@ namespace base {
 class SingleThreadTaskRunner;
 }
 
-namespace cc {
-class GLRendererShaderTest;
-class OutputSurface;
-class StreamVideoDrawQuad;
-}  // namespace cc
-
 namespace gpu {
 namespace gles2 {
 class GLES2Interface;
@@ -48,10 +42,12 @@ class GLES2Interface;
 namespace viz {
 
 class DynamicGeometryBinding;
+class GLRendererShaderTest;
+class OutputSurface;
 class ScopedRenderPassTexture;
 class StaticGeometryBinding;
+class StreamVideoDrawQuad;
 class TextureDrawQuad;
-struct DrawRenderPassDrawQuadParams;
 
 // Class that handles drawing of composited render layers using GL.
 class VIZ_SERVICE_EXPORT GLRenderer : public DirectRenderer {
@@ -60,13 +56,14 @@ class VIZ_SERVICE_EXPORT GLRenderer : public DirectRenderer {
 
   GLRenderer(const RendererSettings* settings,
              OutputSurface* output_surface,
-             cc::DisplayResourceProvider* resource_provider,
+             DisplayResourceProvider* resource_provider,
              scoped_refptr<base::SingleThreadTaskRunner> current_task_runner);
   ~GLRenderer() override;
 
   bool use_swap_with_bounds() const { return use_swap_with_bounds_; }
 
-  void SwapBuffers(std::vector<ui::LatencyInfo> latency_info) override;
+  void SwapBuffers(std::vector<ui::LatencyInfo> latency_info,
+                   bool need_presentation_feedback) override;
   void SwapBuffersComplete() override;
 
   void DidReceiveTextureInUseResponses(
@@ -155,7 +152,7 @@ class VIZ_SERVICE_EXPORT GLRenderer : public DirectRenderer {
   friend class GLRendererTest;
 
   using OverlayResourceLock =
-      std::unique_ptr<cc::DisplayResourceProvider::ScopedReadLockGL>;
+      std::unique_ptr<DisplayResourceProvider::ScopedReadLockGL>;
   using OverlayResourceLockList = std::vector<OverlayResourceLock>;
 
   // If a RenderPass is used as an overlay, we render the RenderPass with any
@@ -167,6 +164,8 @@ class VIZ_SERVICE_EXPORT GLRenderer : public DirectRenderer {
     ScopedGpuMemoryBufferTexture texture;
     int frames_waiting_for_reuse = 0;
   };
+
+  struct DrawRenderPassDrawQuadParams;
 
   // If any of the following functions returns false, then it means that drawing
   // is not possible.
@@ -242,7 +241,6 @@ class VIZ_SERVICE_EXPORT GLRenderer : public DirectRenderer {
                            const gfx::QuadF* clip_region);
   void DrawYUVVideoQuad(const YUVVideoDrawQuad* quad,
                         const gfx::QuadF* clip_region);
-  void DrawOverlayCandidateQuadBorder(float* gl_matrix);
 
   void SetShaderOpacity(float opacity);
   void SetShaderQuadF(const gfx::QuadF& quad);

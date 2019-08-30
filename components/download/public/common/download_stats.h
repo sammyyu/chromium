@@ -13,6 +13,7 @@
 #include <string>
 #include <vector>
 
+#include "base/callback.h"
 #include "base/optional.h"
 #include "components/download/public/common/download_content.h"
 #include "components/download/public/common/download_danger_type.h"
@@ -134,6 +135,10 @@ enum DownloadCountTypes {
 
   // Count of attempts for auto download resumption.
   AUTO_RESUMPTION_COUNT,
+
+  // Count of download attempts that are dropped due to content settings or
+  // request limiter before DownloadItem is created.
+  DOWNLOAD_DROPPED_COUNT,
 
   DOWNLOAD_COUNT_TYPES_LAST_ENTRY
 };
@@ -371,6 +376,13 @@ COMPONENTS_DOWNLOAD_EXPORT void RecordOriginStateOnResumption(
 COMPONENTS_DOWNLOAD_EXPORT void RecordDownloadConnectionSecurity(
     const GURL& download_url,
     const std::vector<GURL>& url_chain);
+
+COMPONENTS_DOWNLOAD_EXPORT void RecordDownloadContentTypeSecurity(
+    const GURL& download_url,
+    const std::vector<GURL>& url_chain,
+    const std::string& mime_type,
+    const base::RepeatingCallback<bool(const GURL&)>&
+        is_origin_secure_callback);
 
 COMPONENTS_DOWNLOAD_EXPORT void RecordDownloadSourcePageTransitionType(
     const base::Optional<ui::PageTransition>& transition);

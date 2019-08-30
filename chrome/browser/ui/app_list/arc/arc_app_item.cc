@@ -4,14 +4,13 @@
 
 #include "chrome/browser/ui/app_list/arc/arc_app_item.h"
 
+#include "ash/public/cpp/app_list/app_list_config.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/ui/app_list/app_list_controller_delegate.h"
 #include "chrome/browser/ui/app_list/arc/arc_app_context_menu.h"
-#include "chrome/browser/ui/app_list/arc/arc_app_utils.h"
 #include "components/arc/arc_bridge_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/browser/app_sorting.h"
-#include "ui/app_list/app_list_constants.h"
 #include "ui/gfx/image/image_skia.h"
 
 // static
@@ -26,10 +25,9 @@ ArcAppItem::ArcAppItem(
     : ChromeAppListItem(profile, id) {
   DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
 
-  arc_app_icon_.reset(new ArcAppIcon(profile,
-                                     id,
-                                     app_list::kGridIconDimension,
-                                     this));
+  arc_app_icon_.reset(new ArcAppIcon(
+      profile, id, app_list::AppListConfig::instance().grid_icon_dimension(),
+      this));
 
   SetName(name);
   UpdateIcon();
@@ -42,26 +40,20 @@ ArcAppItem::ArcAppItem(
   set_model_updater(model_updater);
 }
 
-ArcAppItem::~ArcAppItem() {
-}
+ArcAppItem::~ArcAppItem() = default;
 
 const char* ArcAppItem::GetItemType() const {
   return ArcAppItem::kItemType;
 }
 
 void ArcAppItem::Activate(int event_flags) {
-  if (!arc::LaunchApp(profile(), id(), event_flags,
-                      GetController()->GetAppListDisplayId())) {
-    return;
-  }
-
-  // Manually close app_list view because focus is not changed on ARC app start,
-  // and current view remains active.
-  GetController()->DismissView();
+  Launch(event_flags, arc::UserInteractionType::APP_STARTED_FROM_LAUNCHER);
 }
 
 void ArcAppItem::ExecuteLaunchCommand(int event_flags) {
-  Activate(event_flags);
+  Launch(event_flags,
+         arc::UserInteractionType::APP_STARTED_FROM_LAUNCHER_CONTEXT_MENU);
+  MaybeDismissAppList();
 }
 
 void ArcAppItem::SetName(const std::string& name) {
@@ -77,12 +69,15 @@ void ArcAppItem::OnIconUpdated(ArcAppIcon* icon) {
   UpdateIcon();
 }
 
-ui::MenuModel* ArcAppItem::GetContextMenuModel() {
-  context_menu_.reset(new ArcAppContextMenu(this,
-                                            profile(),
-                                            id(),
-                                            GetController()));
-  return context_menu_->GetMenuModel();
+void ArcAppItem::GetContextMenuModel(GetMenuModelCallback callback) {
+  context_menu_ = std::make_unique<ArcAppContextMenu>(this, profile(), id(),
+                                                      GetController());
+  context_menu_->GetMenuModel(std::move(callback));
+}
+
+void ArcAppItem::Launch(int event_flags, arc::UserInteractionType interaction) {
+  arc::LaunchApp(profile(), id(), event_flags, interaction,
+                 GetController()->GetAppListDisplayId());
 }
 
 app_list::AppContextMenu* ArcAppItem::GetAppContextMenu() {

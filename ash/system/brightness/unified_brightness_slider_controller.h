@@ -9,17 +9,16 @@
 
 namespace ash {
 
+class UnifiedSystemTrayModel;
+
 // Controller of a slider that can change display brightness.
 class UnifiedBrightnessSliderController : public UnifiedSliderListener {
  public:
-  UnifiedBrightnessSliderController();
+  explicit UnifiedBrightnessSliderController(UnifiedSystemTrayModel* model);
   ~UnifiedBrightnessSliderController() override;
 
-  // Instantiates UnifiedSliderView. The view will be onwed by views hierarchy.
-  // The view should be always deleted after the controller is destructed.
-  views::View* CreateView();
-
   // UnifiedSliderListener:
+  views::View* CreateView() override;
   void ButtonPressed(views::Button* sender, const ui::Event& event) override;
   void SliderValueChanged(views::Slider* sender,
                           float value,
@@ -27,7 +26,8 @@ class UnifiedBrightnessSliderController : public UnifiedSliderListener {
                           views::SliderChangeReason reason) override;
 
  private:
-  UnifiedSliderView* slider_;
+  UnifiedSystemTrayModel* const model_;
+  UnifiedSliderView* slider_ = nullptr;
 
   DISALLOW_COPY_AND_ASSIGN(UnifiedBrightnessSliderController);
 };

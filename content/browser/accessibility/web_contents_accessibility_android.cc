@@ -551,6 +551,7 @@ bool WebContentsAccessibilityAndroid::OnHoverEvent(
       root_manager_) {
     gfx::PointF point =
         IsUseZoomForDSFEnabled() ? event.GetPointPix() : event.GetPoint();
+    point.Scale(1 / page_scale_);
     root_manager_->HitTest(gfx::ToFlooredPoint(point));
   }
   return true;
@@ -854,7 +855,7 @@ void WebContentsAccessibilityAndroid::SetTextFieldValue(
   BrowserAccessibilityAndroid* node = GetAXFromUniqueID(unique_id);
   if (node) {
     node->manager()->SetValue(
-        *node, base::android::ConvertJavaStringToUTF16(env, value));
+        *node, base::android::ConvertJavaStringToUTF8(env, value));
   }
 }
 
@@ -908,7 +909,7 @@ jboolean WebContentsAccessibilityAndroid::AdjustSlider(
   value += (increment ? delta : -delta);
   value = std::max(std::min(value, max), min);
   if (value != original_value) {
-    node->manager()->SetValue(*node, base::NumberToString16(value));
+    node->manager()->SetValue(*node, base::NumberToString(value));
     return true;
   }
   return false;
@@ -950,7 +951,9 @@ jint WebContentsAccessibilityAndroid::FindElementType(
                                : OneShotAccessibilityTreeSearch::BACKWARDS);
   tree_search.SetResultLimit(1);
   tree_search.SetImmediateDescendantsOnly(false);
-  tree_search.SetCanWrapToLastElement(true);
+  // SetCanWrapToLastElement needs to be set as true after talkback pushes its
+  // corresponding change for b/29103330.
+  tree_search.SetCanWrapToLastElement(false);
   tree_search.SetVisibleOnly(false);
   tree_search.AddPredicate(predicate);
 
@@ -1040,15 +1043,25 @@ jboolean WebContentsAccessibilityAndroid::PreviousAtGranularity(
   return false;
 }
 
-void WebContentsAccessibilityAndroid::SetAccessibilityFocus(
+void WebContentsAccessibilityAndroid::MoveAccessibilityFocus(
     JNIEnv* env,
     const JavaParamRef<jobject>& obj,
-    jint unique_id) {
+    jint old_unique_id,
+    jint new_unique_id) {
+  BrowserAccessibilityAndroid* old_node = GetAXFromUniqueID(old_unique_id);
+  if (old_node)
+    old_node->manager()->ClearAccessibilityFocus(*old_node);
+
+  BrowserAccessibilityAndroid* node = GetAXFromUniqueID(new_unique_id);
+  if (!node)
+    return;
+  node->manager()->SetAccessibilityFocus(*node);
+
   // When Android sets accessibility focus to a node, we load inline text
   // boxes for that node so that subsequent requests for character bounding
-  // boxes will succeed.
-  BrowserAccessibilityAndroid* node = GetAXFromUniqueID(unique_id);
-  if (node)
+  // boxes will succeed. However, don't do that for the root of the tree,
+  // as that will result in loading inline text boxes for the whole tree.
+  if (node != node->manager()->GetRoot())
     node->manager()->LoadInlineTextBoxes(*node);
 }
 
@@ -1083,7 +1096,7 @@ void WebContentsAccessibilityAndroid::OnAutofillPopupDisplayed(
   ax_node_data.SetName("Autofill");
   ax_node_data.SetRestriction(ax::mojom::Restriction::kReadOnly);
   ax_node_data.AddState(ax::mojom::State::kFocusable);
-  ax_node_data.AddState(ax::mojom::State::kSelectable);
+  ax_node_data.AddBoolAttribute(ax::mojom::BoolAttribute::kSelected, false);
   g_autofill_popup_proxy_node_ax_node->SetData(ax_node_data);
   g_autofill_popup_proxy_node->Init(root_manager_,
                                     g_autofill_popup_proxy_node_ax_node);
@@ -1194,7 +1207,8 @@ BrowserAccessibilityAndroid* WebContentsAccessibilityAndroid::GetAXFromUniqueID(
       BrowserAccessibilityAndroid::GetFromUniqueId(unique_id));
 }
 
-void WebContentsAccessibilityAndroid::UpdateFrameInfo() {
+void WebContentsAccessibilityAndroid::UpdateFrameInfo(float page_scale) {
+  page_scale_ = page_scale;
   if (frame_info_initialized_)
     return;
 

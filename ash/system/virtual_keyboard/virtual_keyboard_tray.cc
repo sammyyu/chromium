@@ -70,10 +70,9 @@ void VirtualKeyboardTray::ClickedOutsideBubble() {}
 bool VirtualKeyboardTray::PerformAction(const ui::Event& event) {
   UserMetricsRecorder::RecordUserClickOnTray(
       LoginMetricsRecorder::TrayClickTarget::kVirtualKeyboardTray);
-  const int64_t display_id = display::Screen::GetScreen()
-                                 ->GetDisplayNearestWindow(shelf_->GetWindow())
-                                 .id();
-  Shell::Get()->keyboard_ui()->ShowInDisplay(display_id);
+  Shell::Get()->keyboard_ui()->ShowInDisplay(
+      display::Screen::GetScreen()->GetDisplayNearestWindow(
+          shelf_->GetWindow()));
   // Normally, active status is set when virtual keyboard is shown/hidden,
   // however, showing virtual keyboard happens asynchronously and, especially
   // the first time, takes some time. We need to set active status here to
@@ -95,9 +94,9 @@ void VirtualKeyboardTray::OnKeyboardEnabledStateChanged(bool new_enabled) {
   }
 }
 
-void VirtualKeyboardTray::OnKeyboardAvailabilityChanged(
-    const bool is_available) {
-  SetIsActive(is_available);
+void VirtualKeyboardTray::OnKeyboardVisibilityStateChanged(
+    const bool is_visible) {
+  SetIsActive(is_visible);
 }
 
 void VirtualKeyboardTray::OnKeyboardControllerCreated() {
@@ -105,16 +104,14 @@ void VirtualKeyboardTray::OnKeyboardControllerCreated() {
 }
 
 void VirtualKeyboardTray::ObserveKeyboardController() {
-  keyboard::KeyboardController* keyboard_controller =
-      keyboard::KeyboardController::GetInstance();
-  if (keyboard_controller && !keyboard_controller->HasObserver(this))
+  auto* keyboard_controller = keyboard::KeyboardController::Get();
+  if (keyboard_controller->enabled() && !keyboard_controller->HasObserver(this))
     keyboard_controller->AddObserver(this);
 }
 
 void VirtualKeyboardTray::UnobserveKeyboardController() {
-  keyboard::KeyboardController* keyboard_controller =
-      keyboard::KeyboardController::GetInstance();
-  if (keyboard_controller)
+  auto* keyboard_controller = keyboard::KeyboardController::Get();
+  if (keyboard_controller->enabled())
     keyboard_controller->RemoveObserver(this);
 }
 

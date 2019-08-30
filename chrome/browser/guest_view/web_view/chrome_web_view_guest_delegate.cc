@@ -8,14 +8,12 @@
 #include <memory>
 #include <utility>
 
-#include "base/memory/ptr_util.h"
 #include "build/build_config.h"
 #include "chrome/browser/extensions/chrome_extension_web_contents_observer.h"
 #include "chrome/browser/favicon/favicon_utils.h"
 #include "chrome/browser/profiles/profile.h"
 #include "chrome/browser/renderer_context_menu/render_view_context_menu.h"
 #include "chrome/browser/ui/pdf/chrome_pdf_web_contents_helper_client.h"
-#include "chrome/common/url_constants.h"
 #include "components/guest_view/browser/guest_view_event.h"
 #include "components/renderer_context_menu/context_menu_delegate.h"
 #include "content/public/browser/render_process_host.h"
@@ -40,6 +38,7 @@ ChromeWebViewGuestDelegate::~ChromeWebViewGuestDelegate() {
 bool ChromeWebViewGuestDelegate::HandleContextMenu(
     const content::ContextMenuParams& params) {
   if ((params.source_type == ui::MENU_SOURCE_LONG_PRESS ||
+       params.source_type == ui::MENU_SOURCE_LONG_TAP ||
        params.source_type == ui::MENU_SOURCE_TOUCH) &&
       !params.selection_text.empty() &&
       (guest_web_contents()->GetRenderWidgetHostView() &&
@@ -105,13 +104,6 @@ void ChromeWebViewGuestDelegate::OnShowContextMenu(int request_id) {
   ContextMenuDelegate* menu_delegate =
       ContextMenuDelegate::FromWebContents(guest_web_contents());
   menu_delegate->ShowMenu(std::move(pending_menu_));
-}
-
-bool ChromeWebViewGuestDelegate::ShouldHandleFindRequestsForEmbedder() const {
-  // Find requests will be handled by the guest for the Chrome signin page.
-  return web_view_guest_->owner_web_contents()->GetWebUI() != nullptr &&
-         web_view_guest_->GetOwnerSiteURL().GetOrigin().spec() ==
-             chrome::kChromeUIChromeSigninURL;
 }
 
 }  // namespace extensions

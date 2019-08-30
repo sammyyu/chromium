@@ -140,6 +140,9 @@ class TestMockTimeTaskRunner : public SingleThreadTaskRunner,
   // non-negative.
   void FastForwardBy(TimeDelta delta);
 
+  // Fast-forwards virtual time by |delta| but not causing any task execution.
+  void AdvanceMockTickClock(TimeDelta delta);
+
   // Fast-forwards virtual time just until all tasks are executed.
   void FastForwardUntilNoTasksRemain();
 
@@ -169,12 +172,13 @@ class TestMockTimeTaskRunner : public SingleThreadTaskRunner,
   // TODO(tzik): Replace Remove DeprecatedGetMockTickClock() after updating all
   // callers to use non-owning TickClock.
   std::unique_ptr<TickClock> DeprecatedGetMockTickClock() const;
-  TickClock* GetMockTickClock() const;
+  const TickClock* GetMockTickClock() const;
 
+  // Cancelled pending tasks get pruned automatically.
   base::circular_deque<TestPendingTask> TakePendingTasks();
-  bool HasPendingTask() const;
-  size_t GetPendingTaskCount() const;
-  TimeDelta NextPendingTaskDelay() const;
+  bool HasPendingTask();
+  size_t GetPendingTaskCount();
+  TimeDelta NextPendingTaskDelay();
 
   // SingleThreadTaskRunner:
   bool RunsTasksInCurrentSequence() const override;
@@ -201,6 +205,8 @@ class TestMockTimeTaskRunner : public SingleThreadTaskRunner,
   virtual void OnAfterTaskRun();
 
  private:
+  class NonOwningProxyTaskRunner;
+
   // MockClock implements TickClock and Clock. Always returns the then-current
   // mock time of |task_runner| as the current time or time ticks.
   class MockClock : public TickClock, public Clock {
@@ -209,10 +215,10 @@ class TestMockTimeTaskRunner : public SingleThreadTaskRunner,
         : task_runner_(task_runner) {}
 
     // TickClock:
-    TimeTicks NowTicks() override;
+    TimeTicks NowTicks() const override;
 
     // Clock:
-    Time Now() override;
+    Time Now() const override;
 
    private:
     TestMockTimeTaskRunner* task_runner_;
@@ -273,6 +279,8 @@ class TestMockTimeTaskRunner : public SingleThreadTaskRunner,
 
   mutable Lock tasks_lock_;
   ConditionVariable tasks_lock_cv_;
+
+  const scoped_refptr<NonOwningProxyTaskRunner> proxy_task_runner_;
   std::unique_ptr<ThreadTaskRunnerHandle> thread_task_runner_handle_;
 
   // Set to true in RunLoop::Delegate::Quit() to signal the topmost

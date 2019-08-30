@@ -22,8 +22,7 @@
 #include "net/http/http_network_session.h"
 #include "net/http/http_server_properties.h"
 #include "net/http/transport_security_state.h"
-#include "net/net_features.h"
-#include "net/ssl/ssl_config_service.h"
+#include "net/net_buildflags.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
 #include "net/url_request/url_request.h"
 
@@ -47,6 +46,7 @@ class NetLog;
 class NetworkDelegate;
 class NetworkQualityEstimator;
 class ProxyResolutionService;
+class SSLConfigService;
 class URLRequest;
 class URLRequestJobFactory;
 class URLRequestThrottlerManager;
@@ -141,9 +141,7 @@ class NET_EXPORT URLRequestContext
   }
 
   // Get the ssl config service for this context.
-  SSLConfigService* ssl_config_service() const {
-    return ssl_config_service_.get();
-  }
+  SSLConfigService* ssl_config_service() const { return ssl_config_service_; }
   void set_ssl_config_service(SSLConfigService* service) {
     ssl_config_service_ = service;
   }
@@ -305,7 +303,7 @@ class NET_EXPORT URLRequestContext
   ChannelIDService* channel_id_service_;
   HttpAuthHandlerFactory* http_auth_handler_factory_;
   ProxyResolutionService* proxy_resolution_service_;
-  scoped_refptr<SSLConfigService> ssl_config_service_;
+  SSLConfigService* ssl_config_service_;
   NetworkDelegate* network_delegate_;
   HttpServerProperties* http_server_properties_;
   const HttpUserAgentSettings* http_user_agent_settings_;

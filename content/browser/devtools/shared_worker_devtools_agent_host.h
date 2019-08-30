@@ -8,7 +8,7 @@
 #include "base/macros.h"
 #include "base/unguessable_token.h"
 #include "content/browser/devtools/devtools_agent_host_impl.h"
-#include "third_party/WebKit/public/web/devtools_agent.mojom.h"
+#include "third_party/blink/public/web/devtools_agent.mojom.h"
 
 namespace content {
 
@@ -33,10 +33,9 @@ class SharedWorkerDevToolsAgentHost : public DevToolsAgentHostImpl {
   bool Close() override;
 
   // DevToolsAgentHostImpl overrides.
-  bool AttachSession(DevToolsSession* session) override;
+  bool AttachSession(DevToolsSession* session,
+                     TargetRegistry* registry) override;
   void DetachSession(DevToolsSession* session) override;
-  void DispatchProtocolMessage(DevToolsSession* session,
-                               const std::string& message) override;
 
   bool Matches(SharedWorkerHost* worker_host);
   void WorkerReadyForInspection();

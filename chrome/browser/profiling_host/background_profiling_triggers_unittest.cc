@@ -29,7 +29,7 @@ using ProcessMemoryDumpPtr =
 using OSMemDumpPtr = memory_instrumentation::mojom::OSMemDumpPtr;
 using ProcessType = memory_instrumentation::mojom::ProcessType;
 
-namespace profiling {
+namespace heap_profiling {
 namespace {
 
 constexpr uint32_t kProcessMallocTriggerKb = 2 * 1024 * 1024;  // 2 Gig
@@ -56,7 +56,6 @@ void PopulateMetrics(GlobalMemoryDumpPtr* global_dump,
       memory_instrumentation::mojom::ProcessMemoryDump::New());
   pmd->pid = pid;
   pmd->process_type = process_type;
-  pmd->chrome_dump = memory_instrumentation::mojom::ChromeMemDump::New();
   pmd->os_dump =
       GetFakeOSMemDump(resident_set_kb, private_memory_kb, shared_footprint_kb);
   (*global_dump)->process_dumps.push_back(std::move(pmd));
@@ -71,7 +70,10 @@ class FakeBackgroundProfilingTriggers : public BackgroundProfilingTriggers {
 
   using BackgroundProfilingTriggers::OnReceivedMemoryDump;
 
-  void Reset() { was_report_triggered_ = false; }
+  void Reset() {
+    was_report_triggered_ = false;
+    pmf_at_last_upload_.clear();
+  }
   bool WasReportTriggered() const { return was_report_triggered_; }
 
  private:
@@ -198,6 +200,31 @@ TEST_F(BackgroundProfilingTriggersTest, OnReceivedMemoryDump_ProfiledPids) {
   EXPECT_TRUE(triggers_.WasReportTriggered());
 }
 
+TEST_F(BackgroundProfilingTriggersTest, HighWaterMark) {
+  GlobalMemoryDumpPtr dump(
+      memory_instrumentation::mojom::GlobalMemoryDump::New());
+  PopulateMetrics(&dump, 1, ProcessType::BROWSER, kProcessMallocTriggerKb,
+                  kProcessMallocTriggerKb, kProcessMallocTriggerKb);
+  triggers_.OnReceivedMemoryDump(profiled_pids_, true,
+                                 GlobalMemoryDump::MoveFrom(std::move(dump)));
+  EXPECT_TRUE(triggers_.WasReportTriggered());
+  triggers_.Reset();
+
+  // A small increase in memory should not trigger another report.
+  dump = memory_instrumentation::mojom::GlobalMemoryDump::New();
+  uint32_t small_increase = kProcessMallocTriggerKb + 10 * 1024;
+  PopulateMetrics(&dump, 1, ProcessType::BROWSER, small_increase,
+                  small_increase, small_increase);
+  EXPECT_FALSE(triggers_.WasReportTriggered());
+
+  // But a large increase should trigger another report.
+  dump = memory_instrumentation::mojom::GlobalMemoryDump::New();
+  uint32_t large_increase = kProcessMallocTriggerKb + 1000 * 1024;
+  PopulateMetrics(&dump, 1, ProcessType::BROWSER, large_increase,
+                  large_increase, large_increase);
+  EXPECT_FALSE(triggers_.WasReportTriggered());
+}
+
 // Non-profiled processes don't trigger.
 TEST_F(BackgroundProfilingTriggersTest, OnlyProfiledProcessesTrigger) {
   GlobalMemoryDumpPtr dump(
@@ -224,51 +251,4 @@ TEST_F(BackgroundProfilingTriggersTest, IsAllowedToUpload_Metrics) {
   EXPECT_FALSE(triggers_.IsAllowedToUpload());
 }
 
-// Ensure IsAllowedToUpload() respects incognito sessions. Checke that behavior
-//   * respsects incognito sessions in primary profile.
-//   * respsects incognito sessions in non-primary profiles.
-//   * handles overlapping incognito sessions.
-//
-// NOTE: As of this test writing, TestingProfile::DestroyOffTheRecordProfile()
-// is mocked out to do nothing. Currently, using
-// TestingProfile::SetOffTheRecordProfile(nullptr) to fake destruction.
-TEST_F(BackgroundProfilingTriggersTest, IsAllowedToUpload_Incognito) {
-  // Create 2 profiles. The first is considered the primary.
-  TestingProfile* primary_profile =
-      testing_profile_manager_.CreateTestingProfile("primary");
-  TestingProfile* secondary_profile =
-      testing_profile_manager_.CreateTestingProfile("secondary");
-  ASSERT_FALSE(primary_profile->HasOffTheRecordProfile());
-
-  // Test IsAllowedToUpload() maps to incognito session in primary profile.
-  EXPECT_TRUE(triggers_.IsAllowedToUpload());
-
-  primary_profile->GetOffTheRecordProfile();
-  EXPECT_FALSE(triggers_.IsAllowedToUpload());
-
-  primary_profile->SetOffTheRecordProfile(nullptr);
-  EXPECT_TRUE(triggers_.IsAllowedToUpload());
-
-  // Test IsAllowedToUpload() maps to incognito session in secondary profile.
-  secondary_profile->GetOffTheRecordProfile();
-  EXPECT_FALSE(triggers_.IsAllowedToUpload());
-  secondary_profile->SetOffTheRecordProfile(nullptr);
-  EXPECT_TRUE(triggers_.IsAllowedToUpload());
-
-  // Test overlapping incognitos sessions.
-  primary_profile->GetOffTheRecordProfile();
-  secondary_profile->GetOffTheRecordProfile();
-  EXPECT_FALSE(triggers_.IsAllowedToUpload());
-
-  secondary_profile->SetOffTheRecordProfile(nullptr);
-  EXPECT_FALSE(triggers_.IsAllowedToUpload());
-
-  secondary_profile->GetOffTheRecordProfile();
-  primary_profile->SetOffTheRecordProfile(nullptr);
-  EXPECT_FALSE(triggers_.IsAllowedToUpload());
-
-  secondary_profile->SetOffTheRecordProfile(nullptr);
-  EXPECT_TRUE(triggers_.IsAllowedToUpload());
-}
-
-}  // namespace profiling
+}  // namespace heap_profiling

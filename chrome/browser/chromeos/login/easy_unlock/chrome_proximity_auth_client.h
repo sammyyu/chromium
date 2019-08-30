@@ -6,13 +6,19 @@
 #define CHROME_BROWSER_CHROMEOS_LOGIN_EASY_UNLOCK_CHROME_PROXIMITY_AUTH_CLIENT_H_
 
 #include "base/macros.h"
-#include "components/proximity_auth/proximity_auth_client.h"
+#include "chromeos/components/proximity_auth/proximity_auth_client.h"
 
 class Profile;
 
 namespace cryptauth {
 class CryptAuthService;
 }  // namespace cryptauth
+
+namespace chromeos {
+
+namespace device_sync {
+class DeviceSyncClient;
+}  // namespace device_sync
 
 // A Chrome-specific implementation of the ProximityAuthClient interface.
 // There is one |ChromeProximityAuthClient| per |Profile|.
@@ -25,9 +31,13 @@ class ChromeProximityAuthClient : public proximity_auth::ProximityAuthClient {
   std::string GetAuthenticatedUsername() const override;
   void UpdateScreenlockState(proximity_auth::ScreenlockState state) override;
   void FinalizeUnlock(bool success) override;
+  void FinalizeSignin(const std::string& secret) override;
+  void GetChallengeForUserAndDevice(
+      const std::string& user_id,
+      const std::string& remote_public_key,
+      const std::string& nonce,
+      base::Callback<void(const std::string& challenge)> callback) override;
   proximity_auth::ProximityAuthPrefManager* GetPrefManager() override;
-  std::unique_ptr<cryptauth::SecureMessageDelegate>
-  CreateSecureMessageDelegate() override;
   std::unique_ptr<cryptauth::CryptAuthClientFactory>
   CreateCryptAuthClientFactory() override;
   cryptauth::DeviceClassifier GetDeviceClassifier() override;
@@ -35,20 +45,17 @@ class ChromeProximityAuthClient : public proximity_auth::ProximityAuthClient {
   cryptauth::CryptAuthEnrollmentManager* GetCryptAuthEnrollmentManager()
       override;
   cryptauth::CryptAuthDeviceManager* GetCryptAuthDeviceManager() override;
-  void FinalizeSignin(const std::string& secret) override;
-  void GetChallengeForUserAndDevice(
-      const std::string& user_id,
-      const std::string& remote_public_key,
-      const std::string& nonce,
-      base::Callback<void(const std::string& challenge)> callback) override;
   std::string GetLocalDevicePublicKey() override;
 
  private:
   cryptauth::CryptAuthService* GetCryptAuthService();
+  device_sync::DeviceSyncClient* GetDeviceSyncClient();
 
   Profile* const profile_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeProximityAuthClient);
 };
+
+}  // namespace chromeos
 
 #endif  // CHROME_BROWSER_CHROMEOS_LOGIN_EASY_UNLOCK_CHROME_PROXIMITY_AUTH_CLIENT_H_

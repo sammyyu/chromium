@@ -59,6 +59,15 @@ class CrasAudioClientImpl : public CrasAudioClient {
                        weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
   }
 
+  void GetSystemAecSupported(DBusMethodCallback<bool> callback) override {
+    dbus::MethodCall method_call(cras::kCrasControlInterface,
+                                 cras::kGetSystemAecSupported);
+    cras_proxy_->CallMethod(
+        &method_call, dbus::ObjectProxy::TIMEOUT_USE_DEFAULT,
+        base::BindOnce(&CrasAudioClientImpl::OnGetSystemAecSupported,
+                       weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+  }
+
   void GetNodes(DBusMethodCallback<AudioNodeList> callback) override {
     dbus::MethodCall method_call(cras::kCrasControlInterface,
                                  cras::kGetNodes);
@@ -220,65 +229,59 @@ class CrasAudioClientImpl : public CrasAudioClient {
 
     // Monitor the D-Bus signal for output mute change.
     cras_proxy_->ConnectToSignal(
-        cras::kCrasControlInterface,
-        cras::kOutputMuteChanged,
+        cras::kCrasControlInterface, cras::kOutputMuteChanged,
         base::Bind(&CrasAudioClientImpl::OutputMuteChangedReceived,
                    weak_ptr_factory_.GetWeakPtr()),
-        base::Bind(&CrasAudioClientImpl::SignalConnected,
-                   weak_ptr_factory_.GetWeakPtr()));
+        base::BindOnce(&CrasAudioClientImpl::SignalConnected,
+                       weak_ptr_factory_.GetWeakPtr()));
 
     // Monitor the D-Bus signal for input mute change.
     cras_proxy_->ConnectToSignal(
-        cras::kCrasControlInterface,
-        cras::kInputMuteChanged,
+        cras::kCrasControlInterface, cras::kInputMuteChanged,
         base::Bind(&CrasAudioClientImpl::InputMuteChangedReceived,
                    weak_ptr_factory_.GetWeakPtr()),
-        base::Bind(&CrasAudioClientImpl::SignalConnected,
-                   weak_ptr_factory_.GetWeakPtr()));
+        base::BindOnce(&CrasAudioClientImpl::SignalConnected,
+                       weak_ptr_factory_.GetWeakPtr()));
 
     // Monitor the D-Bus signal for nodes change.
     cras_proxy_->ConnectToSignal(
-        cras::kCrasControlInterface,
-        cras::kNodesChanged,
+        cras::kCrasControlInterface, cras::kNodesChanged,
         base::Bind(&CrasAudioClientImpl::NodesChangedReceived,
                    weak_ptr_factory_.GetWeakPtr()),
-        base::Bind(&CrasAudioClientImpl::SignalConnected,
-                   weak_ptr_factory_.GetWeakPtr()));
+        base::BindOnce(&CrasAudioClientImpl::SignalConnected,
+                       weak_ptr_factory_.GetWeakPtr()));
 
     // Monitor the D-Bus signal for active output node change.
     cras_proxy_->ConnectToSignal(
-        cras::kCrasControlInterface,
-        cras::kActiveOutputNodeChanged,
+        cras::kCrasControlInterface, cras::kActiveOutputNodeChanged,
         base::Bind(&CrasAudioClientImpl::ActiveOutputNodeChangedReceived,
                    weak_ptr_factory_.GetWeakPtr()),
-        base::Bind(&CrasAudioClientImpl::SignalConnected,
-                   weak_ptr_factory_.GetWeakPtr()));
+        base::BindOnce(&CrasAudioClientImpl::SignalConnected,
+                       weak_ptr_factory_.GetWeakPtr()));
 
     // Monitor the D-Bus signal for active input node change.
     cras_proxy_->ConnectToSignal(
-        cras::kCrasControlInterface,
-        cras::kActiveInputNodeChanged,
+        cras::kCrasControlInterface, cras::kActiveInputNodeChanged,
         base::Bind(&CrasAudioClientImpl::ActiveInputNodeChangedReceived,
                    weak_ptr_factory_.GetWeakPtr()),
-        base::Bind(&CrasAudioClientImpl::SignalConnected,
-                   weak_ptr_factory_.GetWeakPtr()));
+        base::BindOnce(&CrasAudioClientImpl::SignalConnected,
+                       weak_ptr_factory_.GetWeakPtr()));
 
     // Monitor the D-Bus signal for output node volume change.
     cras_proxy_->ConnectToSignal(
-        cras::kCrasControlInterface,
-        cras::kOutputNodeVolumeChanged,
+        cras::kCrasControlInterface, cras::kOutputNodeVolumeChanged,
         base::Bind(&CrasAudioClientImpl::OutputNodeVolumeChangedReceived,
                    weak_ptr_factory_.GetWeakPtr()),
-        base::Bind(&CrasAudioClientImpl::SignalConnected,
-                   weak_ptr_factory_.GetWeakPtr()));
+        base::BindOnce(&CrasAudioClientImpl::SignalConnected,
+                       weak_ptr_factory_.GetWeakPtr()));
 
     // Monitor the D-Bus signal for hotword.
     cras_proxy_->ConnectToSignal(
         cras::kCrasControlInterface, cras::kHotwordTriggered,
         base::Bind(&CrasAudioClientImpl::HotwordTriggeredReceived,
                    weak_ptr_factory_.GetWeakPtr()),
-        base::Bind(&CrasAudioClientImpl::SignalConnected,
-                   weak_ptr_factory_.GetWeakPtr()));
+        base::BindOnce(&CrasAudioClientImpl::SignalConnected,
+                       weak_ptr_factory_.GetWeakPtr()));
 
     // Monitor the D-Bus signal for changes in number of active streams.
     cras_proxy_->ConnectToSignal(
@@ -286,8 +289,8 @@ class CrasAudioClientImpl : public CrasAudioClient {
         base::BindRepeating(
             &CrasAudioClientImpl::NumberOfActiveStreamsChangedReceived,
             weak_ptr_factory_.GetWeakPtr()),
-        base::BindRepeating(&CrasAudioClientImpl::SignalConnected,
-                            weak_ptr_factory_.GetWeakPtr()));
+        base::BindOnce(&CrasAudioClientImpl::SignalConnected,
+                       weak_ptr_factory_.GetWeakPtr()));
   }
 
  private:
@@ -438,6 +441,25 @@ class CrasAudioClientImpl : public CrasAudioClient {
     }
 
     std::move(callback).Run(buffer_size);
+  }
+
+  void OnGetSystemAecSupported(DBusMethodCallback<bool> callback,
+                               dbus::Response* response) {
+    if (!response) {
+      LOG(ERROR) << "Error calling " << cras::kGetSystemAecSupported;
+      std::move(callback).Run(base::nullopt);
+      return;
+    }
+    bool system_aec_supported = 0;
+    dbus::MessageReader reader(response);
+    if (!reader.PopBool(&system_aec_supported)) {
+      LOG(ERROR) << "Error reading response from cras: "
+                 << response->ToString();
+      std::move(callback).Run(base::nullopt);
+      return;
+    }
+
+    std::move(callback).Run(system_aec_supported);
   }
 
   void OnGetNodes(DBusMethodCallback<AudioNodeList> callback,

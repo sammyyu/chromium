@@ -6,8 +6,8 @@
 
 #include <map>
 
+#include "base/bind.h"
 #include "base/callback_helpers.h"
-#include "base/mac/bind_objc_block.h"
 #include "base/mac/foundation_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/trace_event/memory_allocator_dump.h"
@@ -26,6 +26,7 @@
 
 #if BUILDFLAG(USE_EGL_ON_MAC)
 #include "ui/gl/gl_image_io_surface_egl.h"
+#include "ui/gl/gl_implementation.h"
 #endif  // BUILDFLAG(USE_EGL_ON_MAC)
 
 // Note that this must be included after gl_bindings.h to avoid conflicts.
@@ -182,8 +183,12 @@ GLenum ConvertRequestedInternalFormat(GLenum internalformat) {
 GLImageIOSurface* GLImageIOSurface::Create(const gfx::Size& size,
                                            unsigned internalformat) {
 #if BUILDFLAG(USE_EGL_ON_MAC)
-  if (GLContext::GetCurrent()->GetVersionInfo()->is_angle) {
-    return new GLImageIOSurfaceEGL(size, internalformat);
+  switch (GetGLImplementation()) {
+    case kGLImplementationEGLGLES2:
+    case kGLImplementationSwiftShaderGL:
+      return new GLImageIOSurfaceEGL(size, internalformat);
+    default:
+      break;
   }
 #endif  // BUILDFLAG(USE_EGL_ON_MAC)
 
@@ -341,9 +346,10 @@ bool GLImageIOSurface::CopyTexImage(unsigned target) {
       return false;
   }
   glGetIntegerv(target_getter, &rgb_texture);
-  base::ScopedClosureRunner destroy_resources_runner(base::BindBlock(^{
-    glBindTexture(target, rgb_texture);
-  }));
+  base::ScopedClosureRunner destroy_resources_runner(
+      base::BindOnce(base::RetainBlock(^{
+        glBindTexture(target, rgb_texture);
+      })));
 
   CGLContextObj cgl_context = CGLGetCurrentContext();
   {
@@ -379,11 +385,14 @@ bool GLImageIOSurface::CopyTexSubImage(unsigned target,
   return false;
 }
 
-bool GLImageIOSurface::ScheduleOverlayPlane(gfx::AcceleratedWidget widget,
-                                            int z_order,
-                                            gfx::OverlayTransform transform,
-                                            const gfx::Rect& bounds_rect,
-                                            const gfx::RectF& crop_rect) {
+bool GLImageIOSurface::ScheduleOverlayPlane(
+    gfx::AcceleratedWidget widget,
+    int z_order,
+    gfx::OverlayTransform transform,
+    const gfx::Rect& bounds_rect,
+    const gfx::RectF& crop_rect,
+    bool enable_blend,
+    std::unique_ptr<gfx::GpuFence> gpu_fence) {
   NOTREACHED();
   return false;
 }

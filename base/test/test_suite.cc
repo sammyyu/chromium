@@ -62,6 +62,10 @@
 #include "base/test/test_support_ios.h"
 #endif
 
+#if defined(OS_LINUX)
+#include "base/test/fontconfig_util_linux.h"
+#endif
+
 namespace base {
 
 namespace {
@@ -239,7 +243,9 @@ void TestSuite::AddTestLauncherResultPrinter() {
   }
 
   printer_ = new XmlUnitTestResultPrinter;
-  CHECK(printer_->Initialize(output_path));
+  CHECK(printer_->Initialize(output_path))
+      << "Output path is " << output_path.AsUTF8Unsafe()
+      << " and PathExists(output_path) is " << PathExists(output_path);
   testing::TestEventListeners& listeners =
       testing::UnitTest::GetInstance()->listeners();
   listeners.Append(printer_);
@@ -454,6 +460,12 @@ void TestSuite::Initialize() {
   if (EndsWith(default_locale, "POSIX", CompareCase::INSENSITIVE_ASCII))
     i18n::SetICUDefaultLocale("en_US");
 #endif
+#endif
+
+#if defined(OS_LINUX)
+  // TODO(thomasanderson): Call TearDownFontconfig() in Shutdown().  It would
+  // currently crash because of leaked FcFontSet's in font_fallback_linux.cc.
+  SetUpFontconfig();
 #endif
 
   CatchMaybeTests();

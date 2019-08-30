@@ -18,7 +18,7 @@
 #include "content/browser/accessibility/accessibility_buildflags.h"
 #include "content/browser/accessibility/browser_accessibility_position.h"
 #include "content/common/content_export.h"
-#include "third_party/WebKit/public/web/WebAXEnums.h"
+#include "third_party/blink/public/web/web_ax_enums.h"
 #include "ui/accessibility/ax_node.h"
 #include "ui/accessibility/ax_node_data.h"
 #include "ui/accessibility/ax_range.h"
@@ -73,7 +73,7 @@ class CONTENT_EXPORT BrowserAccessibility : public ui::AXPlatformNodeDelegate {
   // caller.
   static BrowserAccessibility* Create();
 
-  virtual ~BrowserAccessibility();
+  ~BrowserAccessibility() override;
 
   // Called only once, immediately after construction. The constructor doesn't
   // take any arguments because in the Windows subclass we use a special
@@ -116,11 +116,11 @@ class CONTENT_EXPORT BrowserAccessibility : public ui::AXPlatformNodeDelegate {
 
   // Returns the number of children of this object, or 0 if PlatformIsLeaf()
   // returns true.
-  uint32_t PlatformChildCount() const;
+  virtual uint32_t PlatformChildCount() const;
 
   // Return a pointer to the child at the given index, or NULL for an
   // invalid index. Returns NULL if PlatformIsLeaf() returns true.
-  BrowserAccessibility* PlatformGetChild(uint32_t child_index) const;
+  virtual BrowserAccessibility* PlatformGetChild(uint32_t child_index) const;
 
   // Returns true if an ancestor of this node (not including itself) is a
   // leaf node, meaning that this node is not actually exposed to the
@@ -341,6 +341,15 @@ class CONTENT_EXPORT BrowserAccessibility : public ui::AXPlatformNodeDelegate {
   ui::AXPlatformNode* GetFromNodeID(int32_t id) override;
   int GetIndexInParent() const override;
   gfx::AcceleratedWidget GetTargetForNativeAccessibilityEvent() override;
+  int GetTableRowCount() const override;
+  int GetTableColCount() const override;
+  std::vector<int32_t> GetColHeaderNodeIds() const override;
+  std::vector<int32_t> GetColHeaderNodeIds(int32_t col_index) const override;
+  std::vector<int32_t> GetRowHeaderNodeIds() const override;
+  std::vector<int32_t> GetRowHeaderNodeIds(int32_t row_index) const override;
+  int32_t GetCellId(int32_t row_index, int32_t col_index) const override;
+  int32_t CellIdToIndex(int32_t cell_id) const override;
+  int32_t CellIndexToId(int32_t cell_index) const override;
   bool AccessibilityPerformAction(const ui::AXActionData& data) override;
   bool ShouldIgnoreHoveredStateForTesting() override;
   bool IsOffscreen() const override;

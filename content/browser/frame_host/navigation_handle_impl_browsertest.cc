@@ -6,11 +6,14 @@
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/weak_ptr.h"
 #include "base/strings/stringprintf.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "content/browser/frame_host/debug_urls.h"
 #include "content/browser/frame_host/navigation_handle_impl.h"
 #include "content/browser/frame_host/navigation_request.h"
 #include "content/browser/web_contents/web_contents_impl.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_throttle.h"
+#include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/common/bindings_policy.h"
@@ -23,6 +26,7 @@
 #include "content/public/test/content_browser_test.h"
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/navigation_handle_observer.h"
+#include "content/public/test/test_frame_navigation_observer.h"
 #include "content/public/test/test_navigation_observer.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
@@ -31,6 +35,7 @@
 #include "content/test/content_browser_test_utils_internal.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/url_request/url_request_failed_job.h"
+#include "testing/gmock/include/gmock/gmock.h"
 #include "ui/base/page_transition_types.h"
 #include "url/url_constants.h"
 
@@ -1650,8 +1655,8 @@ class PlzNavigateNavigationHandleImplBrowserTest : public ContentBrowserTest {
 };
 
 // Test to verify that error pages caused by NavigationThrottle blocking a
-// request from being made are properly committed in the original process
-// that requested the navigation.
+// request in the main frame from being made are properly committed in a
+// separate error page process.
 IN_PROC_BROWSER_TEST_F(PlzNavigateNavigationHandleImplBrowserTest,
                        ErrorPageBlockedNavigation) {
   SetupCrossSiteRedirector(embedded_test_server());
@@ -1676,8 +1681,8 @@ IN_PROC_BROWSER_TEST_F(PlzNavigateNavigationHandleImplBrowserTest,
       NavigationThrottle::PROCEED);
 
   {
-    // A blocked, renderer-initiated navigation should commit an error page
-    // in the process that originated the navigation.
+    // A blocked, renderer-initiated navigation in the main frame should commit
+    // an error page in a new process.
     NavigationHandleObserver observer(shell()->web_contents(), blocked_url);
     TestNavigationObserver navigation_observer(shell()->web_contents(), 1);
     EXPECT_TRUE(
@@ -1686,27 +1691,25 @@ IN_PROC_BROWSER_TEST_F(PlzNavigateNavigationHandleImplBrowserTest,
     navigation_observer.Wait();
     EXPECT_TRUE(observer.has_committed());
     EXPECT_TRUE(observer.is_error());
-    EXPECT_EQ(site_instance,
-              shell()->web_contents()->GetMainFrame()->GetSiteInstance());
+    if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(true)) {
+      EXPECT_NE(site_instance,
+                shell()->web_contents()->GetMainFrame()->GetSiteInstance());
+      EXPECT_EQ(kUnreachableWebDataURL, shell()
+                                            ->web_contents()
+                                            ->GetMainFrame()
+                                            ->GetSiteInstance()
+                                            ->GetSiteURL());
+    } else {
+      EXPECT_EQ(site_instance,
+                shell()->web_contents()->GetMainFrame()->GetSiteInstance());
+    }
   }
 
   {
-    // Reloading the blocked document from the renderer process should not
-    // transfer processes.
-    NavigationHandleObserver observer(shell()->web_contents(), blocked_url);
-    TestNavigationObserver navigation_observer(shell()->web_contents(), 1);
-
-    EXPECT_TRUE(ExecuteScript(shell(), "location.reload()"));
-    navigation_observer.Wait();
-    EXPECT_TRUE(observer.has_committed());
-    EXPECT_TRUE(observer.is_error());
-    EXPECT_EQ(site_instance,
-              shell()->web_contents()->GetMainFrame()->GetSiteInstance());
-  }
-
-  {
-    // Reloading the blocked document from the browser process ends up
-    // transferring processes in --site-per-process.
+    // Reloading the blocked document from the browser process still ends up
+    // in the error page process.
+    int process_id =
+        shell()->web_contents()->GetMainFrame()->GetProcess()->GetID();
     NavigationHandleObserver observer(shell()->web_contents(), blocked_url);
     TestNavigationObserver navigation_observer(shell()->web_contents(), 1);
 
@@ -1714,7 +1717,15 @@ IN_PROC_BROWSER_TEST_F(PlzNavigateNavigationHandleImplBrowserTest,
     navigation_observer.Wait();
     EXPECT_TRUE(observer.has_committed());
     EXPECT_TRUE(observer.is_error());
-    if (AreAllSitesIsolatedForTesting()) {
+    if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(true)) {
+      EXPECT_EQ(kUnreachableWebDataURL, shell()
+                                            ->web_contents()
+                                            ->GetMainFrame()
+                                            ->GetSiteInstance()
+                                            ->GetSiteURL());
+      EXPECT_EQ(process_id,
+                shell()->web_contents()->GetMainFrame()->GetProcess()->GetID());
+    } else if (AreAllSitesIsolatedForTesting()) {
       EXPECT_NE(site_instance,
                 shell()->web_contents()->GetMainFrame()->GetSiteInstance());
     } else {
@@ -1757,6 +1768,48 @@ IN_PROC_BROWSER_TEST_F(PlzNavigateNavigationHandleImplBrowserTest,
     EXPECT_TRUE(observer.is_error());
     EXPECT_NE(site_instance,
               shell()->web_contents()->GetMainFrame()->GetSiteInstance());
+    if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(true)) {
+      EXPECT_EQ(kUnreachableWebDataURL, shell()
+                                            ->web_contents()
+                                            ->GetMainFrame()
+                                            ->GetSiteInstance()
+                                            ->GetSiteURL());
+    }
+  }
+
+  installer.reset();
+
+  {
+    // A blocked subframe navigation should commit an error page in the same
+    // process.
+    EXPECT_TRUE(NavigateToURL(shell(), start_url));
+    const std::string javascript =
+        "var i = document.createElement('iframe');"
+        "i.src = '" +
+        blocked_url.spec() +
+        "';"
+        "document.body.appendChild(i);";
+
+    installer = std::make_unique<TestNavigationThrottleInstaller>(
+        shell()->web_contents(), NavigationThrottle::BLOCK_REQUEST,
+        NavigationThrottle::PROCEED, NavigationThrottle::PROCEED,
+        NavigationThrottle::PROCEED);
+
+    content::RenderFrameHost* rfh = shell()->web_contents()->GetMainFrame();
+    TestNavigationObserver navigation_observer(shell()->web_contents(), 1);
+    ASSERT_TRUE(content::ExecuteScript(rfh, javascript));
+    navigation_observer.Wait();
+
+    FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                              ->GetFrameTree()
+                              ->root();
+    ASSERT_EQ(1u, root->child_count());
+    FrameTreeNode* child = root->child_at(0u);
+
+    EXPECT_EQ(root->current_frame_host()->GetSiteInstance(),
+              child->current_frame_host()->GetSiteInstance());
+    EXPECT_NE(kUnreachableWebDataURL,
+              child->current_frame_host()->GetSiteInstance()->GetSiteURL());
   }
 }
 
@@ -1791,6 +1844,13 @@ IN_PROC_BROWSER_TEST_F(PlzNavigateNavigationHandleImplBrowserTest,
     EXPECT_TRUE(observer.is_error());
     EXPECT_NE(site_instance,
               shell()->web_contents()->GetMainFrame()->GetSiteInstance());
+    if (SiteIsolationPolicy::IsErrorPageIsolationEnabled(true)) {
+      EXPECT_EQ(kUnreachableWebDataURL, shell()
+                                            ->web_contents()
+                                            ->GetMainFrame()
+                                            ->GetSiteInstance()
+                                            ->GetSiteURL());
+    }
   }
 }
 
@@ -1838,26 +1898,20 @@ IN_PROC_BROWSER_TEST_F(NavigationHandleImplBrowserTest,
   GURL url(embedded_test_server()->GetURL("/title1.html"));
   EXPECT_TRUE(NavigateToURL(shell(), url));
 
-  const struct {
-    const GURL renderer_debug_url;
-    const net::Error error_code;
-  } kTestCases[] = {
-      {GURL("javascript:window.alert('hello')"), net::ERR_ABORTED},
-      {GURL(kChromeUIBadCastCrashURL), net::ERR_UNSAFE_REDIRECT},
-      {GURL(kChromeUICrashURL), net::ERR_UNSAFE_REDIRECT},
-      {GURL(kChromeUIDumpURL), net::ERR_UNSAFE_REDIRECT},
-      {GURL(kChromeUIKillURL), net::ERR_UNSAFE_REDIRECT},
-      {GURL(kChromeUIHangURL), net::ERR_UNSAFE_REDIRECT},
-      {GURL(kChromeUIShorthangURL), net::ERR_UNSAFE_REDIRECT},
-      {GURL(kChromeUIMemoryExhaustURL), net::ERR_UNSAFE_REDIRECT},
-  };
+  const GURL kTestUrls[] = {GURL("javascript:window.alert('hello')"),
+                            GURL(kChromeUIBadCastCrashURL),
+                            GURL(kChromeUICrashURL),
+                            GURL(kChromeUIDumpURL),
+                            GURL(kChromeUIKillURL),
+                            GURL(kChromeUIHangURL),
+                            GURL(kChromeUIShorthangURL),
+                            GURL(kChromeUIMemoryExhaustURL)};
 
-  for (const auto& test_case : kTestCases) {
-    SCOPED_TRACE(testing::Message()
-                 << "renderer_debug_url = " << test_case.renderer_debug_url);
+  for (const auto& test_url : kTestUrls) {
+    SCOPED_TRACE(testing::Message() << "renderer_debug_url = " << test_url);
 
-    GURL redirecting_url = embedded_test_server()->GetURL(
-        "/server-redirect?" + test_case.renderer_debug_url.spec());
+    GURL redirecting_url =
+        embedded_test_server()->GetURL("/server-redirect?" + test_url.spec());
 
     NavigationHandleObserver observer(shell()->web_contents(), redirecting_url);
     NavigationLogger logger(shell()->web_contents());
@@ -1865,7 +1919,7 @@ IN_PROC_BROWSER_TEST_F(NavigationHandleImplBrowserTest,
     // Try to navigate to the url. The navigation should be canceled and the
     // NavigationHandle should have the right error code.
     EXPECT_FALSE(NavigateToURL(shell(), redirecting_url));
-    EXPECT_EQ(test_case.error_code, observer.net_error_code());
+    EXPECT_EQ(net::ERR_UNSAFE_REDIRECT, observer.net_error_code());
 
     // Both WebContentsObserver::{DidStartNavigation, DidFinishNavigation}
     // are called, but no WebContentsObserver::DidRedirectNavigation.
@@ -1984,6 +2038,234 @@ IN_PROC_BROWSER_TEST_F(NavigationHandleImplBrowserTest,
         EXPECT_EQ(iframe_url_final, root->child_at(0u)->current_url());
       }
     }
+  }
+}
+
+IN_PROC_BROWSER_TEST_F(NavigationHandleImplBrowserTest, StartToCommitMetrics) {
+  enum class FrameType {
+    kMain,
+    kSub,
+  };
+  enum class ProcessType {
+    kCross,
+    kSame,
+  };
+  enum class TransitionType {
+    kNew,
+    kReload,
+    kBackForward,
+  };
+
+  // Uses the provided ProcessType, FrameType, and TransitionType expected for
+  // this navigation to generate all combinations of Navigation.StartToCommit
+  // metrics.
+  auto check_navigation = [](const base::HistogramTester& histograms,
+                             ProcessType process_type, FrameType frame_type,
+                             TransitionType transition_type) {
+    const std::map<FrameType, std::string> kFrameSuffixes = {
+        {FrameType::kMain, ".MainFrame"}, {FrameType::kSub, ".Subframe"}};
+    const std::map<ProcessType, std::string> kProcessSuffixes = {
+        {ProcessType::kCross, ".CrossProcess"},
+        {ProcessType::kSame, ".SameProcess"}};
+    const std::map<TransitionType, std::string> kTransitionSuffixes = {
+        {TransitionType::kNew, ".NewNavigation"},
+        {TransitionType::kReload, ".Reload"},
+        {TransitionType::kBackForward, ".BackForward"},
+    };
+
+    // Add the suffix to all existing histogram names, and append the results to
+    // |names|.
+    std::vector<std::string> names{"Navigation.StartToCommit"};
+    auto add_suffix = [&names](std::string suffix) {
+      size_t original_size = names.size();
+      for (size_t i = 0; i < original_size; i++) {
+        names.push_back(names[i] + suffix);
+      }
+    };
+    add_suffix(kProcessSuffixes.at(process_type));
+    add_suffix(kFrameSuffixes.at(frame_type));
+    add_suffix(kTransitionSuffixes.at(transition_type));
+
+    // Check that all generated histogram names are logged exactly once.
+    for (const auto& name : names) {
+      histograms.ExpectTotalCount(name, 1);
+    }
+
+    // Check that no additional histograms with the StartToCommit prefix were
+    // logged.
+    base::HistogramTester::CountsMap counts =
+        histograms.GetTotalCountsForPrefix("Navigation.StartToCommit");
+    int32_t total_counts = 0;
+    for (const auto& it : counts) {
+      total_counts += it.second;
+    }
+    EXPECT_EQ(static_cast<int32_t>(names.size()), total_counts);
+  };
+
+  // Main frame tests.
+  IsolateAllSitesForTesting(base::CommandLine::ForCurrentProcess());
+  NavigateToURL(shell(), embedded_test_server()->GetURL("/hello.html"));
+  {
+    base::HistogramTester histograms;
+    GURL url(embedded_test_server()->GetURL("/title1.html"));
+    NavigateToURL(shell(), url);
+    check_navigation(histograms, ProcessType::kSame, FrameType::kMain,
+                     TransitionType::kNew);
+  }
+  {
+    base::HistogramTester histograms;
+    GURL url(embedded_test_server()->GetURL("b.com", "/title1.html"));
+    NavigateToURL(shell(), url);
+    check_navigation(histograms, ProcessType::kCross, FrameType::kMain,
+                     TransitionType::kNew);
+  }
+  {
+    base::HistogramTester histograms;
+    ReloadBlockUntilNavigationsComplete(shell(), 1);
+    check_navigation(histograms, ProcessType::kSame, FrameType::kMain,
+                     TransitionType::kReload);
+  }
+  {
+    base::HistogramTester histograms;
+    TestNavigationObserver nav_observer(shell()->web_contents());
+    shell()->GoBackOrForward(-1);
+    nav_observer.Wait();
+    check_navigation(histograms, ProcessType::kCross, FrameType::kMain,
+                     TransitionType::kBackForward);
+  }
+  {
+    base::HistogramTester histograms;
+    TestNavigationObserver nav_observer(shell()->web_contents());
+    shell()->GoBackOrForward(-1);
+    nav_observer.Wait();
+    check_navigation(histograms, ProcessType::kSame, FrameType::kMain,
+                     TransitionType::kBackForward);
+  }
+  {
+    base::HistogramTester histograms;
+    NavigateToURL(shell(), GURL(url::kAboutBlankURL));
+    check_navigation(histograms, ProcessType::kSame, FrameType::kMain,
+                     TransitionType::kNew);
+  }
+
+  // Subframe tests. All of these tests just navigate a frame within
+  // page_with_iframe.html.
+  EXPECT_TRUE(NavigateToURL(
+      shell(), embedded_test_server()->GetURL("/page_with_iframe.html")));
+  FrameTreeNode* first_child =
+      static_cast<WebContentsImpl*>(shell()->web_contents())
+          ->GetFrameTree()
+          ->root()
+          ->child_at(0);
+  {
+    base::HistogramTester histograms;
+    EXPECT_TRUE(NavigateToURLFromRenderer(
+        first_child, embedded_test_server()->GetURL("c.com", "/title1.html")));
+    check_navigation(histograms, ProcessType::kCross, FrameType::kSub,
+                     TransitionType::kNew);
+  }
+  {
+    base::HistogramTester histograms;
+    TestFrameNavigationObserver nav_observer(first_child);
+    EXPECT_TRUE(ExecuteScript(first_child, "location.reload();"));
+    nav_observer.Wait();
+    // location.reload triggers the PAGE_TRANSITION_AUTO_SUBFRAME which
+    // corresponds to NewNavigation.
+    check_navigation(histograms, ProcessType::kSame, FrameType::kSub,
+                     TransitionType::kNew);
+  }
+  {
+    base::HistogramTester histograms;
+    shell()->GoBackOrForward(-1);
+    EXPECT_TRUE(WaitForLoadStop(shell()->web_contents()));
+    // History back triggers the PAGE_TRANSITION_AUTO_SUBFRAME which corresponds
+    // to NewNavigation.
+    check_navigation(histograms, ProcessType::kCross, FrameType::kSub,
+                     TransitionType::kNew);
+  }
+  EXPECT_TRUE(NavigateToURLFromRenderer(
+      first_child, embedded_test_server()->GetURL("/simple_links.html")));
+  {
+    base::HistogramTester histograms;
+    TestFrameNavigationObserver nav_observer(first_child);
+    EXPECT_TRUE(ExecuteScript(first_child, "clickSameSiteLink();"));
+    nav_observer.Wait();
+    // Link clicking will trigger PAGE_TRANSITION_MANUAL_SUBFRAME which
+    // corresponds to NewNavigation.
+    check_navigation(histograms, ProcessType::kSame, FrameType::kSub,
+                     TransitionType::kNew);
+  }
+}
+
+// Verify that the TimeToReadyToCommit metrics are correctly logged for
+// SameProcess vs CrossProcess as well as MainFrame vs Subframe cases.
+IN_PROC_BROWSER_TEST_F(NavigationHandleImplBrowserTest,
+                       TimeToReadyToCommitMetrics) {
+  EXPECT_TRUE(
+      NavigateToURL(shell(), embedded_test_server()->GetURL("/hello.html")));
+
+  // Check that only SameProcess version is logged and not CrossProcess.
+  {
+    base::HistogramTester histograms;
+    GURL url(embedded_test_server()->GetURL("/title1.html"));
+    EXPECT_TRUE(NavigateToURL(shell(), url));
+
+    base::HistogramTester::CountsMap expected_counts = {
+        {"Navigation.TimeToReadyToCommit.MainFrame", 1},
+        {"Navigation.TimeToReadyToCommit.MainFrame.NewNavigation", 1},
+        {"Navigation.TimeToReadyToCommit.NewNavigation", 1},
+        {"Navigation.TimeToReadyToCommit.SameProcess", 1},
+        {"Navigation.TimeToReadyToCommit.SameProcess.NewNavigation", 1}};
+    EXPECT_THAT(
+        histograms.GetTotalCountsForPrefix("Navigation.TimeToReadyToCommit."),
+        testing::ContainerEq(expected_counts));
+  }
+
+  // Navigate cross-process and ensure that only CrossProcess is logged.
+  {
+    base::HistogramTester histograms;
+    GURL url(embedded_test_server()->GetURL("a.com", "/title2.html"));
+    EXPECT_TRUE(NavigateToURL(shell(), url));
+
+    base::HistogramTester::CountsMap expected_counts = {
+        {"Navigation.TimeToReadyToCommit.MainFrame", 1},
+        {"Navigation.TimeToReadyToCommit.MainFrame.NewNavigation", 1},
+        {"Navigation.TimeToReadyToCommit.NewNavigation", 1},
+        {"Navigation.TimeToReadyToCommit.CrossProcess", 1},
+        {"Navigation.TimeToReadyToCommit.CrossProcess.NewNavigation", 1}};
+    EXPECT_THAT(
+        histograms.GetTotalCountsForPrefix("Navigation.TimeToReadyToCommit."),
+        testing::ContainerEq(expected_counts));
+  }
+
+  // Add a new subframe.
+  FrameTreeNode* root = static_cast<WebContentsImpl*>(shell()->web_contents())
+                            ->GetFrameTree()
+                            ->root();
+  EXPECT_TRUE(ExecuteScript(
+      root, "document.body.appendChild(document.createElement('iframe'));"));
+
+  // Navigate subframe cross-site and ensure Subframe metrics are logged.
+  {
+    base::HistogramTester histograms;
+    GURL url(embedded_test_server()->GetURL("b.com", "/title3.html"));
+    NavigateFrameToURL(root->child_at(0), url);
+
+    std::string navigation_type =
+        AreAllSitesIsolatedForTesting() ? "CrossProcess" : "SameProcess";
+    base::HistogramTester::CountsMap expected_counts = {
+        {"Navigation.TimeToReadyToCommit.Subframe", 1},
+        {"Navigation.TimeToReadyToCommit.Subframe.NewNavigation", 1},
+        {"Navigation.TimeToReadyToCommit.NewNavigation", 1},
+        {base::StringPrintf("Navigation.TimeToReadyToCommit.%s",
+                            navigation_type.c_str()),
+         1},
+        {base::StringPrintf("Navigation.TimeToReadyToCommit.%s.NewNavigation",
+                            navigation_type.c_str()),
+         1}};
+    EXPECT_THAT(
+        histograms.GetTotalCountsForPrefix("Navigation.TimeToReadyToCommit."),
+        testing::ContainerEq(expected_counts));
   }
 }
 

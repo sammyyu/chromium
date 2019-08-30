@@ -39,7 +39,7 @@ const char kPreconnectMode[] = "preconnect";
 const char kNoPreconnectMode[] = "no-preconnect";
 
 const base::Feature kSpeculativePreconnectFeature{
-    kSpeculativePreconnectFeatureName, base::FEATURE_DISABLED_BY_DEFAULT};
+    kSpeculativePreconnectFeatureName, base::FEATURE_ENABLED_BY_DEFAULT};
 
 bool MaybeEnableSpeculativePreconnect(LoadingPredictorConfig* config) {
   if (!base::FeatureList::IsEnabled(kSpeculativePreconnectFeature))
@@ -47,6 +47,9 @@ bool MaybeEnableSpeculativePreconnect(LoadingPredictorConfig* config) {
 
   std::string mode_value = base::GetFieldTrialParamValueByFeature(
       kSpeculativePreconnectFeature, kModeParamName);
+  if (mode_value.empty())
+    mode_value = kPreconnectMode;
+
   if (mode_value == kLearningMode) {
     if (config) {
       config->mode |= LoadingPredictorConfig::LEARNING;
@@ -96,7 +99,8 @@ LoadingPredictorConfig::LoadingPredictorConfig()
       max_consecutive_misses(3),
       max_redirect_consecutive_misses(5),
       is_origin_learning_enabled(false),
-      should_disable_other_preconnects(false) {}
+      should_disable_other_preconnects(false),
+      flush_data_to_disk_delay_seconds(30) {}
 
 LoadingPredictorConfig::LoadingPredictorConfig(
     const LoadingPredictorConfig& other) = default;

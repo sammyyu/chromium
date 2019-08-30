@@ -84,9 +84,7 @@ class Surface final : public ui::PropertyHandler {
   // Request notification when the next frame is displayed. Useful for
   // throttling redrawing operations, and driving animations.
   using PresentationCallback =
-      base::Callback<void(base::TimeTicks presentation_time,
-                          base::TimeDelta refresh,
-                          uint32_t flags)>;
+      base::Callback<void(const gfx::PresentationFeedback&)>;
   void RequestPresentationCallback(const PresentationCallback& callback);
 
   // This sets the region of the surface that contains opaque content.
@@ -144,6 +142,12 @@ class Surface final : public ui::PropertyHandler {
 
   // Request that surface should use a specific set of frame colors.
   void SetFrameColors(SkColor active_color, SkColor inactive_color);
+
+  // Request that surface should have a specific startup ID string.
+  void SetStartupId(const char* startup_id);
+
+  // Request that surface should have a specific application ID string.
+  void SetApplicationId(const char* application_id);
 
   // Request "parent" for surface.
   void SetParent(Surface* parent, const gfx::Point& position);
@@ -242,8 +246,8 @@ class Surface final : public ui::PropertyHandler {
     State();
     ~State();
 
-    bool operator==(const State& other);
-    bool operator!=(const State& other) { return !(*this == other); }
+    bool operator==(const State& other) const;
+    bool operator!=(const State& other) const { return !(*this == other); }
 
     cc::Region opaque_region;
     base::Optional<cc::Region> input_region;

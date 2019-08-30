@@ -12,7 +12,7 @@
 #include "base/macros.h"
 #include "gin/object_template_builder.h"
 #include "gin/wrappable.h"
-#include "third_party/WebKit/public/web/WebAXObject.h"
+#include "third_party/blink/public/web/web_ax_object.h"
 #include "v8/include/v8-util.h"
 #include "v8/include/v8.h"
 
@@ -112,7 +112,6 @@ class WebAXObjectProxy : public gin::Wrappable<WebAXObjectProxy> {
   bool IsVisible();
   bool IsOffScreen();
   bool IsCollapsed();
-  bool HasPopup();
   bool IsValid();
   bool IsReadOnly();
   std::string Restriction();
@@ -125,6 +124,7 @@ class WebAXObjectProxy : public gin::Wrappable<WebAXObjectProxy> {
   float FontSize();
   std::string Autocomplete();
   std::string Current();
+  std::string HasPopup();
   std::string Invalid();
   std::string KeyShortcuts();
   std::string Live();

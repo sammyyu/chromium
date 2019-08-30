@@ -8,6 +8,7 @@
 #include <memory>
 #include <string>
 
+#include "ash/display/screen_orientation_controller.h"
 #include "ash/display/window_tree_host_manager.h"
 #include "ash/wm/client_controlled_state.h"
 #include "base/callback.h"
@@ -18,6 +19,10 @@
 #include "ui/display/display_observer.h"
 
 namespace ash {
+class CustomFrameViewAsh;
+class ImmersiveFullscreenController;
+class WideFrameView;
+
 namespace mojom {
 enum class WindowPinType;
 }
@@ -72,6 +77,9 @@ class ClientControlledShellSurface
   // Called when the client was snapped to right.
   void SetSnappedToRight();
 
+  // Called when the client was set to PIP.
+  void SetPip();
+
   // Set the callback to run when the surface state changed.
   using StateChangedCallback =
       base::RepeatingCallback<void(ash::mojom::WindowStateType old_state_type,
@@ -92,6 +100,10 @@ class ClientControlledShellSurface
   void set_bounds_changed_callback(
       const BoundsChangedCallback& bounds_changed_callback) {
     bounds_changed_callback_ = bounds_changed_callback;
+  }
+
+  bool has_bounds_changed_callback() const {
+    return static_cast<bool>(bounds_changed_callback_);
   }
 
   // Set the callback to run when the drag operation started.
@@ -143,24 +155,41 @@ class ClientControlledShellSurface
                            ash::mojom::WindowStateType requested_state,
                            int64_t display_id,
                            const gfx::Rect& bounds,
-                           bool is_resize,
                            int drag_bounds_change);
 
   // Sends the window drag events to client.
   void OnDragStarted(int component);
   void OnDragFinished(bool cancel, const gfx::Point& location);
 
-  void StartResize(int component);
-
-  // Starts the move-by-drag operation.
-  void StartMove(const gfx::Point& location);
+  // Starts the drag operation.
+  void StartDrag(int component, const gfx::Point& location);
 
   // Set if the surface can be maximzied.
   void SetCanMaximize(bool can_maximize);
 
+  // Update the auto hide frame state.
+  void UpdateAutoHideFrame();
+
+  // Set the frame button state. The |visible_button_mask| and
+  // |enabled_button_mask| is a bit mask whose position is defined
+  // in ash::CaptionButtonIcon enum.
+  void SetFrameButtons(uint32_t frame_visible_button_mask,
+                       uint32_t frame_enabled_button_mask);
+
+  // Set the extra title for the surface.
+  void SetExtraTitle(const base::string16& extra_title);
+
+  // Set specific orientation lock for this surface. When this surface is in
+  // foreground and the display can be rotated (e.g. tablet mode), apply the
+  // behavior defined by |orientation_lock|. See more details in
+  // //ash/display/screen_orientation_controller.h.
+  void SetOrientationLock(ash::OrientationLockType orientation_lock);
+
   // Overridden from SurfaceDelegate:
   void OnSurfaceCommit() override;
   bool IsInputEnabled(Surface* surface) const override;
+  void OnSetFrame(SurfaceFrameType type) override;
+  void OnSetFrameColors(SkColor active_color, SkColor inactive_color) override;
 
   // Overridden from views::WidgetDelegate:
   bool CanMaximize() const override;
@@ -174,6 +203,7 @@ class ClientControlledShellSurface
 
   // Overridden from views::View:
   gfx::Size GetMaximumSize() const override;
+  void OnDeviceScaleFactorChanged(float old_dsf, float new_dsf) override;
 
   // Overridden from aura::WindowObserver:
   void OnWindowBoundsChanged(aura::Window* window,
@@ -200,6 +230,8 @@ class ClientControlledShellSurface
   static void SetClientControlledStateDelegateFactoryForTest(
       const DelegateFactoryCallback& callback);
 
+  ash::WideFrameView* wide_frame_for_test() { return wide_frame_; }
+
  private:
   class ScopedSetBoundsLocally;
   class ScopedLockedToRoot;
@@ -209,15 +241,19 @@ class ClientControlledShellSurface
   gfx::Rect GetShadowBounds() const override;
   void InitializeWindowState(ash::wm::WindowState* window_state) override;
   float GetScale() const override;
-  aura::Window* GetDragWindow() override;
-  std::unique_ptr<ash::WindowResizer> CreateWindowResizer(
-      aura::Window* window,
-      int component) override;
-  bool OnMouseDragged(const ui::MouseEvent& event) override;
-  gfx::Point GetWidgetOrigin() const override;
+  gfx::Rect GetWidgetBounds() const override;
   gfx::Point GetSurfaceOrigin() const override;
 
+  // Update frame status. This may create (or destroy) a wide frame
+  // that spans the full work area width if the surface didn't cover
+  // the work area.
+  void UpdateFrame();
+
+  void UpdateCaptionButtonModel();
+
   void UpdateBackdrop();
+
+  void UpdateFrameWidth();
 
   void AttemptToStartDrag(int component, const gfx::Point& location);
 
@@ -228,6 +264,8 @@ class ClientControlledShellSurface
   void EnsureCompositorIsLockedForOrientationChange();
 
   ash::wm::WindowState* GetWindowState();
+  ash::CustomFrameViewAsh* GetFrameView();
+  const ash::CustomFrameViewAsh* GetFrameView() const;
 
   GeometryChangedCallback geometry_changed_callback_;
   int64_t primary_display_id_;
@@ -237,6 +275,9 @@ class ClientControlledShellSurface
 
   double scale_ = 1.0;
   double pending_scale_ = 1.0;
+
+  uint32_t frame_visible_button_mask_ = 0;
+  uint32_t frame_enabled_button_mask_ = 0;
 
   StateChangedCallback state_changed_callback_;
   BoundsChangedCallback bounds_changed_callback_;
@@ -255,7 +296,17 @@ class ClientControlledShellSurface
 
   bool can_maximize_ = true;
 
+  std::unique_ptr<ash::ImmersiveFullscreenController>
+      immersive_fullscreen_controller_;
+
+  ash::WideFrameView* wide_frame_ = nullptr;
+
   std::unique_ptr<ui::CompositorLock> orientation_compositor_lock_;
+
+  // The orientation to be applied when widget is being created. Only set when
+  // widget is not created yet orientation lock is being set.
+  ash::OrientationLockType initial_orientation_lock_ =
+      ash::OrientationLockType::kAny;
 
   DISALLOW_COPY_AND_ASSIGN(ClientControlledShellSurface);
 };

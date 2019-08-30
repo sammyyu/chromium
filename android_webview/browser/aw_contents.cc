@@ -250,7 +250,7 @@ AwContents::AwContents(std::unique_ptr<WebContents> web_contents)
     compositor_id.process_id =
         web_contents_->GetRenderViewHost()->GetProcess()->GetID();
     compositor_id.routing_id =
-        web_contents_->GetRenderViewHost()->GetRoutingID();
+        web_contents_->GetRenderViewHost()->GetWidget()->GetRoutingID();
   }
 
   browser_view_renderer_.SetActiveCompositorID(compositor_id);
@@ -478,7 +478,7 @@ void AwContents::DocumentHasImages(JNIEnv* env,
   ScopedJavaGlobalRef<jobject> j_message;
   j_message.Reset(env, message);
   render_view_host_ext_->DocumentHasImages(
-      base::Bind(&DocumentHasImagesCallback, j_message));
+      base::BindOnce(&DocumentHasImagesCallback, j_message));
 }
 
 namespace {
@@ -500,8 +500,8 @@ void AwContents::GenerateMHTML(JNIEnv* env,
   base::FilePath target_path(ConvertJavaStringToUTF8(env, jpath));
   web_contents_->GenerateMHTML(
       content::MHTMLGenerationParams(target_path),
-      base::Bind(&GenerateMHTMLCallback,
-                 ScopedJavaGlobalRef<jobject>(env, callback), target_path));
+      base::BindOnce(&GenerateMHTMLCallback,
+                     ScopedJavaGlobalRef<jobject>(env, callback), target_path));
 }
 
 void AwContents::CreatePdfExporter(JNIEnv* env,
@@ -573,19 +573,20 @@ void ShowGeolocationPromptHelper(const JavaObjectWeakGlobalRef& java_ref,
   if (java_ref.get(env).obj()) {
     content::BrowserThread::PostTask(
         content::BrowserThread::UI, FROM_HERE,
-        base::Bind(&ShowGeolocationPromptHelperTask, java_ref, origin));
+        base::BindOnce(&ShowGeolocationPromptHelperTask, java_ref, origin));
   }
 }
 
 }  // anonymous namespace
 
-void AwContents::ShowGeolocationPrompt(const GURL& requesting_frame,
-                                       base::Callback<void(bool)> callback) {
+void AwContents::ShowGeolocationPrompt(
+    const GURL& requesting_frame,
+    base::OnceCallback<void(bool)> callback) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
 
   GURL origin = requesting_frame.GetOrigin();
   bool show_prompt = pending_geolocation_prompts_.empty();
-  pending_geolocation_prompts_.push_back(OriginCallback(origin, callback));
+  pending_geolocation_prompts_.emplace_back(origin, std::move(callback));
   if (show_prompt) {
     ShowGeolocationPromptHelper(java_ref_, origin);
   }
@@ -604,7 +605,7 @@ void AwContents::InvokeGeolocationCallback(
   GURL callback_origin(base::android::ConvertJavaStringToUTF16(env, origin));
   if (callback_origin.GetOrigin() ==
       pending_geolocation_prompts_.front().first) {
-    pending_geolocation_prompts_.front().second.Run(value);
+    std::move(pending_geolocation_prompts_.front().second).Run(value);
     pending_geolocation_prompts_.pop_front();
     if (!pending_geolocation_prompts_.empty()) {
       ShowGeolocationPromptHelper(java_ref_,
@@ -680,10 +681,10 @@ void AwContents::PreauthorizePermission(JNIEnv* env,
 
 void AwContents::RequestProtectedMediaIdentifierPermission(
     const GURL& origin,
-    const base::Callback<void(bool)>& callback) {
+    base::OnceCallback<void(bool)> callback) {
   permission_request_handler_->SendRequest(
       std::unique_ptr<AwPermissionRequestDelegate>(new SimplePermissionRequest(
-          origin, AwPermissionRequest::ProtectedMediaId, callback)));
+          origin, AwPermissionRequest::ProtectedMediaId, std::move(callback))));
 }
 
 void AwContents::CancelProtectedMediaIdentifierPermissionRequests(
@@ -694,19 +695,19 @@ void AwContents::CancelProtectedMediaIdentifierPermissionRequests(
 
 void AwContents::RequestGeolocationPermission(
     const GURL& origin,
-    const base::Callback<void(bool)>& callback) {
+    base::OnceCallback<void(bool)> callback) {
   JNIEnv* env = AttachCurrentThread();
   ScopedJavaLocalRef<jobject> obj = java_ref_.get(env);
   if (obj.is_null())
     return;
 
   if (Java_AwContents_useLegacyGeolocationPermissionAPI(env, obj)) {
-    ShowGeolocationPrompt(origin, callback);
+    ShowGeolocationPrompt(origin, std::move(callback));
     return;
   }
   permission_request_handler_->SendRequest(
       std::unique_ptr<AwPermissionRequestDelegate>(new SimplePermissionRequest(
-          origin, AwPermissionRequest::Geolocation, callback)));
+          origin, AwPermissionRequest::Geolocation, std::move(callback))));
 }
 
 void AwContents::CancelGeolocationPermissionRequests(const GURL& origin) {
@@ -725,10 +726,10 @@ void AwContents::CancelGeolocationPermissionRequests(const GURL& origin) {
 
 void AwContents::RequestMIDISysexPermission(
     const GURL& origin,
-    const base::Callback<void(bool)>& callback) {
+    base::OnceCallback<void(bool)> callback) {
   permission_request_handler_->SendRequest(
       std::unique_ptr<AwPermissionRequestDelegate>(new SimplePermissionRequest(
-          origin, AwPermissionRequest::MIDISysex, callback)));
+          origin, AwPermissionRequest::MIDISysex, std::move(callback))));
 }
 
 void AwContents::CancelMIDISysexPermissionRequests(const GURL& origin) {
@@ -1253,9 +1254,8 @@ void AwContents::InsertVisualStateCallback(
 jint AwContents::GetEffectivePriority(
     JNIEnv* env,
     const base::android::JavaParamRef<jobject>& obj) {
-  switch (web_contents_->GetMainFrame()
-              ->GetProcess()
-              ->ComputeEffectiveImportance()) {
+  switch (
+      web_contents_->GetMainFrame()->GetProcess()->GetEffectiveImportance()) {
     case content::ChildProcessImportance::NORMAL:
       return static_cast<jint>(RendererPriority::WAIVED);
     case content::ChildProcessImportance::MODERATE:
@@ -1326,7 +1326,7 @@ void AwContents::TrimMemory(JNIEnv* env,
 void AwContents::GrantFileSchemeAccesstoChildProcess(
     JNIEnv* env,
     const JavaParamRef<jobject>& obj) {
-  content::ChildProcessSecurityPolicy::GetInstance()->GrantScheme(
+  content::ChildProcessSecurityPolicy::GetInstance()->GrantRequestScheme(
       web_contents_->GetMainFrame()->GetProcess()->GetID(), url::kFileScheme);
 }
 
@@ -1353,7 +1353,7 @@ void AwContents::RenderViewHostChanged(content::RenderViewHost* old_host,
   DCHECK(new_host);
 
   int process_id = new_host->GetProcess()->GetID();
-  int routing_id = new_host->GetRoutingID();
+  int routing_id = new_host->GetWidget()->GetRoutingID();
 
   // At this point, the current RVH may or may not contain a compositor. So
   // compositor_ may be nullptr, in which case
@@ -1390,7 +1390,8 @@ void AwContents::DidAttachInterstitialPage() {
   CompositorID compositor_id;
   RenderFrameHost* rfh = web_contents_->GetInterstitialPage()->GetMainFrame();
   compositor_id.process_id = rfh->GetProcess()->GetID();
-  compositor_id.routing_id = rfh->GetRenderViewHost()->GetRoutingID();
+  compositor_id.routing_id =
+      rfh->GetRenderViewHost()->GetWidget()->GetRoutingID();
   browser_view_renderer_.SetActiveCompositorID(compositor_id);
 }
 
@@ -1403,7 +1404,7 @@ void AwContents::DidDetachInterstitialPage() {
     compositor_id.process_id =
         web_contents_->GetRenderViewHost()->GetProcess()->GetID();
     compositor_id.routing_id =
-        web_contents_->GetRenderViewHost()->GetRoutingID();
+        web_contents_->GetRenderViewHost()->GetWidget()->GetRoutingID();
   } else {
     LOG(WARNING) << "failed setting the compositor on detaching interstitital";
   }

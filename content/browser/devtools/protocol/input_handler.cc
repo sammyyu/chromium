@@ -10,7 +10,6 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
-#include "components/viz/common/quads/compositor_frame_metadata.h"
 #include "content/browser/devtools/devtools_session.h"
 #include "content/browser/devtools/protocol/native_input_event_builder.h"
 #include "content/browser/frame_host/render_frame_host_impl.h"
@@ -20,7 +19,6 @@
 #include "content/common/input/synthetic_pinch_gesture_params.h"
 #include "content/common/input/synthetic_smooth_scroll_gesture_params.h"
 #include "content/common/input/synthetic_tap_gesture_params.h"
-#include "content/public/common/content_features.h"
 #include "ui/events/base_event_utils.h"
 #include "ui/events/blink/web_input_event_traits.h"
 #include "ui/events/gesture_detection/gesture_provider_config_helper.h"
@@ -96,10 +94,6 @@ base::TimeTicks GetEventTimeTicks(const Maybe<double>& timestamp) {
              ? base::TimeDelta::FromSecondsD(timestamp.fromJust()) +
                    base::TimeTicks::UnixEpoch()
              : base::TimeTicks::Now();
-}
-
-double GetEventTimestamp(const Maybe<double>& timestamp) {
-  return (GetEventTimeTicks(timestamp) - base::TimeTicks()).InSecondsF();
 }
 
 bool SetKeyboardEventText(blink::WebUChar* to, Maybe<std::string> from) {
@@ -290,15 +284,12 @@ class InputHandler::InputInjector
       return;
     }
 
-    if (base::FeatureList::IsEnabled(
-            features::kTouchpadAndWheelScrollLatching)) {
-      // Send a synthetic wheel event with phaseEnded to finish scrolling.
-      wheel_event->delta_x = 0;
-      wheel_event->delta_y = 0;
-      wheel_event->phase = blink::WebMouseWheelEvent::kPhaseEnded;
-      wheel_event->dispatch_type = blink::WebInputEvent::kEventNonBlocking;
-      widget_host_->ForwardWheelEvent(*wheel_event);
-    }
+    // Send a synthetic wheel event with phaseEnded to finish scrolling.
+    wheel_event->delta_x = 0;
+    wheel_event->delta_y = 0;
+    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseEnded;
+    wheel_event->dispatch_type = blink::WebInputEvent::kEventNonBlocking;
+    widget_host_->ForwardWheelEvent(*wheel_event);
   }
 
   void InjectMouseEvent(const blink::WebMouseEvent& mouse_event,
@@ -352,7 +343,7 @@ class InputHandler::InputInjector
         &DispatchTouchEventCallback::sendSuccess, std::move(callback));
     for (size_t i = 0; i < events.size(); i++) {
       widget_host_->GetTouchEmulator()->InjectTouchEvent(
-          events[i],
+          events[i], widget_host_->GetView(),
           i == events.size() - 1 ? std::move(closure) : base::OnceClosure());
     }
     MaybeSelfDestruct();
@@ -441,9 +432,8 @@ void InputHandler::Wire(UberDispatcher* dispatcher) {
   Input::Dispatcher::wire(dispatcher, this);
 }
 
-void InputHandler::OnSwapCompositorFrame(
-    const viz::CompositorFrameMetadata& frame_metadata) {
-  page_scale_factor_ = frame_metadata.page_scale_factor;
+void InputHandler::OnPageScaleFactorChanged(float page_scale_factor) {
+  page_scale_factor_ = page_scale_factor;
 }
 
 Response InputHandler::Disable() {
@@ -492,7 +482,7 @@ void InputHandler::DispatchKeyEvent(
       GetEventModifiers(modifiers.fromMaybe(blink::WebInputEvent::kNoModifiers),
                         auto_repeat.fromMaybe(false),
                         is_keypad.fromMaybe(false), location.fromMaybe(0)),
-      GetEventTimeTicks(std::move(timestamp)));
+      GetEventTimeTicks(timestamp));
 
   if (!SetKeyboardEventText(event.text, std::move(text))) {
     callback->sendFailure(Response::InvalidParams("Invalid 'text' parameter"));
@@ -576,7 +566,7 @@ void InputHandler::DispatchMouseEvent(
       maybe_modifiers.fromMaybe(blink::WebInputEvent::kNoModifiers), false,
       false, 0);
   modifiers |= button_modifiers;
-  double timestamp = GetEventTimestamp(maybe_timestamp);
+  base::TimeTicks timestamp = GetEventTimeTicks(maybe_timestamp);
 
   std::unique_ptr<blink::WebMouseEvent, ui::WebInputEventDeleter> mouse_event;
   blink::WebMouseWheelEvent* wheel_event = nullptr;
@@ -591,11 +581,8 @@ void InputHandler::DispatchMouseEvent(
     }
     wheel_event->delta_x = static_cast<float>(-delta_x.fromJust());
     wheel_event->delta_y = static_cast<float>(-delta_y.fromJust());
-    if (base::FeatureList::IsEnabled(
-            features::kTouchpadAndWheelScrollLatching)) {
-      wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
-      wheel_event->dispatch_type = blink::WebInputEvent::kBlocking;
-    }
+    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
+    wheel_event->dispatch_type = blink::WebInputEvent::kBlocking;
   } else {
     mouse_event.reset(new blink::WebMouseEvent(type, modifiers, timestamp));
   }
@@ -639,7 +626,7 @@ void InputHandler::DispatchTouchEvent(
   int modifiers = GetEventModifiers(
       maybe_modifiers.fromMaybe(blink::WebInputEvent::kNoModifiers), false,
       false, 0);
-  double timestamp = GetEventTimestamp(maybe_timestamp);
+  base::TimeTicks timestamp = GetEventTimeTicks(maybe_timestamp);
 
   if ((type == blink::WebInputEvent::kTouchStart ||
        type == blink::WebInputEvent::kTouchMove) &&
@@ -803,15 +790,12 @@ Response InputHandler::EmulateTouchFromMouseEvent(const std::string& type,
             modifiers.fromMaybe(blink::WebInputEvent::kNoModifiers), false,
             false, 0) |
             button_modifiers,
-        GetEventTimestamp(maybe_timestamp));
+        GetEventTimeTicks(maybe_timestamp));
     mouse_event = wheel_event;
     event.reset(wheel_event);
     wheel_event->delta_x = static_cast<float>(delta_x.fromJust());
     wheel_event->delta_y = static_cast<float>(delta_y.fromJust());
-    if (base::FeatureList::IsEnabled(
-            features::kTouchpadAndWheelScrollLatching)) {
-      wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
-    }
+    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseBegan;
   } else {
     mouse_event = new blink::WebMouseEvent(
         event_type,
@@ -819,7 +803,7 @@ Response InputHandler::EmulateTouchFromMouseEvent(const std::string& type,
             modifiers.fromMaybe(blink::WebInputEvent::kNoModifiers), false,
             false, 0) |
             button_modifiers,
-        GetEventTimestamp(maybe_timestamp));
+        GetEventTimeTicks(maybe_timestamp));
     event.reset(mouse_event);
   }
 
@@ -834,15 +818,12 @@ Response InputHandler::EmulateTouchFromMouseEvent(const std::string& type,
 
   if (wheel_event) {
     host_->GetRenderWidgetHost()->ForwardWheelEvent(*wheel_event);
-    if (base::FeatureList::IsEnabled(
-            features::kTouchpadAndWheelScrollLatching)) {
-      // Send a synthetic wheel event with phaseEnded to finish scrolling.
-      wheel_event->delta_x = 0;
-      wheel_event->delta_y = 0;
-      wheel_event->phase = blink::WebMouseWheelEvent::kPhaseEnded;
-      wheel_event->dispatch_type = blink::WebInputEvent::kEventNonBlocking;
-      host_->GetRenderWidgetHost()->ForwardWheelEvent(*wheel_event);
-    }
+    // Send a synthetic wheel event with phaseEnded to finish scrolling.
+    wheel_event->delta_x = 0;
+    wheel_event->delta_y = 0;
+    wheel_event->phase = blink::WebMouseWheelEvent::kPhaseEnded;
+    wheel_event->dispatch_type = blink::WebInputEvent::kEventNonBlocking;
+    host_->GetRenderWidgetHost()->ForwardWheelEvent(*wheel_event);
   } else {
     host_->GetRenderWidgetHost()->ForwardMouseEvent(*mouse_event);
   }

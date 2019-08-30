@@ -9,7 +9,6 @@
 
 #include <utility>
 
-#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
@@ -72,6 +71,8 @@ std::string AccessibilityTreeFormatterBlink::IntAttrToString(
       return ui::ToString(static_cast<ax::mojom::DefaultActionVerb>(value));
     case ax::mojom::IntAttribute::kDescriptionFrom:
       return ui::ToString(static_cast<ax::mojom::DescriptionFrom>(value));
+    case ax::mojom::IntAttribute::kHasPopup:
+      return ui::ToString(static_cast<ax::mojom::HasPopup>(value));
     case ax::mojom::IntAttribute::kInvalidState:
       return ui::ToString(static_cast<ax::mojom::InvalidState>(value));
     case ax::mojom::IntAttribute::kNameFrom:
@@ -82,6 +83,8 @@ std::string AccessibilityTreeFormatterBlink::IntAttrToString(
       return ui::ToString(static_cast<ax::mojom::SortDirection>(value));
     case ax::mojom::IntAttribute::kTextDirection:
       return ui::ToString(static_cast<ax::mojom::TextDirection>(value));
+    case ax::mojom::IntAttribute::kTextPosition:
+      return ui::ToString(static_cast<ax::mojom::TextPosition>(value));
     // No pretty printing necessary for these:
     case ax::mojom::IntAttribute::kActivedescendantId:
     case ax::mojom::IntAttribute::kAriaCellColumnIndex:
@@ -174,7 +177,7 @@ void AccessibilityTreeFormatterBlink::AddProperties(
     dict->SetString("language", language);
 
   for (int32_t state_index = static_cast<int32_t>(ax::mojom::State::kNone);
-       state_index <= static_cast<int32_t>(ax::mojom::State::kLast);
+       state_index <= static_cast<int32_t>(ax::mojom::State::kMaxValue);
        ++state_index) {
     auto state = static_cast<ax::mojom::State>(state_index);
     if (node.HasState(state))
@@ -186,7 +189,8 @@ void AccessibilityTreeFormatterBlink::AddProperties(
 
   for (int32_t attr_index =
            static_cast<int32_t>(ax::mojom::StringAttribute::kNone);
-       attr_index <= static_cast<int32_t>(ax::mojom::StringAttribute::kLast);
+       attr_index <=
+       static_cast<int32_t>(ax::mojom::StringAttribute::kMaxValue);
        ++attr_index) {
     auto attr = static_cast<ax::mojom::StringAttribute>(attr_index);
     if (attr != ax::mojom::StringAttribute::kFontFamily &&
@@ -198,7 +202,7 @@ void AccessibilityTreeFormatterBlink::AddProperties(
 
   for (int32_t attr_index =
            static_cast<int32_t>(ax::mojom::IntAttribute::kNone);
-       attr_index <= static_cast<int32_t>(ax::mojom::IntAttribute::kLast);
+       attr_index <= static_cast<int32_t>(ax::mojom::IntAttribute::kMaxValue);
        ++attr_index) {
     auto attr = static_cast<ax::mojom::IntAttribute>(attr_index);
     if (node.HasIntAttribute(attr)) {
@@ -209,16 +213,17 @@ void AccessibilityTreeFormatterBlink::AddProperties(
 
   for (int32_t attr_index =
            static_cast<int32_t>(ax::mojom::FloatAttribute::kNone);
-       attr_index <= static_cast<int32_t>(ax::mojom::FloatAttribute::kLast);
+       attr_index <= static_cast<int32_t>(ax::mojom::FloatAttribute::kMaxValue);
        ++attr_index) {
     auto attr = static_cast<ax::mojom::FloatAttribute>(attr_index);
-    if (node.HasFloatAttribute(attr) && isfinite(node.GetFloatAttribute(attr)))
+    if (node.HasFloatAttribute(attr) &&
+        std::isfinite(node.GetFloatAttribute(attr)))
       dict->SetDouble(ui::ToString(attr), node.GetFloatAttribute(attr));
   }
 
   for (int32_t attr_index =
            static_cast<int32_t>(ax::mojom::BoolAttribute::kNone);
-       attr_index <= static_cast<int32_t>(ax::mojom::BoolAttribute::kLast);
+       attr_index <= static_cast<int32_t>(ax::mojom::BoolAttribute::kMaxValue);
        ++attr_index) {
     auto attr = static_cast<ax::mojom::BoolAttribute>(attr_index);
     if (node.HasBoolAttribute(attr))
@@ -227,7 +232,8 @@ void AccessibilityTreeFormatterBlink::AddProperties(
 
   for (int32_t attr_index =
            static_cast<int32_t>(ax::mojom::IntListAttribute::kNone);
-       attr_index <= static_cast<int32_t>(ax::mojom::IntListAttribute::kLast);
+       attr_index <=
+       static_cast<int32_t>(ax::mojom::IntListAttribute::kMaxValue);
        ++attr_index) {
     auto attr = static_cast<ax::mojom::IntListAttribute>(attr_index);
     if (node.HasIntListAttribute(attr)) {
@@ -264,7 +270,7 @@ void AccessibilityTreeFormatterBlink::AddProperties(
   std::vector<std::string> actions_strings;
   for (int32_t action_index =
            static_cast<int32_t>(ax::mojom::Action::kNone) + 1;
-       action_index <= static_cast<int32_t>(ax::mojom::Action::kLast);
+       action_index <= static_cast<int32_t>(ax::mojom::Action::kMaxValue);
        ++action_index) {
     auto action = static_cast<ax::mojom::Action>(action_index);
     if (node.HasAction(action))
@@ -294,7 +300,7 @@ base::string16 AccessibilityTreeFormatterBlink::ProcessTreeForOutput(
   WriteAttribute(true, base::UTF16ToUTF8(role_value), &line);
 
   for (int state_index = static_cast<int32_t>(ax::mojom::State::kNone);
-       state_index <= static_cast<int32_t>(ax::mojom::State::kLast);
+       state_index <= static_cast<int32_t>(ax::mojom::State::kMaxValue);
        ++state_index) {
     auto state = static_cast<ax::mojom::State>(state_index);
     const base::Value* value;
@@ -343,7 +349,8 @@ base::string16 AccessibilityTreeFormatterBlink::ProcessTreeForOutput(
     WriteAttribute(false, "transform", &line);
 
   for (int attr_index = static_cast<int32_t>(ax::mojom::StringAttribute::kNone);
-       attr_index <= static_cast<int32_t>(ax::mojom::StringAttribute::kLast);
+       attr_index <=
+       static_cast<int32_t>(ax::mojom::StringAttribute::kMaxValue);
        ++attr_index) {
     auto attr = static_cast<ax::mojom::StringAttribute>(attr_index);
     std::string string_value;
@@ -356,7 +363,7 @@ base::string16 AccessibilityTreeFormatterBlink::ProcessTreeForOutput(
   }
 
   for (int attr_index = static_cast<int32_t>(ax::mojom::IntAttribute::kNone);
-       attr_index <= static_cast<int32_t>(ax::mojom::IntAttribute::kLast);
+       attr_index <= static_cast<int32_t>(ax::mojom::IntAttribute::kMaxValue);
        ++attr_index) {
     auto attr = static_cast<ax::mojom::IntAttribute>(attr_index);
     std::string string_value;
@@ -369,7 +376,7 @@ base::string16 AccessibilityTreeFormatterBlink::ProcessTreeForOutput(
   }
 
   for (int attr_index = static_cast<int32_t>(ax::mojom::BoolAttribute::kNone);
-       attr_index <= static_cast<int32_t>(ax::mojom::BoolAttribute::kLast);
+       attr_index <= static_cast<int32_t>(ax::mojom::BoolAttribute::kMaxValue);
        ++attr_index) {
     auto attr = static_cast<ax::mojom::BoolAttribute>(attr_index);
     bool bool_value;
@@ -382,7 +389,7 @@ base::string16 AccessibilityTreeFormatterBlink::ProcessTreeForOutput(
   }
 
   for (int attr_index = static_cast<int32_t>(ax::mojom::FloatAttribute::kNone);
-       attr_index <= static_cast<int32_t>(ax::mojom::FloatAttribute::kLast);
+       attr_index <= static_cast<int32_t>(ax::mojom::FloatAttribute::kMaxValue);
        ++attr_index) {
     auto attr = static_cast<ax::mojom::FloatAttribute>(attr_index);
     double float_value;
@@ -395,7 +402,8 @@ base::string16 AccessibilityTreeFormatterBlink::ProcessTreeForOutput(
 
   for (int attr_index =
            static_cast<int32_t>(ax::mojom::IntListAttribute::kNone);
-       attr_index <= static_cast<int32_t>(ax::mojom::IntListAttribute::kLast);
+       attr_index <=
+       static_cast<int32_t>(ax::mojom::IntListAttribute::kMaxValue);
        ++attr_index) {
     auto attr = static_cast<ax::mojom::IntListAttribute>(attr_index);
     const base::ListValue* value;

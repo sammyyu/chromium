@@ -8,8 +8,8 @@
 
 #include "base/bind.h"
 #include "base/callback.h"
-#include "base/files/file_util_proxy.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequenced_task_runner.h"
 #include "base/task_scheduler/post_task.h"
 #include "content/browser/renderer_host/pepper/pepper_file_ref_host.h"
 #include "content/browser/renderer_host/pepper/pepper_file_system_browser_host.h"
@@ -49,7 +49,7 @@ PepperFileIOHost::UIThreadStuff GetUIThreadStuffForInternalFileSystems(
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   RenderProcessHost* host = RenderProcessHost::FromID(render_process_id);
   if (host) {
-    stuff.resolved_render_process_id = base::GetProcId(host->GetHandle());
+    stuff.resolved_render_process_id = host->GetProcess().Pid();
     StoragePartition* storage_partition = host->GetStoragePartition();
     if (storage_partition)
       stuff.file_system_context = storage_partition->GetFileSystemContext();
@@ -62,7 +62,7 @@ base::ProcessId GetResolvedRenderProcessId(int render_process_id) {
   RenderProcessHost* host = RenderProcessHost::FromID(render_process_id);
   if (!host)
     return base::kNullProcessId;
-  return base::GetProcId(host->GetHandle());
+  return host->GetProcess().Pid();
 }
 
 bool GetPluginAllowedToCallRequestOSFileHandle(int render_process_id,
@@ -94,7 +94,7 @@ void DidOpenFile(base::WeakPtr<PepperFileIOHost> file_host,
                  base::File file,
                  base::OnceClosure on_close_callback) {
   if (file_host) {
-    callback.Run(std::move(file), std::move(on_close_callback));
+    std::move(callback).Run(std::move(file), std::move(on_close_callback));
   } else {
     task_runner->PostTaskAndReply(
         FROM_HERE, base::BindOnce(&FileCloser, std::move(file)),
@@ -295,8 +295,8 @@ void PepperFileIOHost::GotResolvedRenderProcessId(
   DCHECK_CURRENTLY_ON(BrowserThread::IO);
   resolved_render_process_id_ = resolved_render_process_id;
   file_.CreateOrOpen(path, file_flags,
-                     base::Bind(&PepperFileIOHost::OnLocalFileOpened,
-                                AsWeakPtr(), reply_context, path));
+                     base::BindOnce(&PepperFileIOHost::OnLocalFileOpened,
+                                    AsWeakPtr(), reply_context, path));
 }
 
 int32_t PepperFileIOHost::OnHostMsgTouch(
@@ -309,11 +309,9 @@ int32_t PepperFileIOHost::OnHostMsgTouch(
     return rv;
 
   if (!file_.SetTimes(
-          PPTimeToTime(last_access_time),
-          PPTimeToTime(last_modified_time),
-          base::Bind(&PepperFileIOHost::ExecutePlatformGeneralCallback,
-                     AsWeakPtr(),
-                     context->MakeReplyMessageContext()))) {
+          PPTimeToTime(last_access_time), PPTimeToTime(last_modified_time),
+          base::BindOnce(&PepperFileIOHost::ExecutePlatformGeneralCallback,
+                         AsWeakPtr(), context->MakeReplyMessageContext()))) {
     return PP_ERROR_FAILED;
   }
 
@@ -336,9 +334,8 @@ int32_t PepperFileIOHost::OnHostMsgSetLength(
 
   if (!file_.SetLength(
           length,
-          base::Bind(&PepperFileIOHost::ExecutePlatformGeneralCallback,
-                     AsWeakPtr(),
-                     context->MakeReplyMessageContext()))) {
+          base::BindOnce(&PepperFileIOHost::ExecutePlatformGeneralCallback,
+                         AsWeakPtr(), context->MakeReplyMessageContext()))) {
     return PP_ERROR_FAILED;
   }
 
@@ -354,9 +351,8 @@ int32_t PepperFileIOHost::OnHostMsgFlush(
     return rv;
 
   if (!file_.Flush(
-          base::Bind(&PepperFileIOHost::ExecutePlatformGeneralCallback,
-                     AsWeakPtr(),
-                     context->MakeReplyMessageContext()))) {
+          base::BindOnce(&PepperFileIOHost::ExecutePlatformGeneralCallback,
+                         AsWeakPtr(), context->MakeReplyMessageContext()))) {
     return PP_ERROR_FAILED;
   }
 
@@ -373,8 +369,7 @@ int32_t PepperFileIOHost::OnHostMsgClose(
   }
 
   if (file_.IsValid()) {
-    file_.Close(base::Bind(&PepperFileIOHost::DidCloseFile,
-                           AsWeakPtr()));
+    file_.Close(base::BindOnce(&PepperFileIOHost::DidCloseFile, AsWeakPtr()));
   }
   return PP_OK;
 }
@@ -519,7 +514,7 @@ bool PepperFileIOHost::AddFileToReplyContext(
   // A non-zero resource id signals NaClIPCAdapter to create a NaClQuotaDesc.
   PP_Resource quota_file_io = check_quota_ ? pp_resource() : 0;
   file_handle.set_file_handle(transit_file, open_flags, quota_file_io);
-  reply_context->params.AppendHandle(file_handle);
+  reply_context->params.AppendHandle(std::move(file_handle));
   return true;
 }
 

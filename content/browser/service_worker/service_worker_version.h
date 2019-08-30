@@ -19,7 +19,6 @@
 #include "base/containers/id_map.h"
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/observer_list.h"
 #include "base/optional.h"
@@ -30,23 +29,25 @@
 #include "base/timer/timer.h"
 #include "content/browser/service_worker/embedded_worker_instance.h"
 #include "content/browser/service_worker/embedded_worker_status.h"
+#include "content/browser/service_worker/service_worker_client_info.h"
+#include "content/browser/service_worker/service_worker_client_utils.h"
 #include "content/browser/service_worker/service_worker_context_request_handler.h"
 #include "content/browser/service_worker/service_worker_metrics.h"
+#include "content/browser/service_worker/service_worker_ping_controller.h"
 #include "content/browser/service_worker/service_worker_script_cache_map.h"
 #include "content/common/content_export.h"
 #include "content/common/service_worker/controller_service_worker.mojom.h"
-#include "content/common/service_worker/service_worker_event_dispatcher.mojom.h"
-#include "content/common/service_worker/service_worker_status_code.h"
+#include "content/common/service_worker/service_worker.mojom.h"
 #include "content/common/service_worker/service_worker_types.h"
 #include "ipc/ipc_message.h"
 #include "mojo/public/cpp/bindings/interface_ptr.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
-#include "third_party/WebKit/public/common/origin_trials/trial_token_validator.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker.mojom.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_client.mojom.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_event_status.mojom.h"
-#include "third_party/WebKit/public/platform/web_feature.mojom.h"
-#include "ui/base/mojo/window_open_disposition.mojom.h"
+#include "third_party/blink/public/common/origin_trials/trial_token_validator.h"
+#include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_client.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_event_status.mojom.h"
+#include "third_party/blink/public/platform/web_feature.mojom.h"
 #include "url/gurl.h"
 #include "url/origin.h"
 
@@ -111,7 +112,8 @@ class CONTENT_EXPORT ServiceWorkerVersion
       public base::RefCounted<ServiceWorkerVersion>,
       public EmbeddedWorkerInstance::Listener {
  public:
-  using StatusCallback = base::OnceCallback<void(ServiceWorkerStatusCode)>;
+  using StatusCallback =
+      base::OnceCallback<void(blink::ServiceWorkerStatusCode)>;
   using SimpleEventCallback =
       base::OnceCallback<void(blink::mojom::ServiceWorkerEventStatus,
                               base::Time)>;
@@ -142,7 +144,7 @@ class CONTENT_EXPORT ServiceWorkerVersion
     DOES_NOT_EXIST,
   };
 
-  class Listener {
+  class Observer {
    public:
     virtual void OnRunningStateChanged(ServiceWorkerVersion* version) {}
     virtual void OnVersionStateChanged(ServiceWorkerVersion* version) {}
@@ -160,18 +162,22 @@ class CONTENT_EXPORT ServiceWorkerVersion
                                         const base::string16& message,
                                         int line_number,
                                         const GURL& source_url) {}
+    // OnControlleeAdded/Removed are called asynchronously. It is possible the
+    // provider host identified by |client_uuid| was already destroyed when they
+    // are called.
     virtual void OnControlleeAdded(ServiceWorkerVersion* version,
-                                   ServiceWorkerProviderHost* provider_host) {}
-    virtual void OnControlleeRemoved(ServiceWorkerVersion* version,
-                                     ServiceWorkerProviderHost* provider_host) {
+                                   const std::string& client_uuid,
+                                   const ServiceWorkerClientInfo& client_info) {
     }
+    virtual void OnControlleeRemoved(ServiceWorkerVersion* version,
+                                     const std::string& client_uuid) {}
     virtual void OnNoControllees(ServiceWorkerVersion* version) {}
     virtual void OnNoWork(ServiceWorkerVersion* version) {}
     virtual void OnCachedMetadataUpdated(ServiceWorkerVersion* version,
                                          size_t size) {}
 
    protected:
-    virtual ~Listener() {}
+    virtual ~Observer() {}
   };
 
   ServiceWorkerVersion(ServiceWorkerRegistration* registration,
@@ -192,7 +198,7 @@ class CONTENT_EXPORT ServiceWorkerVersion
 
   // This status is set to EXISTS or DOES_NOT_EXIST when the install event has
   // been executed in a new version or when an installed version is loaded from
-  // the storage. When a new version is not installed yet, it is  UNKNOW.
+  // the storage. When a new version is not installed yet, it is UNKNOWN.
   FetchHandlerExistence fetch_handler_existence() const {
     return fetch_handler_existence_;
   }
@@ -261,10 +267,11 @@ class CONTENT_EXPORT ServiceWorkerVersion
   void StartUpdate();
 
   // Starts the worker if it isn't already running. Calls |callback| with
-  // SERVICE_WORKER_OK when the worker started up successfully or if it is
-  // already running. Otherwise, calls |callback| with an error code.
-  // If the worker is already running, |callback| is executed synchronously
-  // (before this method returns). |purpose| is used for UMA.
+  // blink::ServiceWorkerStatusCode::kOk when the worker started
+  // up successfully or if it is already running. Otherwise, calls |callback|
+  // with an error code. If the worker is already running, |callback| is
+  // executed synchronously (before this method returns). |purpose| is used for
+  // UMA.
   void RunAfterStartWorker(ServiceWorkerMetrics::EventType purpose,
                            StatusCallback callback);
 
@@ -286,10 +293,10 @@ class CONTENT_EXPORT ServiceWorkerVersion
 
   // Same as StartRequest, but allows the caller to specify a custom timeout for
   // the event, as well as the behavior for when the request times out.
-  // S13nServiceWorker: |timeout| and |timeout_behavior| don't have any
-  // effect. They are just ignored. Timeouts can be added to the
-  // mojom::ServiceWorkerEventDispatcher interface instead (see
-  // DispatchSyncEvent for an example).
+  //
+  // S13nServiceWorker: |timeout| and |timeout_behavior| don't have any effect.
+  // They are just ignored. Timeouts can be added to the mojom::ServiceWorker
+  // interface instead (see DispatchSyncEvent for an example).
   int StartRequestWithCustomTimeout(ServiceWorkerMetrics::EventType event_type,
                                     StatusCallback error_callback,
                                     const base::TimeDelta& timeout,
@@ -317,17 +324,19 @@ class CONTENT_EXPORT ServiceWorkerVersion
   bool FinishExternalRequest(const std::string& request_uuid);
 
   // Creates a callback that is to be used for marking simple events dispatched
-  // through the ServiceWorkerEventDispatcher as finished for the |request_id|.
+  // through mojom::ServiceWorker as finished for the |request_id|.
   // Simple event means those events expecting a response with only a status
-  // code and the dispatch time. See service_worker_event_dispatcher.mojom.
+  // code and the dispatch time. See service_worker.mojom.
   SimpleEventCallback CreateSimpleEventCallback(int request_id);
 
   // This must be called when the worker is running.
-  mojom::ServiceWorkerEventDispatcher* event_dispatcher() {
+  mojom::ServiceWorker* endpoint() {
+    DCHECK(running_status() == EmbeddedWorkerStatus::STARTING ||
+           running_status() == EmbeddedWorkerStatus::RUNNING);
     // Temporarily CHECK for debugging https://crbug.com/817981.
-    CHECK(event_dispatcher_.is_bound());
-    CHECK(event_dispatcher_.get());
-    return event_dispatcher_.get();
+    CHECK(service_worker_ptr_.is_bound());
+    CHECK(service_worker_ptr_.get());
+    return service_worker_ptr_.get();
   }
 
   // S13nServiceWorker:
@@ -345,9 +354,9 @@ class CONTENT_EXPORT ServiceWorkerVersion
     return controller_ptr_.get();
   }
 
-  // Adds and removes |provider_host| as a controllee of this ServiceWorker.
+  // Adds and removes the specified host as a controllee of this service worker.
   void AddControllee(ServiceWorkerProviderHost* provider_host);
-  void RemoveControllee(ServiceWorkerProviderHost* provider_host);
+  void RemoveControllee(const std::string& client_uuid);
 
   // Returns if it has controllee.
   bool HasControllee() const { return !controllee_map_.empty(); }
@@ -370,21 +379,21 @@ class CONTENT_EXPORT ServiceWorkerVersion
   void OnStreamResponseStarted();
   void OnStreamResponseFinished();
 
-  // Adds and removes Listeners.
-  void AddListener(Listener* listener);
-  void RemoveListener(Listener* listener);
+  // Adds and removes Observers.
+  void AddObserver(Observer* observer);
+  void RemoveObserver(Observer* observer);
 
   ServiceWorkerScriptCacheMap* script_cache_map() { return &script_cache_map_; }
   EmbeddedWorkerInstance* embedded_worker() { return embedded_worker_.get(); }
 
-  // Reports the error message to |listeners_|.
-  void ReportError(ServiceWorkerStatusCode status,
+  // Reports the error message to |observers_|.
+  void ReportError(blink::ServiceWorkerStatusCode status,
                    const std::string& status_message);
 
   void ReportForceUpdateToDevTools();
 
   // Sets the status code to pass to StartWorker callbacks if start fails.
-  void SetStartWorkerStatusCode(ServiceWorkerStatusCode status);
+  void SetStartWorkerStatusCode(blink::ServiceWorkerStatusCode status);
 
   // Sets this version's status to REDUNDANT and deletes its resources.
   void Doom();
@@ -438,7 +447,7 @@ class CONTENT_EXPORT ServiceWorkerVersion
   void SimulatePingTimeoutForTesting();
 
   // Used to allow tests to change time for testing.
-  void SetTickClockForTesting(base::TickClock* tick_clock);
+  void SetTickClockForTesting(const base::TickClock* tick_clock);
 
   // Used to allow tests to change wall clock for testing.
   void SetClockForTesting(base::Clock* clock);
@@ -478,10 +487,13 @@ class CONTENT_EXPORT ServiceWorkerVersion
 
  private:
   friend class base::RefCounted<ServiceWorkerVersion>;
+  friend class ServiceWorkerPingController;
+  friend class ServiceWorkerProviderHostTest;
   friend class ServiceWorkerReadFromCacheJobTest;
   friend class ServiceWorkerVersionBrowserTest;
   friend class service_worker_registration_unittest::
       ServiceWorkerActivationTest;
+  friend class service_worker_version_unittest::ServiceWorkerVersionTest;
 
   FRIEND_TEST_ALL_PREFIXES(service_worker_controllee_request_handler_unittest::
                                ServiceWorkerControlleeRequestHandlerTest,
@@ -489,6 +501,8 @@ class CONTENT_EXPORT ServiceWorkerVersion
   FRIEND_TEST_ALL_PREFIXES(service_worker_controllee_request_handler_unittest::
                                ServiceWorkerControlleeRequestHandlerTest,
                            FallbackWithNoFetchHandler);
+  FRIEND_TEST_ALL_PREFIXES(ServiceWorkerProviderHostTest,
+                           DontSetControllerInDestructor);
   FRIEND_TEST_ALL_PREFIXES(ServiceWorkerJobTest, Register);
   FRIEND_TEST_ALL_PREFIXES(
       service_worker_version_unittest::ServiceWorkerVersionTest,
@@ -548,8 +562,6 @@ class CONTENT_EXPORT ServiceWorkerVersion
   FRIEND_TEST_ALL_PREFIXES(ServiceWorkerURLRequestJobTest, EarlyResponse);
   FRIEND_TEST_ALL_PREFIXES(ServiceWorkerURLRequestJobTest, CancelRequest);
 
-  class PingController;
-
   // Contains timeout info for InflightRequest.
   struct InflightRequestTimeoutInfo {
     InflightRequestTimeoutInfo(int id,
@@ -602,14 +614,12 @@ class CONTENT_EXPORT ServiceWorkerVersion
   base::TimeDelta GetTickDuration(const base::TimeTicks& time) const;
 
   // EmbeddedWorkerInstance::Listener overrides:
-  void OnThreadStarted() override;
+  void OnScriptEvaluationStart() override;
   void OnStarting() override;
-  void OnStarted() override;
+  void OnStarted(blink::mojom::ServiceWorkerStartStatus status) override;
   void OnStopping() override;
   void OnStopped(EmbeddedWorkerStatus old_status) override;
   void OnDetached(EmbeddedWorkerStatus old_status) override;
-  void OnScriptLoaded() override;
-  void OnScriptLoadFailed() override;
   void OnRegisteredToDevToolsManager() override;
   void OnReportException(const base::string16& error_message,
                          int line_number,
@@ -621,7 +631,7 @@ class CONTENT_EXPORT ServiceWorkerVersion
                               int line_number,
                               const GURL& source_url) override;
 
-  void OnStartSentAndScriptEvaluated(ServiceWorkerStatusCode status);
+  void OnStartSent(blink::ServiceWorkerStatusCode status);
 
   // Implements blink::mojom::ServiceWorkerHost.
   void SetCachedMetadata(const GURL& url,
@@ -650,7 +660,7 @@ class CONTENT_EXPORT ServiceWorkerVersion
                                    int result);
   void OnClearCachedMetadataFinished(int64_t callback_id, int result);
   void OpenWindow(GURL url,
-                  WindowOpenDisposition disposition,
+                  service_worker_client_utils::WindowType type,
                   OpenNewTabCallback callback);
 
   void OnPongFromWorker();
@@ -660,12 +670,12 @@ class CONTENT_EXPORT ServiceWorkerVersion
       Status prestart_status,
       bool is_browser_startup_complete,
       StatusCallback callback,
-      ServiceWorkerStatusCode status,
+      blink::ServiceWorkerStatusCode status,
       scoped_refptr<ServiceWorkerRegistration> registration);
   void StartWorkerInternal();
 
   // Callback function for simple events dispatched through mojo interface
-  // mojom::ServiceWorkerEventDispatcher. Use CreateSimpleEventCallback() to
+  // mojom::ServiceWorker. Use CreateSimpleEventCallback() to
   // create a callback for a given |request_id|.
   void OnSimpleEventFinished(int request_id,
                              blink::mojom::ServiceWorkerEventStatus status,
@@ -678,7 +688,7 @@ class CONTENT_EXPORT ServiceWorkerVersion
   void OnTimeoutTimer();
   void SetTimeoutTimerInterval(base::TimeDelta interval);
 
-  // Called by PingController for ping protocol.
+  // Called by ServiceWorkerPingController for ping protocol.
   void PingWorker();
   void OnPingTimeout();
 
@@ -688,7 +698,7 @@ class CONTENT_EXPORT ServiceWorkerVersion
                                Status prestart_status,
                                int trace_id,
                                bool is_browser_startup_complete,
-                               ServiceWorkerStatusCode status);
+                               blink::ServiceWorkerStatusCode status);
 
   bool MaybeTimeoutRequest(const InflightRequestTimeoutInfo& info);
   void SetAllRequestExpirations(const base::TimeTicks& expiration);
@@ -696,32 +706,38 @@ class CONTENT_EXPORT ServiceWorkerVersion
   // Returns the reason the embedded worker failed to start, using information
   // inaccessible to EmbeddedWorkerInstance. Returns |default_code| if it can't
   // deduce a reason.
-  ServiceWorkerStatusCode DeduceStartWorkerFailureReason(
-      ServiceWorkerStatusCode default_code);
+  blink::ServiceWorkerStatusCode DeduceStartWorkerFailureReason(
+      blink::ServiceWorkerStatusCode default_code);
 
   // Sets |stale_time_| if this worker is stale, causing an update to eventually
   // occur once the worker stops or is running too long.
   void MarkIfStale();
 
   void FoundRegistrationForUpdate(
-      ServiceWorkerStatusCode status,
+      blink::ServiceWorkerStatusCode status,
       scoped_refptr<ServiceWorkerRegistration> registration);
 
   void OnStoppedInternal(EmbeddedWorkerStatus old_status);
 
   // Resets |start_worker_first_purpose_| and fires and clears all start
   // callbacks.
-  void FinishStartWorker(ServiceWorkerStatusCode status);
+  void FinishStartWorker(blink::ServiceWorkerStatusCode status);
 
   // Removes any pending external request that has GUID of |request_uuid|.
   void CleanUpExternalRequest(const std::string& request_uuid,
-                              ServiceWorkerStatusCode status);
+                              blink::ServiceWorkerStatusCode status);
 
   // Called if no inflight events exist on the browser process.
   // Non-S13nServiceWorker: Triggers OnNoWork().
   // S13nServiceWorker: Triggers OnNoWork() if the renderer-side idle timeout
   // has been fired or the worker has been stopped.
   void OnNoWorkInBrowser();
+
+  bool IsStartWorkerAllowed() const;
+
+  void NotifyControlleeAdded(const std::string& uuid,
+                             const ServiceWorkerClientInfo& info);
+  void NotifyControlleeRemoved(const std::string& uuid);
 
   const int64_t version_id_;
   const int64_t registration_id_;
@@ -757,8 +773,12 @@ class CONTENT_EXPORT ServiceWorkerVersion
   using RequestUUIDToRequestIDMap = std::map<std::string, int>;
   RequestUUIDToRequestIDMap external_request_uuid_to_request_id_;
 
+  // List of UUIDs of external requests that were issued before this worker
+  // reached RUNNING.
+  std::set<std::string> pending_external_requests_;
+
   // Connected to ServiceWorkerContextClient while the worker is running.
-  mojom::ServiceWorkerEventDispatcherPtr event_dispatcher_;
+  mojom::ServiceWorkerPtr service_worker_ptr_;
 
   // S13nServiceWorker: connected to the controller service worker.
   // |controller_request_| is non-null only when the |controller_ptr_| is
@@ -795,7 +815,7 @@ class CONTENT_EXPORT ServiceWorkerVersion
   std::map<std::string, ServiceWorkerProviderHost*> controllee_map_;
   // Will be null while shutting down.
   base::WeakPtr<ServiceWorkerContextCore> context_;
-  base::ObserverList<Listener> listeners_;
+  base::ObserverList<Observer> observers_;
   ServiceWorkerScriptCacheMap script_cache_map_;
   base::OneShotTimer update_timer_;
 
@@ -832,19 +852,20 @@ class CONTENT_EXPORT ServiceWorkerVersion
 
   // If not OK, the reason that StartWorker failed. Used for
   // running |start_callbacks_|.
-  ServiceWorkerStatusCode start_worker_status_ = SERVICE_WORKER_OK;
+  blink::ServiceWorkerStatusCode start_worker_status_ =
+      blink::ServiceWorkerStatusCode::kOk;
 
   // The clock used to vend tick time.
-  base::TickClock* tick_clock_;
+  const base::TickClock* tick_clock_;
 
   // The clock used for actual (wall clock) time
   base::Clock* clock_;
 
-  std::unique_ptr<PingController> ping_controller_;
+  ServiceWorkerPingController ping_controller_;
 
-  // Used for recording worker activities (e.g., a ratio of handled events)
-  // while this service worker is running (i.e., after it starts up until it
-  // stops).
+  // Used for recording worker activities while this service worker is running
+  // (i.e., after it starts up until it stops). Created only when the service
+  // worker is speculatively launched for navigation hints.
   std::unique_ptr<ServiceWorkerMetrics::ScopedEventRecorder> event_recorder_;
 
   bool stop_when_devtools_detached_ = false;

@@ -16,7 +16,6 @@
 #include "base/run_loop.h"
 #include "base/strings/string16.h"
 #include "base/test/scoped_feature_list.h"
-#include "content/browser/browser_thread_impl.h"
 #include "content/browser/browsing_instance.h"
 #include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/frame_host/navigation_entry_impl.h"
@@ -26,6 +25,7 @@
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/browser/webui/content_web_ui_controller_factory.h"
 #include "content/browser/webui/web_ui_controller_factory_registry.h"
+#include "content/public/common/bindings_policy.h"
 #include "content/public/common/content_client.h"
 #include "content/public/common/content_constants.h"
 #include "content/public/common/content_features.h"
@@ -43,6 +43,13 @@
 #include "url/url_util.h"
 
 namespace content {
+namespace {
+
+GURL GetWebUIURL(std::string host) {
+  return GURL(std::string(kChromeUIScheme) + "://" + host);
+}
+
+}  // namespace
 
 const char kPrivilegedScheme[] = "privileged";
 
@@ -105,10 +112,11 @@ class SiteInstanceTest : public testing::Test {
 
   void SetUp() override {
     old_browser_client_ = SetBrowserClientForTesting(&browser_client_);
-    url::AddStandardScheme(kPrivilegedScheme, url::SCHEME_WITHOUT_PORT);
-    url::AddStandardScheme(kChromeUIScheme, url::SCHEME_WITHOUT_PORT);
+    url::AddStandardScheme(kPrivilegedScheme, url::SCHEME_WITH_HOST);
+    url::AddStandardScheme(kChromeUIScheme, url::SCHEME_WITH_HOST);
 
-    RenderProcessHostImpl::set_render_process_host_factory(&rph_factory_);
+    RenderProcessHostImpl::set_render_process_host_factory_for_testing(
+        &rph_factory_);
   }
 
   void TearDown() override {
@@ -116,7 +124,7 @@ class SiteInstanceTest : public testing::Test {
     EXPECT_TRUE(RenderProcessHost::AllHostsIterator().IsAtEnd());
 
     SetBrowserClientForTesting(old_browser_client_);
-    RenderProcessHostImpl::set_render_process_host_factory(nullptr);
+    RenderProcessHostImpl::set_render_process_host_factory_for_testing(nullptr);
 
     // http://crbug.com/143565 found SiteInstanceTest leaking an
     // AppCacheDatabase. This happens because some part of the test indirectly
@@ -128,6 +136,8 @@ class SiteInstanceTest : public testing::Test {
     // scheduled for deletion. Here, call DrainMessageLoop() again so the
     // AppCacheDatabase actually gets deleted.
     DrainMessageLoop();
+
+    ResetSchemesAndOriginsWhitelist();
   }
 
   void set_privileged_process_id(int process_id) {
@@ -164,7 +174,7 @@ TEST_F(SiteInstanceTest, SiteInstanceDestructor) {
 
   NavigationEntryImpl* e1 = new NavigationEntryImpl(
       instance, url, Referrer(), base::string16(), ui::PAGE_TRANSITION_LINK,
-      false);
+      false, nullptr /* blob_url_loader_factory */);
 
   // Redundantly setting e1's SiteInstance shouldn't affect the ref count.
   e1->set_site_instance(instance);
@@ -174,7 +184,7 @@ TEST_F(SiteInstanceTest, SiteInstanceDestructor) {
   // Add a second reference
   NavigationEntryImpl* e2 = new NavigationEntryImpl(
       instance, url, Referrer(), base::string16(), ui::PAGE_TRANSITION_LINK,
-      false);
+      false, nullptr /* blob_url_loader_factory */);
 
   instance = nullptr;
   EXPECT_EQ(0, browser_client()->GetAndClearSiteInstanceDeleteCount());
@@ -193,10 +203,10 @@ TEST_F(SiteInstanceTest, SiteInstanceDestructor) {
   // Ensure that instances are deleted when their RenderViewHosts are gone.
   std::unique_ptr<TestBrowserContext> browser_context(new TestBrowserContext());
   {
-    std::unique_ptr<WebContentsImpl> web_contents(static_cast<WebContentsImpl*>(
+    std::unique_ptr<WebContents> web_contents(
         WebContents::Create(WebContents::CreateParams(
             browser_context.get(),
-            SiteInstance::Create(browser_context.get())))));
+            SiteInstance::Create(browser_context.get()))));
     EXPECT_EQ(0, browser_client()->GetAndClearSiteInstanceDeleteCount());
     EXPECT_EQ(0, browser_client()->GetAndClearBrowsingInstanceDeleteCount());
   }
@@ -208,40 +218,6 @@ TEST_F(SiteInstanceTest, SiteInstanceDestructor) {
   EXPECT_EQ(1, browser_client()->GetAndClearSiteInstanceDeleteCount());
   EXPECT_EQ(1, browser_client()->GetAndClearBrowsingInstanceDeleteCount());
   // contents is now deleted, along with instance and browsing_instance
-}
-
-// Test that NavigationEntries with SiteInstances can be cloned, but that their
-// SiteInstances can be changed afterwards.  Also tests that the ref counts are
-// updated properly after the change.
-TEST_F(SiteInstanceTest, CloneNavigationEntry) {
-  const GURL url("test:foo");
-
-  std::unique_ptr<NavigationEntryImpl> e1 =
-      base::WrapUnique(new NavigationEntryImpl(
-          SiteInstanceImpl::Create(nullptr), url, Referrer(),
-          base::string16(), ui::PAGE_TRANSITION_LINK, false));
-
-  // Clone the entry.
-  std::unique_ptr<NavigationEntryImpl> e2 = e1->Clone();
-
-  // Should be able to change the SiteInstance of the cloned entry.
-  e2->set_site_instance(SiteInstanceImpl::Create(nullptr));
-
-  EXPECT_EQ(0, browser_client()->GetAndClearSiteInstanceDeleteCount());
-  EXPECT_EQ(0, browser_client()->GetAndClearBrowsingInstanceDeleteCount());
-
-  // The first SiteInstance and BrowsingInstance should go away after resetting
-  // e1, since e2 should no longer be referencing it.
-  e1.reset();
-  EXPECT_EQ(1, browser_client()->GetAndClearSiteInstanceDeleteCount());
-  EXPECT_EQ(1, browser_client()->GetAndClearBrowsingInstanceDeleteCount());
-
-  // The second SiteInstance should go away after resetting e2.
-  e2.reset();
-  EXPECT_EQ(1, browser_client()->GetAndClearSiteInstanceDeleteCount());
-  EXPECT_EQ(1, browser_client()->GetAndClearBrowsingInstanceDeleteCount());
-
-  DrainMessageLoop();
 }
 
 // Test to ensure GetProcess returns and creates processes correctly.
@@ -367,6 +343,17 @@ TEST_F(SiteInstanceTest, GetSiteForURL) {
   EXPECT_EQ(GURL("file:"), site_url);
   EXPECT_EQ("file", site_url.scheme());
   EXPECT_FALSE(site_url.has_host());
+
+  // Blob URLs created from a unique origin use the full URL as the site URL,
+  // except for the hash.
+  test_url = GURL("blob:null/1029e5a4-2983-4b90-a585-ed217563acfeb");
+  site_url = SiteInstanceImpl::GetSiteForURL(nullptr, test_url);
+  EXPECT_EQ(site_url, test_url);
+  test_url = GURL("blob:null/1029e5a4-2983-4b90-a585-ed217563acfeb#foo");
+  site_url = SiteInstanceImpl::GetSiteForURL(nullptr, test_url);
+  EXPECT_NE(site_url, test_url);
+  EXPECT_FALSE(site_url.has_ref());
+  EXPECT_TRUE(site_url.EqualsIgnoringRef(test_url));
 
   // Private domains are preserved, appspot being such a site.
   test_url = GURL(
@@ -618,16 +605,12 @@ static scoped_refptr<SiteInstanceImpl> CreateSiteInstance(
 
 // Test to ensure that pages that require certain privileges are grouped
 // in processes with similar pages.
+// TODO(nasko): Remove. See https://crbug.com/847127.
 TEST_F(SiteInstanceTest, ProcessSharingByType) {
   // This test shouldn't run with --site-per-process mode, which prohibits
   // the renderer process reuse this test explicitly exercises.
   if (AreAllSitesIsolatedForTesting())
     return;
-
-  // On Android by default the number of renderer hosts is unlimited and process
-  // sharing doesn't happen. We set the override so that the test can run
-  // everywhere.
-  RenderProcessHost::SetMaxRendererProcessCount(kMaxRendererProcessCount);
 
   ChildProcessSecurityPolicyImpl* policy =
       ChildProcessSecurityPolicyImpl::GetInstance();
@@ -635,9 +618,16 @@ TEST_F(SiteInstanceTest, ProcessSharingByType) {
   // Make a bunch of mock renderers so that we hit the limit.
   std::unique_ptr<TestBrowserContext> browser_context(new TestBrowserContext());
   std::vector<std::unique_ptr<MockRenderProcessHost>> hosts;
-  for (size_t i = 0; i < kMaxRendererProcessCount; ++i)
+  for (size_t i = 0; i < kMaxRendererProcessCount; ++i) {
     hosts.push_back(
         std::make_unique<MockRenderProcessHost>(browser_context.get()));
+    hosts[i]->SetIsUsed();
+  }
+
+  // On Android by default the number of renderer hosts is unlimited and process
+  // sharing doesn't happen. We set the override so that the test can run
+  // everywhere.
+  RenderProcessHost::SetMaxRendererProcessCount(kMaxRendererProcessCount);
 
   // Create some extension instances and make sure they share a process.
   scoped_refptr<SiteInstanceImpl> extension1_instance(
@@ -655,13 +645,13 @@ TEST_F(SiteInstanceTest, ProcessSharingByType) {
             extension2_instance->GetProcess());
 
   // Create some WebUI instances and make sure they share a process.
-  scoped_refptr<SiteInstanceImpl> webui1_instance(CreateSiteInstance(
-      browser_context.get(), GURL(kChromeUIScheme + std::string("://gpu"))));
-  policy->GrantWebUIBindings(webui1_instance->GetProcess()->GetID());
+  scoped_refptr<SiteInstanceImpl> webui1_instance(
+      CreateSiteInstance(browser_context.get(), GetWebUIURL(kChromeUIGpuHost)));
+  policy->GrantWebUIBindings(webui1_instance->GetProcess()->GetID(),
+                             BINDINGS_POLICY_WEB_UI);
 
   scoped_refptr<SiteInstanceImpl> webui2_instance(CreateSiteInstance(
-      browser_context.get(),
-      GURL(kChromeUIScheme + std::string("://media-internals"))));
+      browser_context.get(), GetWebUIURL(kChromeUIMediaInternalsHost)));
 
   std::unique_ptr<RenderProcessHost> dom_host(webui1_instance->GetProcess());
   EXPECT_EQ(webui1_instance->GetProcess(), webui2_instance->GetProcess());
@@ -719,7 +709,7 @@ TEST_F(SiteInstanceTest, HasWrongProcessForURL) {
 
   // Simulate granting WebUI bindings for the process.
   ChildProcessSecurityPolicyImpl::GetInstance()->GrantWebUIBindings(
-      webui_host->GetID());
+      webui_host->GetID(), BINDINGS_POLICY_WEB_UI);
 
   EXPECT_TRUE(webui_instance->HasProcess());
   EXPECT_FALSE(webui_instance->HasWrongProcessForURL(webui_url));
@@ -1019,7 +1009,7 @@ TEST_F(SiteInstanceTest, IsValidIsolatedOrigin) {
 
   // Scheme must be HTTP or HTTPS.
   EXPECT_FALSE(IsolatedOriginUtil::IsValidIsolatedOrigin(
-      url::Origin::Create(GURL(kChromeUIScheme + std::string("://gpu")))));
+      url::Origin::Create(GetWebUIURL(kChromeUIGpuHost))));
   EXPECT_TRUE(IsolatedOriginUtil::IsValidIsolatedOrigin(
       url::Origin::Create(GURL("http://a.com"))));
   EXPECT_TRUE(IsolatedOriginUtil::IsValidIsolatedOrigin(
@@ -1226,6 +1216,19 @@ TEST_F(SiteInstanceTest, OriginalURL) {
   }
 
   SetBrowserClientForTesting(regular_client);
+}
+
+TEST_F(SiteInstanceTest, IsOriginLockASite) {
+  EXPECT_FALSE(SiteInstanceImpl::IsOriginLockASite(GURL("http://")));
+  EXPECT_FALSE(SiteInstanceImpl::IsOriginLockASite(GURL("")));
+  EXPECT_FALSE(SiteInstanceImpl::IsOriginLockASite(GURL("google.com")));
+  EXPECT_FALSE(SiteInstanceImpl::IsOriginLockASite(GURL("http:")));
+  EXPECT_FALSE(SiteInstanceImpl::IsOriginLockASite(GURL("chrome:")));
+
+  EXPECT_TRUE(SiteInstanceImpl::IsOriginLockASite(GURL("http://foo.com")));
+  EXPECT_TRUE(SiteInstanceImpl::IsOriginLockASite(GURL("http://bar.foo.com")));
+  EXPECT_TRUE(SiteInstanceImpl::IsOriginLockASite(
+      GURL("http://user:pass@google.com:99/foo;bar?q=a#ref")));
 }
 
 }  // namespace content

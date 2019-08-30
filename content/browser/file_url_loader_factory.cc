@@ -107,7 +107,10 @@ class FileURLDirectoryLoader
   }
 
   // network::mojom::URLLoader:
-  void FollowRedirect() override {}
+  void FollowRedirect(const base::Optional<std::vector<std::string>>&
+                          to_be_removed_request_headers,
+                      const base::Optional<net::HttpRequestHeaders>&
+                          modified_request_headers) override {}
   void ProceedWithResponse() override { NOTREACHED(); }
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override {}
@@ -159,7 +162,7 @@ class FileURLDirectoryLoader
     network::ResourceResponseHead head;
     head.mime_type = "text/html";
     head.charset = "utf-8";
-    client->OnReceiveResponse(head, base::nullopt, nullptr);
+    client->OnReceiveResponse(head);
     client->OnStartLoadingResponseBody(std::move(pipe.consumer_handle));
     client_ = std::move(client);
 
@@ -188,7 +191,7 @@ class FileURLDirectoryLoader
 
 #if defined(OS_WIN)
       const base::string16& title = path_.value();
-#elif defined(OS_POSIX)
+#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
       const base::string16& title =
           base::WideToUTF16(base::SysNativeMBToWide(path_.value()));
 #endif
@@ -210,7 +213,7 @@ class FileURLDirectoryLoader
         filename.value() != base::FilePath::kParentDirectory) {
 #if defined(OS_WIN)
       std::string raw_bytes;  // Empty on Windows means UTF-8 encoded name.
-#elif defined(OS_POSIX)
+#elif defined(OS_POSIX) || defined(OS_FUCHSIA)
       const std::string& raw_bytes = filename.value();
 #endif
       pending_data_.append(net::GetDirectoryListingEntry(
@@ -315,7 +318,10 @@ class FileURLLoader : public network::mojom::URLLoader {
   }
 
   // network::mojom::URLLoader:
-  void FollowRedirect() override {}
+  void FollowRedirect(const base::Optional<std::vector<std::string>>&
+                          to_be_removed_request_headers,
+                      const base::Optional<net::HttpRequestHeaders>&
+                          modified_request_headers) override {}
   void ProceedWithResponse() override {}
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override {}
@@ -454,12 +460,12 @@ class FileURLLoader : public network::mojom::URLLoader {
       observer->OnStart();
 
     base::File file(path, base::File::FLAG_OPEN | base::File::FLAG_READ);
-    net::Error net_error = net::FileErrorToNetError(file.error_details());
-    if (observer)
-      observer->OnOpenComplete(net_error);
     if (!file.IsValid()) {
-      if (observer)
+      if (observer) {
+        observer->OnBytesRead(nullptr, 0u, file.error_details());
         observer->OnDoneReading();
+      }
+      net::Error net_error = net::FileErrorToNetError(file.error_details());
       client->OnComplete(network::URLLoaderCompletionStatus(net_error));
       MaybeDeleteSelf();
       return;
@@ -471,10 +477,13 @@ class FileURLLoader : public network::mojom::URLLoader {
       base::File::Error read_error = base::File::GetLastFileError();
       DCHECK_NE(base::File::FILE_OK, read_error);
       if (observer) {
+        // This can happen when the file is unreadable (which can happen during
+        // corruption). We need to be sure to inform
+        // the observer that we've finished reading so that it can proceed.
         observer->OnBytesRead(nullptr, 0u, read_error);
         observer->OnDoneReading();
       }
-      net_error = net::FileErrorToNetError(read_error);
+      net::Error net_error = net::FileErrorToNetError(read_error);
       client->OnComplete(network::URLLoaderCompletionStatus(net_error));
       return;
     } else if (observer) {
@@ -554,7 +563,7 @@ class FileURLLoader : public network::mojom::URLLoader {
           base::StringPrintf("%s: %s", net::HttpRequestHeaders::kContentType,
                              head.mime_type.c_str()));
     }
-    client->OnReceiveResponse(head, base::nullopt, nullptr);
+    client->OnReceiveResponse(head);
     client->OnStartLoadingResponseBody(std::move(pipe.consumer_handle));
     client_ = std::move(client);
 
@@ -630,7 +639,6 @@ void FileURLLoaderFactory::CreateLoaderAndStart(
     const network::ResourceRequest& request,
     network::mojom::URLLoaderClientPtr client,
     const net::MutableNetworkTrafficAnnotationTag& traffic_annotation) {
-  DCHECK(!request.download_to_file);
   base::FilePath file_path;
   const bool is_file = net::FileURLToFilePath(request.url, &file_path);
   if (is_file && file_path.EndsWithSeparator() && file_path.IsAbsolute()) {

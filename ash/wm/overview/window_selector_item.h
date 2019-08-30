@@ -11,6 +11,7 @@
 #include "ash/wm/overview/scoped_transform_overview_window.h"
 #include "base/macros.h"
 #include "ui/aura/window_observer.h"
+#include "ui/compositor/layer_animation_observer.h"
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/views/controls/button/button.h"
@@ -22,12 +23,12 @@ namespace gfx {
 class SlideAnimation;
 }
 
-namespace views {
-class ImageButton;
+namespace ui {
+class Shadow;
 }
 
-namespace wm {
-class Shadow;
+namespace views {
+class ImageButton;
 }
 
 namespace ash {
@@ -37,7 +38,8 @@ class WindowGrid;
 
 // This class represents an item in overview mode.
 class ASH_EXPORT WindowSelectorItem : public views::ButtonListener,
-                                      public aura::WindowObserver {
+                                      public aura::WindowObserver,
+                                      public ui::ImplicitAnimationObserver {
  public:
   // An image button with a close window icon.
   class OverviewCloseButton : public views::ImageButton {
@@ -49,7 +51,8 @@ class ASH_EXPORT WindowSelectorItem : public views::ButtonListener,
     void ResetListener() { listener_ = nullptr; }
 
    protected:
-    // views::ImageButton:
+    // views::Button:
+    std::unique_ptr<views::InkDrop> CreateInkDrop() override;
     std::unique_ptr<views::InkDropRipple> CreateInkDropRipple() const override;
     std::unique_ptr<views::InkDropHighlight> CreateInkDropHighlight()
         const override;
@@ -119,12 +122,16 @@ class ASH_EXPORT WindowSelectorItem : public views::ButtonListener,
   // Activates or deactivates selection depending on |selected|.
   // In selected state the item's caption is shown transparent and blends with
   // the selection widget.
-  void SetSelected(bool selected);
+  void set_selected(bool selected) { selected_ = selected; }
 
   // Sends an accessibility event indicating that this window became selected
   // so that it's highlighted and announced if accessibility features are
   // enabled.
   void SendAccessibleSelectionEvent();
+
+  // Slides the item up or down and then closes the associated window. Used by
+  // overview swipe to close.
+  void AnimateAndCloseWindow(bool up);
 
   // Closes |transform_window_|.
   void CloseWindow();
@@ -165,23 +172,53 @@ class ASH_EXPORT WindowSelectorItem : public views::ButtonListener,
 
   const gfx::Rect& target_bounds() const { return target_bounds_; }
 
+  // Stacks the |item_widget_| in the correct place. |item_widget_| may be
+  // initially stacked in the wrong place due to animation or if it is a
+  // minimized window, the overview minimized widget is not available on
+  // |item_widget_|'s creation.
+  void RestackItemWidget();
+
   // views::ButtonListener:
   void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
   // aura::WindowObserver:
+  void OnWindowBoundsChanged(aura::Window* window,
+                             const gfx::Rect& old_bounds,
+                             const gfx::Rect& new_bounds,
+                             ui::PropertyChangeReason reason) override;
   void OnWindowDestroying(aura::Window* window) override;
   void OnWindowTitleChanged(aura::Window* window) override;
+
+  // ui::ImplicitAnimationObserver:
+  void OnImplicitAnimationsCompleted() override;
 
   // Handle the mouse/gesture event and facilitate dragging the item.
   void HandlePressEvent(const gfx::Point& location_in_screen);
   void HandleReleaseEvent(const gfx::Point& location_in_screen);
   void HandleDragEvent(const gfx::Point& location_in_screen);
-  void ActivateDraggedWindow(const gfx::Point& location_in_screen);
+  void HandleLongPressEvent(const gfx::Point& location_in_screen);
+  void HandleFlingStartEvent(const gfx::Point& location_in_screen,
+                             float velocity_x,
+                             float velocity_y);
+  void ActivateDraggedWindow();
   void ResetDraggedWindowGesture();
+
+  // Checks if this item is current being dragged.
+  bool IsDragItem();
+
+  // Called after a positioning transform animation ends. Checks to see if the
+  // animation was triggered by a drag end event. If so, inserts the window back
+  // to its original stacking order so that the order of windows is the same as
+  // when entering overview.
+  void OnDragAnimationCompleted();
 
   // Sets the bounds of the window shadow. If |bounds_in_screen| is nullopt,
   // the shadow is hidden.
   void SetShadowBounds(base::Optional<gfx::Rect> bounds_in_screen);
+
+  // Changes the opacity of all the windows the item owns.
+  void SetOpacity(float opacity);
+  float GetOpacity();
 
   void set_should_animate_when_entering(bool should_animate) {
     should_animate_when_entering_ = should_animate;
@@ -205,8 +242,16 @@ class ASH_EXPORT WindowSelectorItem : public views::ButtonListener,
 
   WindowGrid* window_grid() { return window_grid_; }
 
+  void set_should_restack_on_animation_end(bool val) {
+    should_restack_on_animation_end_ = val;
+  }
+
+  bool animating_to_close() const { return animating_to_close_; }
+  void set_animating_to_close(bool val) { animating_to_close_ = val; }
+
   float GetCloseButtonOpacityForTesting();
   float GetTitlebarOpacityForTesting();
+  gfx::Rect GetShadowBoundsForTesting();
 
  private:
   class CaptionContainerView;
@@ -236,9 +281,6 @@ class ASH_EXPORT WindowSelectorItem : public views::ButtonListener,
   void SetItemBounds(const gfx::Rect& target_bounds,
                      OverviewAnimationType animation_type);
 
-  // Changes the opacity of all the windows the item owns.
-  void SetOpacity(float opacity);
-
   // Creates the window label.
   void CreateWindowLabel(const base::string16& title);
 
@@ -257,9 +299,6 @@ class ASH_EXPORT WindowSelectorItem : public views::ButtonListener,
   // Updates the accessibility name to match the window title.
   void UpdateAccessibilityName();
 
-  // Fades out a window caption when exiting overview mode.
-  void FadeOut(std::unique_ptr<views::Widget> widget);
-
   // Select this window if |event_location| is less than the drag threshold for
   // clicks. This should only be called if the original event was on the title
   // bar (|tap_down_event_on_title_| has a value).
@@ -274,10 +313,6 @@ class ASH_EXPORT WindowSelectorItem : public views::ButtonListener,
   // selection and stacks the window at the top of the Z order in order to keep
   // it visible while dragging around.
   void StartDrag();
-
-  // Called after dragging. Inserts the window back to its original stacking
-  // order so that the order of windows is the same as when entering overview.
-  void EndDrag();
 
   // True if the item is being shown in the overview, false if it's being
   // filtered.
@@ -300,11 +335,6 @@ class ASH_EXPORT WindowSelectorItem : public views::ButtonListener,
   // True when |this| item is visually selected. Item header is made transparent
   // when the item is selected.
   bool selected_;
-
-  // Has a value if last seen tap down event was on the title bar. Behavior of
-  // subsequent drags/tap up differ if the original event was on the overview
-  // title.
-  base::Optional<gfx::Point> tap_down_event_on_title_;
 
   // A widget that covers the |transform_window_|. The widget has
   // |caption_container_view_| as its contents view. The widget is backed by a
@@ -361,12 +391,19 @@ class ASH_EXPORT WindowSelectorItem : public views::ButtonListener,
   // its exiting animation.
   bool should_be_observed_when_exiting_ = false;
 
+  // True if after an animation, we need to reorder the stacking order of the
+  // widgets.
+  bool should_restack_on_animation_end_ = false;
+
+  // True if the windows are still alive so they can have a closing animation.
+  // These windows should not be used in calculations for
+  // WindowGrid::PositionWindows.
+  bool animating_to_close_ = false;
+
   // The shadow around the overview window. Shadows the original window, not
   // |item_widget_|. Done here instead of on the original window because of the
   // rounded edges mask applied on entering overview window.
-  std::unique_ptr<::wm::Shadow> shadow_;
-
-  bool event_on_title_ = false;
+  std::unique_ptr<ui::Shadow> shadow_;
 
   DISALLOW_COPY_AND_ASSIGN(WindowSelectorItem);
 };

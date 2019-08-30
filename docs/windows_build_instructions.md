@@ -23,7 +23,7 @@ Are you a Google employee? See
 
 ### Visual Studio
 
-As of September, 2017 (R503915) Chromium requires Visual Studio 2017 update 3.x
+As of September, 2017 (R503915) Chromium requires Visual Studio 2017 (15.7.2)
 to build. The clang-cl compiler is used but Visual Studio's header files,
 libraries, and some tools are required. Visual Studio Community Edition should
 work if its license is appropriate for you. You must install the "Desktop
@@ -35,7 +35,7 @@ Studio installer that you download:
     --add Microsoft.VisualStudio.Component.VC.ATLMFC --includeRecommended
 ```
 
-You must have the version 10.0.15063 Windows 10 SDK installed. This can be
+You must have the version 10.0.17134 Windows 10 SDK installed. This can be
 installed separately or by checking the appropriate box in the Visual Studio
 Installer.
 
@@ -178,16 +178,36 @@ IDE files up to date automatically when you build.
 
 The generated solution will contain several thousand projects and will be very
 slow to load. Use the `--filters` argument to restrict generating project files
-for only the code you're interested in, although this will also limit what
-files appear in the project explorer. A minimal solution that will let you
-compile and run Chrome in the IDE but will not show any source files is:
+for only the code you're interested in. Although this will also limit what
+files appear in the project explorer, debugging will still work and you can
+set breakpoints in files that you open manually. A minimal solution that will
+let you compile and run Chrome in the IDE but will not show any source files
+is:
 
 ```
-$ gn gen --ide=vs --filters=//chrome out\Default
+$ gn gen --ide=vs --filters=//chrome --no-deps out\Default
 ```
+
+You can selectively add other directories you care about to the filter like so:
+`--filters=//chrome;//third_party/WebKit/*;//gpu/*`.
 
 There are other options for controlling how the solution is generated, run `gn
 help gen` for the current documentation.
+
+By default when you start debugging in Visual Studio the debugger will only
+attach to the main browser process. To debug all of Chrome, install
+[Microsoft's Child Process Debugging Power Tool](https://blogs.msdn.microsoft.com/devops/2014/11/24/introducing-the-child-process-debugging-power-tool/).
+You will also need to run Visual Studio as administrator, or it will silently
+fail to attach to some of Chrome's child processes.
+
+It is also possible to debug and develop Chrome in Visual Studio without a
+solution file. Simply "open" your chrome.exe binary with
+`File->Open->Project/Solution`, or from a Visual Studio command prompt like
+so: `devenv /debugexe out\Debug\chrome.exe <your arguments>`. Many of Visual
+Studio's code editing features will not work in this configuration, but by
+installing the [VsChromium Visual Studio Extension](https://chromium.github.io/vs-chromium/)
+you can get the source code to appear in the solution explorer window along
+with other useful features such as code search.
 
 ### Faster builds
 
@@ -213,15 +233,10 @@ don't' set enable_nacl = false then build times may get worse.
 * `remove_webcore_debug_symbols = true` - turn off source-level debugging for
 blink to reduce build times, appropriate if you don't plan to debug blink.
 
-In order to ensure that linking is fast enough we recommend that you use one of
-these settings - they all have tradeoffs:
-* `use_lld = true` - this linker is very fast on full links but does not support
-incremental linking.
-* `is_win_fastlink = true` - this option makes the Visual Studio linker run much
-faster, and incremental linking is supported, but it can lead to debugger
-slowdowns or out-of-memory crashes.
-* `symbol_level = 1` - this option reduces the work the linker has to do but
-when this option is set you cannot do source-level debugging.
+In order to speed up linking you can set `symbol_level = 1` - this option
+reduces the work the linker has to do but when this option is set you cannot do
+source-level debugging. Switching from `symbol_level = 2` (the default) to
+`symbol_level = 1` requires recompiling everything.
 
 In addition, Google employees should use goma, a distributed compilation system.
 Detailed information is available internally but the relevant gn arg is:

@@ -25,6 +25,7 @@
 #include "chrome/browser/ui/omnibox/omnibox_theme.h"
 #include "chrome/browser/ui/views/location_bar/background_with_1_px_border.h"
 #include "chrome/browser/ui/views/location_bar/location_bar_view.h"
+#include "chrome/browser/ui/views/omnibox/omnibox_match_cell_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_popup_contents_view.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_tab_switch_button.h"
 #include "chrome/browser/ui/views/omnibox/omnibox_text_view.h"
@@ -40,88 +41,15 @@
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/base/theme_provider.h"
 #include "ui/events/event.h"
-#include "ui/gfx/canvas.h"
-#include "ui/gfx/color_palette.h"
-#include "ui/gfx/color_utils.h"
-#include "ui/gfx/image/image.h"
 #include "ui/gfx/paint_vector_icon.h"
-#include "ui/gfx/range/range.h"
-#include "ui/gfx/render_text.h"
-#include "ui/gfx/text_utils.h"
-#include "ui/native_theme/native_theme.h"
-
-using ui::NativeTheme;
 
 namespace {
 
-// The vertical margin that should be used above and below each suggestion.
-static const int kVerticalMargin = 1;
-
-// The vertical padding to provide each RenderText in addition to the height of
-// the font. Where possible, RenderText uses this additional space to vertically
-// center the cap height of the font instead of centering the entire font.
-static const int kVerticalPadding = 4;
-
-// TODO(dschuyler): Perhaps this should be based on the font size
-// instead of hardcoded to 2 dp (e.g. by adding a space in an
-// appropriate font to the beginning of the description, then reducing
-// the additional padding here to zero).
-static const int kAnswerIconToTextPadding = 2;
-
-// A mapping from OmniboxResultView's ResultViewState/ColorKind types to
-// NativeTheme colors.
-struct TranslationTable {
-  ui::NativeTheme::ColorId id;
-  OmniboxResultView::ResultViewState state;
-  OmniboxResultView::ColorKind kind;
-} static const kTranslationTable[] = {
-  { NativeTheme::kColorId_ResultsTableNormalText,
-    OmniboxResultView::NORMAL, OmniboxResultView::TEXT },
-  { NativeTheme::kColorId_ResultsTableHoveredText,
-    OmniboxResultView::HOVERED, OmniboxResultView::TEXT },
-  { NativeTheme::kColorId_ResultsTableSelectedText,
-    OmniboxResultView::SELECTED, OmniboxResultView::TEXT },
-  { NativeTheme::kColorId_ResultsTableNormalDimmedText,
-    OmniboxResultView::NORMAL, OmniboxResultView::DIMMED_TEXT },
-  { NativeTheme::kColorId_ResultsTableHoveredDimmedText,
-    OmniboxResultView::HOVERED, OmniboxResultView::DIMMED_TEXT },
-  { NativeTheme::kColorId_ResultsTableSelectedDimmedText,
-    OmniboxResultView::SELECTED, OmniboxResultView::DIMMED_TEXT },
-  { NativeTheme::kColorId_ResultsTableNormalUrl,
-    OmniboxResultView::NORMAL, OmniboxResultView::URL },
-  { NativeTheme::kColorId_ResultsTableHoveredUrl,
-    OmniboxResultView::HOVERED, OmniboxResultView::URL },
-  { NativeTheme::kColorId_ResultsTableSelectedUrl,
-    OmniboxResultView::SELECTED, OmniboxResultView::URL },
-};
-
-// Whether to use the two-line layout.
-bool IsTwoLineLayout() {
-  return base::FeatureList::IsEnabled(omnibox::kUIExperimentVerticalLayout) ||
-         ui::MaterialDesignController::IsTouchOptimizedUiEnabled();
-}
-
 // Creates a views::Background for the current result style.
 std::unique_ptr<views::Background> CreateBackgroundWithColor(SkColor bg_color) {
-  return ui::MaterialDesignController::IsTouchOptimizedUiEnabled()
+  return ui::MaterialDesignController::IsNewerMaterialUi()
              ? views::CreateSolidBackground(bg_color)
              : std::make_unique<BackgroundWith1PxBorder>(bg_color, bg_color);
-}
-
-// Returns the horizontal offset that ensures icons align vertically with the
-// Omnibox icon.
-int GetIconAlignmentOffset() {
-  // The horizontal bounds of a result is the width of the selection highlight
-  // (i.e. the views::Background). The traditional popup is designed with its
-  // selection shape mimicking the internal shape of the omnibox border. Inset
-  // to be consistent with the border drawn in BackgroundWith1PxBorder.
-  int offset = BackgroundWith1PxBorder::kLocationBarBorderThicknessDip;
-
-  // The touch-optimized popup selection always fills the results frame. So to
-  // align icons, inset additionally by the frame alignment inset on the left.
-  if (ui::MaterialDesignController::IsTouchOptimizedUiEnabled())
-    offset += RoundedOmniboxResultsFrame::kLocationBarAlignmentInsets.left();
-  return offset;
 }
 
 }  // namespace
@@ -130,77 +58,48 @@ int GetIconAlignmentOffset() {
 // OmniboxResultView, public:
 
 OmniboxResultView::OmniboxResultView(OmniboxPopupContentsView* model,
-                                     int model_index,
-                                     const gfx::FontList& font_list)
+                                     int model_index)
     : model_(model),
       model_index_(model_index),
       is_hovered_(false),
-      font_height_(std::max(
-          font_list.GetHeight(),
-          font_list.DeriveWithWeight(gfx::Font::Weight::BOLD).GetHeight())),
-      animation_(new gfx::SlideAnimation(this)),
-      icon_view_(AddImageView()),
-      image_view_(AddImageView()),
-      keyword_icon_view_(AddImageView()),
-      content_view_(AddOmniboxTextView(font_list)),
-      description_view_(AddOmniboxTextView(font_list)),
-      keyword_content_view_(AddOmniboxTextView(font_list)),
-      keyword_description_view_(AddOmniboxTextView(font_list)),
-      separator_view_(AddOmniboxTextView(font_list)) {
+      animation_(new gfx::SlideAnimation(this)) {
   CHECK_GE(model_index, 0);
 
-  keyword_icon_view_->EnableCanvasFlippingForRTLUI(true);
-  keyword_icon_view_->SetImage(gfx::CreateVectorIcon(
-      omnibox::kKeywordSearchIcon, GetLayoutConstant(LOCATION_BAR_ICON_SIZE),
-      GetVectorIconColor()));
-  keyword_icon_view_->SizeToPreferredSize();
+  AddChildView(suggestion_view_ = new OmniboxMatchCellView(this));
+  AddChildView(keyword_view_ = new OmniboxMatchCellView(this));
 
-  if (OmniboxFieldTrial::InTabSwitchSuggestionWithButtonTrial()) {
-    tab_switch_button_.reset(new OmniboxTabSwitchButton(this));
-    tab_switch_button_->set_owned_by_client();
-  }
+  keyword_view_->icon()->EnableCanvasFlippingForRTLUI(true);
+  keyword_view_->icon()->SetImage(gfx::CreateVectorIcon(
+      omnibox::kKeywordSearchIcon, GetLayoutConstant(LOCATION_BAR_ICON_SIZE),
+      GetColor(OmniboxPart::RESULTS_ICON)));
+  keyword_view_->icon()->SizeToPreferredSize();
 }
 
 OmniboxResultView::~OmniboxResultView() {}
 
-SkColor OmniboxResultView::GetColor(
-    ResultViewState state,
-    ColorKind kind) const {
-  if (kind == INVISIBLE_TEXT)
-    return SK_ColorTRANSPARENT;
-  for (size_t i = 0; i < arraysize(kTranslationTable); ++i) {
-    if (kTranslationTable[i].state == state &&
-        kTranslationTable[i].kind == kind) {
-      return GetNativeTheme()->GetSystemColor(kTranslationTable[i].id);
-    }
-  }
-
-  NOTREACHED();
-  return gfx::kPlaceholderColor;
+SkColor OmniboxResultView::GetColor(OmniboxPart part) const {
+  return GetOmniboxColor(part, GetTint(), GetThemeState());
 }
 
 void OmniboxResultView::SetMatch(const AutocompleteMatch& match) {
   match_ = match.GetMatchWithContentsAndDescriptionPossiblySwapped();
   animation_->Reset();
   is_hovered_ = false;
-  icon_view_->SetImage(GetIcon().ToImageSkia());
-  image_view_->SetVisible(false);  // Until SetAnswerImage is called.
+  suggestion_view_->OnMatchUpdate(this, match_);
+  keyword_view_->OnMatchUpdate(this, match_);
 
-  keyword_icon_view_->SetVisible(match_.associated_keyword.get());
-  if (tab_switch_button_) {
-    if (match.type == AutocompleteMatchType::TAB_SEARCH &&
-        !keyword_icon_view_->visible()) {
-      if (!tab_switch_button_->parent()) {
-        AddChildView(tab_switch_button_.get());
-      }
-    } else if (tab_switch_button_->parent()) {
-      RemoveChildView(tab_switch_button_.get());
-    }
+  // Set up 'switch to tab' button.
+  if (match.ShouldShowTabMatch()) {
+    suggestion_tab_switch_button_ =
+        std::make_unique<OmniboxTabSwitchButton>(model_, this);
+    suggestion_tab_switch_button_->set_owned_by_client();
+    AddChildView(suggestion_tab_switch_button_.get());
+  } else {
+    suggestion_tab_switch_button_.reset();
   }
 
   Invalidate();
-  if (GetWidget())
-    Layout();
+  Layout();
 }
 
 void OmniboxResultView::ShowKeyword(bool show_keyword) {
@@ -211,46 +110,98 @@ void OmniboxResultView::ShowKeyword(bool show_keyword) {
 }
 
 void OmniboxResultView::Invalidate() {
-  const ResultViewState state = GetState();
-  if (state == NORMAL) {
+  bool high_contrast =
+      GetNativeTheme() && GetNativeTheme()->UsesHighContrastColors();
+  // TODO(tapted): Consider using background()->SetNativeControlColor() and
+  // always have a background.
+  if (GetThemeState() == OmniboxPartState::NORMAL && !high_contrast) {
     SetBackground(nullptr);
   } else {
-    SkColor color = GetOmniboxColor(OmniboxPart::RESULTS_BACKGROUND, GetTint(),
-                                    GetThemeState());
+    SkColor color = GetColor(OmniboxPart::RESULTS_BACKGROUND);
     SetBackground(CreateBackgroundWithColor(color));
   }
 
-  if (match_.answer) {
-    content_view_->SetText(match_.answer->first_line());
-    description_view_->SetText(match_.answer->second_line());
-  } else {
-    content_view_->SetText(match_.contents, match_.contents_class);
-    description_view_->SetText(match_.description, match_.description_class);
-  }
+  // Reapply the dim color to account for the highlight state.
+  suggestion_view_->separator()->ApplyTextColor(
+      OmniboxPart::RESULTS_TEXT_DIMMED);
+  keyword_view_->separator()->ApplyTextColor(OmniboxPart::RESULTS_TEXT_DIMMED);
+  if (suggestion_tab_switch_button_)
+    suggestion_tab_switch_button_->UpdateBackground();
 
-  const base::string16& separator =
-      l10n_util::GetStringUTF16(IDS_AUTOCOMPLETE_MATCH_DESCRIPTION_SEPARATOR);
-  separator_view_->SetText(separator);
-  separator_view_->Dim();
+  // Recreate the icons in case the color needs to change.
+  // Note: if this is an extension icon or favicon then this can be done in
+  //       SetMatch() once (rather than repeatedly, as happens here). There may
+  //       be an optimization opportunity here.
+  // TODO(dschuyler): determine whether to optimize the color changes.
+  suggestion_view_->icon()->SetImage(GetIcon().ToImageSkia());
+  keyword_view_->icon()->SetImage(gfx::CreateVectorIcon(
+      omnibox::kKeywordSearchIcon, GetLayoutConstant(LOCATION_BAR_ICON_SIZE),
+      GetColor(OmniboxPart::RESULTS_ICON)));
+
+  // Answers use their own styling for additional content text and the
+  // description text, whereas non-answer suggestions use the match text and
+  // calculated classifications for the description text.
+  if (match_.answer) {
+    const bool reverse = OmniboxFieldTrial::IsReverseAnswersEnabled() &&
+                         !match_.IsExceptedFromLineReversal();
+    if (reverse) {
+      suggestion_view_->content()->SetText(match_.answer->second_line());
+      suggestion_view_->description()->SetText(match_.contents,
+                                               match_.contents_class, true);
+      suggestion_view_->description()->AppendExtraText(
+          match_.answer->first_line());
+    } else {
+      suggestion_view_->content()->SetText(match_.contents,
+                                           match_.contents_class);
+      suggestion_view_->content()->AppendExtraText(match_.answer->first_line());
+      suggestion_view_->description()->SetText(match_.answer->second_line(),
+                                               true);
+    }
+    // AppendExtraText has side effect on color, so explicitly set color.
+    // TODO(orinj): Consolidate text color specification in one place.
+    suggestion_view_->content()->ApplyTextColor(
+        OmniboxPart::RESULTS_TEXT_DEFAULT);
+    suggestion_view_->description()->ApplyTextColor(
+        OmniboxPart::RESULTS_TEXT_DIMMED);
+  } else if (match_.type == AutocompleteMatchType::SEARCH_SUGGEST_ENTITY) {
+    // Entities use match text and calculated classifications, but with style
+    // adjustments like answers above.
+    suggestion_view_->content()->SetText(match_.contents,
+                                         match_.contents_class);
+    suggestion_view_->description()->SetText(match_.description,
+                                             match_.description_class, -1);
+    suggestion_view_->description()->ApplyTextColor(
+        OmniboxPart::RESULTS_TEXT_DIMMED);
+  } else {
+    // Content and description use match text and calculated classifications.
+    suggestion_view_->content()->SetText(match_.contents,
+                                         match_.contents_class);
+    suggestion_view_->description()->SetText(match_.description,
+                                             match_.description_class);
+    // Explicitly re-apply default styling - high contrast modes use different
+    // text colors depending on selection state.
+    suggestion_view_->content()->ApplyTextColor(
+        OmniboxPart::RESULTS_TEXT_DEFAULT);
+    suggestion_view_->description()->ApplyTextColor(
+        OmniboxPart::RESULTS_TEXT_DEFAULT);
+  }
 
   AutocompleteMatch* keyword_match = match_.associated_keyword.get();
-  keyword_content_view_->SetVisible(keyword_match);
-  keyword_description_view_->SetVisible(keyword_match);
+  // Setting the keyword_view_ invisible is a minor optimization (it avoids
+  // some OnPaint calls); it is not required.
+  keyword_view_->SetVisible(keyword_match);
   if (keyword_match) {
-    keyword_content_view_->SetText(keyword_match->contents,
-                                   keyword_match->contents_class);
-    keyword_description_view_->SetText(keyword_match->description,
-                                       keyword_match->description_class);
-    keyword_description_view_->Dim();
+    keyword_view_->content()->SetText(keyword_match->contents,
+                                      keyword_match->contents_class);
+    keyword_view_->description()->SetText(keyword_match->description,
+                                          keyword_match->description_class);
+    keyword_view_->description()->ApplyTextColor(
+        OmniboxPart::RESULTS_TEXT_DIMMED);
   }
-
-  // TODO(dschuyler): without this Layout call the text will shift slightly when
-  // hovered. Look into removing this call (without the text shifting).
-  Layout();
 }
 
 void OmniboxResultView::OnSelected() {
-  DCHECK_EQ(SELECTED, GetState());
+  DCHECK(IsSelected());
 
   // The text is also accessible via text/value change events in the omnibox but
   // this selection event allows the screen reader to get more details about the
@@ -258,14 +209,8 @@ void OmniboxResultView::OnSelected() {
   NotifyAccessibilityEvent(ax::mojom::Event::kSelection, true);
 }
 
-OmniboxResultView::ResultViewState OmniboxResultView::GetState() const {
-  if (model_->IsSelectedIndex(model_index_))
-    return SELECTED;
-  return is_hovered_ ? HOVERED : NORMAL;
-}
-
 OmniboxPartState OmniboxResultView::GetThemeState() const {
-  if (model_->IsSelectedIndex(model_index_)) {
+  if (IsSelected()) {
     return is_hovered_ ? OmniboxPartState::HOVERED_AND_SELECTED
                        : OmniboxPartState::SELECTED;
   }
@@ -277,23 +222,63 @@ OmniboxTint OmniboxResultView::GetTint() const {
 }
 
 void OmniboxResultView::OnMatchIconUpdated() {
-  // The new icon will be fetched during repaint.
+  // The new icon will be fetched during Invalidate().
+  Invalidate();
   SchedulePaint();
 }
 
-void OmniboxResultView::SetAnswerImage(const gfx::ImageSkia& image) {
-  image_view_->SetImage(image);
-  image_view_->SetVisible(true);
+void OmniboxResultView::SetRichSuggestionImage(const gfx::ImageSkia& image) {
+  suggestion_view_->image()->SetImage(image);
   Layout();
   SchedulePaint();
 }
 
-void OmniboxResultView::OpenMatch(WindowOpenDisposition disposition) {
-  model_->OpenMatch(model_index_, disposition);
+////////////////////////////////////////////////////////////////////////////////
+// views::ButtonListener overrides:
+
+// |button| is the tab switch button.
+void OmniboxResultView::ButtonPressed(views::Button* button,
+                                      const ui::Event& event) {
+  OpenMatch(WindowOpenDisposition::SWITCH_TO_TAB);
 }
 
 ////////////////////////////////////////////////////////////////////////////////
 // OmniboxResultView, views::View overrides:
+
+void OmniboxResultView::Layout() {
+  views::View::Layout();
+  // NOTE: While animating the keyword match, both matches may be visible.
+  int suggestion_width = width();
+  AutocompleteMatch* keyword_match = match_.associated_keyword.get();
+  if (keyword_match) {
+    const int max_kw_x =
+        suggestion_width - keyword_view_->IconWidthAndPadding();
+    suggestion_width = animation_->CurrentValueBetween(max_kw_x, 0);
+  }
+  if (suggestion_tab_switch_button_) {
+    suggestion_tab_switch_button_->ProvideWidthHint(suggestion_width);
+    const gfx::Size ts_button_size =
+        suggestion_tab_switch_button_->GetPreferredSize();
+    if (ts_button_size.width() > 0) {
+      suggestion_tab_switch_button_->SetSize(ts_button_size);
+
+      // Give the tab switch button a right margin matching the text.
+      suggestion_width -=
+          ts_button_size.width() + OmniboxMatchCellView::kRefreshMarginRight;
+
+      // Center the button vertically.
+      const int vertical_margin =
+          (suggestion_view_->height() - ts_button_size.height()) / 2;
+      suggestion_tab_switch_button_->SetPosition(
+          gfx::Point(suggestion_width, vertical_margin));
+      suggestion_tab_switch_button_->SetVisible(true);
+    } else {
+      suggestion_tab_switch_button_->SetVisible(false);
+    }
+  }
+  keyword_view_->SetBounds(suggestion_width, 0, width(), height());
+  suggestion_view_->SetBounds(0, 0, suggestion_width, height());
+}
 
 bool OmniboxResultView::OnMousePressed(const ui::MouseEvent& event) {
   if (event.IsOnlyLeftMouseButton())
@@ -306,14 +291,15 @@ bool OmniboxResultView::OnMouseDragged(const ui::MouseEvent& event) {
     // When the drag enters or remains within the bounds of this view, either
     // set the state to be selected or hovered, depending on the mouse button.
     if (event.IsOnlyLeftMouseButton()) {
-      if (GetState() != SELECTED)
+      if (!IsSelected())
         model_->SetSelectedLine(model_index_);
-      if (tab_switch_button_ && tab_switch_button_->parent()) {
+      if (suggestion_tab_switch_button_) {
         gfx::Point point_in_child_coords(event.location());
-        View::ConvertPointToTarget(this, tab_switch_button_.get(),
+        View::ConvertPointToTarget(this, suggestion_tab_switch_button_.get(),
                                    &point_in_child_coords);
-        if (tab_switch_button_->HitTestPoint(point_in_child_coords)) {
-          SetMouseHandler(tab_switch_button_.get());
+        if (suggestion_tab_switch_button_->HitTestPoint(
+                point_in_child_coords)) {
+          SetMouseHandler(suggestion_tab_switch_button_.get());
           return false;
         }
       }
@@ -360,26 +346,17 @@ void OmniboxResultView::GetAccessibleNodeData(ui::AXNodeData* node_data) {
   node_data->AddIntAttribute(ax::mojom::IntAttribute::kSetSize,
                              model_->child_count());
 
-  node_data->AddState(ax::mojom::State::kSelectable);
-  switch (GetState()) {
-    case SELECTED:
-      node_data->AddState(ax::mojom::State::kSelected);
-      break;
-    case HOVERED:
-      node_data->AddState(ax::mojom::State::kHovered);
-      break;
-    default:
-      break;
-  }
+  node_data->AddBoolAttribute(ax::mojom::BoolAttribute::kSelected,
+                              IsSelected());
+  if (is_hovered_)
+    node_data->AddState(ax::mojom::State::kHovered);
 }
 
 gfx::Size OmniboxResultView::CalculatePreferredSize() const {
-  int height = GetTextHeight() + (2 * GetVerticalMargin());
-  if (match_.answer)
-    height += GetAnswerHeight();
-  else if (IsTwoLineLayout())
-    height += GetTextHeight();
-  return gfx::Size(0, height);
+  // The keyword_view_ is not added because keyword_view_ uses the same space as
+  // suggestion_view_. So the 'preferred' size is just the suggestion_view_
+  // size.
+  return suggestion_view_->CalculatePreferredSize();
 }
 
 void OmniboxResultView::OnNativeThemeChanged(const ui::NativeTheme* theme) {
@@ -390,71 +367,8 @@ void OmniboxResultView::OnNativeThemeChanged(const ui::NativeTheme* theme) {
 ////////////////////////////////////////////////////////////////////////////////
 // OmniboxResultView, private:
 
-views::ImageView* OmniboxResultView::AddImageView() {
-  views::ImageView* view = new views::ImageView();
-  AddChildView(view);
-  return view;
-}
-
-OmniboxTextView* OmniboxResultView::AddOmniboxTextView(
-    const gfx::FontList& font_list) {
-  OmniboxTextView* view = new OmniboxTextView(this, font_list);
-  AddChildView(view);
-  return view;
-}
-
-int OmniboxResultView::GetTextHeight() const {
-  return font_height_ + kVerticalPadding;
-}
-
 gfx::Image OmniboxResultView::GetIcon() const {
-  return model_->GetMatchIcon(match_, GetVectorIconColor());
-}
-
-SkColor OmniboxResultView::GetVectorIconColor() const {
-  // For selected rows, paint the icon the same color as the text.
-  SkColor color = GetColor(GetState(), TEXT);
-  if (GetState() != SELECTED)
-    color = color_utils::DeriveDefaultIconColor(color);
-  return color;
-}
-
-bool OmniboxResultView::ShowOnlyKeywordMatch() const {
-  return match_.associated_keyword &&
-         (keyword_icon_view_->x() <= (icon_view_->x() + icon_view_->width()));
-}
-
-int OmniboxResultView::GetAnswerHeight() const {
-  const int horizontal_padding =
-      GetLayoutConstant(LOCATION_BAR_PADDING) +
-      GetLayoutConstant(LOCATION_BAR_ICON_INTERIOR_PADDING);
-  const gfx::Image icon = GetIcon();
-  int icon_width = icon.Width();
-  int answer_icon_size = image_view_->visible()
-                             ? image_view_->height() + kAnswerIconToTextPadding
-                             : 0;
-  // TODO(dschuyler): The GetIconAlignmentOffset() is applied an extra time to
-  // match the math in Layout(). This seems like a (minor) mistake.
-  int deduction = (GetIconAlignmentOffset() * 2) + icon_width +
-                  (horizontal_padding * 3) + answer_icon_size;
-  int description_width = std::max(width() - deduction, 0);
-  return description_view_->GetHeightForWidth(description_width) +
-         kVerticalPadding;
-}
-
-int OmniboxResultView::GetVerticalMargin() const {
-  // Regardless of the text size, we ensure a minimum size for the content line
-  // here. This minimum is larger for hybrid mouse/touch devices to ensure an
-  // adequately sized touch target.
-  using Md = ui::MaterialDesignController;
-  const int kIconVerticalPad = base::GetFieldTrialParamByFeatureAsInt(
-      omnibox::kUIExperimentVerticalMargin,
-      OmniboxFieldTrial::kUIVerticalMarginParam,
-      Md::GetMode() == Md::MATERIAL_HYBRID ? 8 : 4);
-  const int min_height =
-      GetLayoutConstant(LOCATION_BAR_ICON_SIZE) + (kIconVerticalPad * 2);
-
-  return std::max(kVerticalMargin, (min_height - GetTextHeight()) / 2);
+  return model_->GetMatchIcon(match_, GetColor(OmniboxPart::RESULTS_ICON));
 }
 
 void OmniboxResultView::SetHovered(bool hovered) {
@@ -465,143 +379,16 @@ void OmniboxResultView::SetHovered(bool hovered) {
   }
 }
 
+bool OmniboxResultView::IsSelected() const {
+  return model_->IsSelectedIndex(model_index_);
+}
+
+void OmniboxResultView::OpenMatch(WindowOpenDisposition disposition) {
+  model_->OpenMatch(model_index_, disposition);
+}
+
 ////////////////////////////////////////////////////////////////////////////////
 // OmniboxResultView, views::View overrides, private:
-
-void OmniboxResultView::Layout() {
-  views::View::Layout();
-  const int horizontal_padding =
-      GetLayoutConstant(LOCATION_BAR_PADDING) +
-      GetLayoutConstant(LOCATION_BAR_ICON_INTERIOR_PADDING);
-  const int start_x = GetIconAlignmentOffset() + horizontal_padding;
-  int end_x = width() - start_x;
-
-  int text_height = GetTextHeight();
-  int row_height = text_height;
-  if (IsTwoLineLayout())
-    row_height += match_.answer ? GetAnswerHeight() : GetTextHeight();
-
-  const gfx::Image icon = GetIcon();
-  const int icon_y = GetVerticalMargin() + (row_height - icon.Height()) / 2;
-  icon_view_->SetBounds(start_x, icon_y, icon.Width(), icon.Height());
-
-  icon_view_->SetVisible(!ShowOnlyKeywordMatch());
-  separator_view_->SetVisible(false);
-
-  // TODO(dschuyler): Refactor these if/else's into separate pieces of code to
-  // improve readability/maintainability.
-
-  AutocompleteMatch* keyword_match = match_.associated_keyword.get();
-  if (keyword_match) {
-    // NOTE: While animating the keyword match, both matches may be visible.
-    const int max_kw_x = end_x - keyword_icon_view_->width();
-    int kw_x = animation_->CurrentValueBetween(max_kw_x, start_x);
-    end_x = kw_x;
-    int y = GetVerticalMargin();
-    kw_x += BackgroundWith1PxBorder::kLocationBarBorderThicknessDip;
-    keyword_icon_view_->SetPosition(
-        gfx::Point(kw_x, (height() - keyword_icon_view_->height()) / 2));
-    kw_x += keyword_icon_view_->width() + horizontal_padding;
-
-    keyword_content_view_->SizeToPreferredSize();
-    int first_width = keyword_content_view_->GetContentsBounds().width();
-    keyword_description_view_->SizeToPreferredSize();
-    int second_width =
-        keyword_description_view_
-            ? keyword_description_view_->GetContentsBounds().width()
-            : 0;
-    OmniboxPopupModel::ComputeMatchMaxWidths(
-        first_width, separator_view_->width(), second_width, width(),
-        /*description_on_separate_line=*/false,
-        !AutocompleteMatch::IsSearchType(match_.type), &first_width,
-        &second_width);
-    keyword_content_view_->SetBounds(kw_x, y, first_width, text_height);
-    if (second_width != 0) {
-      kw_x += keyword_content_view_->width();
-      separator_view_->SetVisible(true);
-      separator_view_->SetBounds(kw_x, y, separator_view_->width(),
-                                 text_height);
-      kw_x += separator_view_->width();
-      keyword_description_view_->SetBounds(kw_x, y, second_width, text_height);
-    } else if (IsTwoLineLayout()) {
-      keyword_content_view_->SetSize(gfx::Size(first_width, text_height * 2));
-    }
-  }
-
-  if (tab_switch_button_ && match_.type == AutocompleteMatchType::TAB_SEARCH) {
-    const int ts_button_width = tab_switch_button_->GetPreferredSize().width();
-    const int ts_button_height = height();
-    tab_switch_button_->SetSize(gfx::Size(ts_button_width, ts_button_height));
-
-    const int ts_x = end_x - ts_button_width + horizontal_padding;
-    end_x = ts_x - start_x - horizontal_padding;
-    tab_switch_button_->SetPosition(gfx::Point(ts_x, 0));
-  }
-
-  // NOTE: While animating the keyword match, both matches may be visible.
-  if (!ShowOnlyKeywordMatch()) {
-    description_view_->SizeToPreferredSize();
-    int x = start_x;
-    x += icon.Width() + horizontal_padding;
-    int y = GetVerticalMargin();
-    if (match_.answer) {
-      content_view_->SetBounds(x, y, end_x - x, text_height);
-      y += text_height;
-      if (image_view_->visible()) {
-        // The description may be multi-line. Using the view height results in
-        // an image that's too large, so we use the line height here instead.
-        int image_edge_length = description_view_->GetLineHeight();
-        image_view_->SetBounds(
-            start_x + icon_view_->width() + horizontal_padding,
-            y + (kVerticalPadding / 2), image_edge_length, image_edge_length);
-        image_view_->SetImageSize(
-            gfx::Size(image_edge_length, image_edge_length));
-        x += image_view_->width() + kAnswerIconToTextPadding;
-      }
-      int description_width = end_x - x;
-      description_view_->SetBounds(
-          x, y, description_width,
-          description_view_->GetHeightForWidth(description_width) +
-              kVerticalPadding);
-    } else if (IsTwoLineLayout()) {
-      if (!!description_view_->GetContentsBounds().width()) {
-        // A description is present.
-        content_view_->SetBounds(x, y, end_x - x, GetTextHeight());
-        y += GetTextHeight();
-        int description_width = end_x - x;
-        description_view_->SetBounds(
-            x, y, description_width,
-            description_view_->GetHeightForWidth(description_width) +
-                kVerticalPadding);
-      } else {
-        // For no description, shift down halfway to draw contents in middle.
-        y += GetTextHeight() / 2;
-        content_view_->SetBounds(x, y, end_x - x, GetTextHeight());
-      }
-    } else {
-      content_view_->SizeToPreferredSize();
-      int first_width = content_view_->GetContentsBounds().width();
-      int second_width = description_view_
-                             ? description_view_->GetContentsBounds().width()
-                             : 0;
-      OmniboxPopupModel::ComputeMatchMaxWidths(
-          first_width, separator_view_->width(), second_width, end_x - x,
-          /*description_on_separate_line=*/false,
-          !AutocompleteMatch::IsSearchType(match_.type), &first_width,
-          &second_width);
-      OmniboxTextView* first_view = content_view_;
-      OmniboxTextView* second_view = description_view_;
-      first_view->SetBounds(x, y, first_width, text_height);
-      x += first_width;
-      if (second_width) {
-        separator_view_->SetVisible(true);
-        separator_view_->SetBounds(x, y, separator_view_->width(), text_height);
-        x += separator_view_->width();
-      }
-      second_view->SetBounds(x, y, second_width, text_height);
-    }
-  }
-}
 
 const char* OmniboxResultView::GetClassName() const {
   return "OmniboxResultView";

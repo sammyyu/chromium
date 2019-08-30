@@ -10,15 +10,16 @@
 #include <utility>
 
 #include "base/android/jni_string.h"
-#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/synchronization/waitable_event.h"
 #include "base/threading/platform_thread.h"
 #include "base/threading/thread.h"
 #include "base/threading/thread_restrictions.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
 #include "base/values.h"
+#include "chrome/browser/android/chrome_feature_list.h"
 #include "chrome/browser/android/tab_android.h"
 #include "chrome/browser/android/vr/android_ui_gesture_target.h"
 #include "chrome/browser/android/vr/autocomplete_controller.h"
@@ -31,7 +32,10 @@
 #include "chrome/browser/component_updater/vr_assets_component_installer.h"
 #include "chrome/browser/media/webrtc/media_capture_devices_dispatcher.h"
 #include "chrome/browser/media/webrtc/media_stream_capture_indicator.h"
+#include "chrome/browser/permissions/permission_manager.h"
+#include "chrome/browser/permissions/permission_result.h"
 #include "chrome/browser/profiles/profile_manager.h"
+#include "chrome/browser/ssl/security_state_tab_helper.h"
 #include "chrome/browser/vr/assets_loader.h"
 #include "chrome/browser/vr/metrics/metrics_helper.h"
 #include "chrome/browser/vr/metrics/session_metrics_helper.h"
@@ -39,6 +43,7 @@
 #include "chrome/browser/vr/model/omnibox_suggestions.h"
 #include "chrome/browser/vr/model/text_input_info.h"
 #include "chrome/browser/vr/toolbar_helper.h"
+#include "chrome/browser/vr/ui_test_input.h"
 #include "chrome/browser/vr/vr_tab_helper.h"
 #include "chrome/common/chrome_features.h"
 #include "chrome/common/url_constants.h"
@@ -46,31 +51,33 @@
 #include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/navigation_entry.h"
+#include "content/public/browser/render_process_host.h"
 #include "content/public/browser/render_view_host.h"
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_iterator.h"
 #include "content/public/browser/render_widget_host_view.h"
+#include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/referrer.h"
 #include "content/public/common/service_manager_connection.h"
 #include "content/public/common/url_constants.h"
 #include "device/vr/android/gvr/cardboard_gamepad_data_fetcher.h"
+#include "device/vr/android/gvr/gvr_device.h"
 #include "device/vr/android/gvr/gvr_gamepad_data_fetcher.h"
-#include "device/vr/vr_device.h"
 #include "gpu/command_buffer/common/mailbox.h"
 #include "jni/VrShellImpl_jni.h"
 #include "services/device/public/mojom/constants.mojom.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "services/service_manager/public/cpp/connector.h"
-#include "third_party/WebKit/public/platform/WebInputEvent.h"
 #include "ui/android/window_android.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/display/display.h"
 #include "ui/display/screen.h"
 #include "ui/gfx/android/java_bitmap.h"
 #include "ui/gfx/codec/png_codec.h"
+#include "ui/gfx/geometry/point_f.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/geometry/size_conversions.h"
-#include "ui/gfx/native_widget_types.h"
 #include "ui/gl/android/surface_texture.h"
 #include "url/gurl.h"
 
@@ -82,7 +89,7 @@ namespace vr {
 namespace {
 vr::VrShell* g_vr_shell_instance;
 
-constexpr base::TimeDelta poll_media_access_interval_ =
+constexpr base::TimeDelta kPollCapturingStateInterval =
     base::TimeDelta::FromSecondsD(0.2);
 
 constexpr base::TimeDelta kExitVrDueToUnsupportedModeDelay =
@@ -139,26 +146,32 @@ VrShell::VrShell(JNIEnv* env,
                  float display_height_meters,
                  int display_width_pixels,
                  int display_height_pixels,
-                 bool pause_content)
-    : vr_shell_enabled_(base::FeatureList::IsEnabled(features::kVrBrowsing)),
-      web_vr_autopresentation_expected_(
+                 bool pause_content,
+                 bool low_density)
+    : web_vr_autopresentation_expected_(
           ui_initial_state.web_vr_autopresentation_expected),
       delegate_provider_(delegate),
       main_thread_task_runner_(base::ThreadTaskRunnerHandle::Get()),
       reprojected_rendering_(reprojected_rendering),
       display_size_meters_(display_width_meters, display_height_meters),
       display_size_pixels_(display_width_pixels, display_height_pixels),
-      waiting_for_assets_component_timer_(false, false),
+      gl_surface_created_event_(
+          base::WaitableEvent::ResetPolicy::MANUAL,
+          base::WaitableEvent::InitialState::NOT_SIGNALED),
       weak_ptr_factory_(this) {
   DVLOG(1) << __FUNCTION__ << "=" << this;
   DCHECK(g_vr_shell_instance == nullptr);
   g_vr_shell_instance = this;
   j_vr_shell_.Reset(env, obj);
 
+  base::OnceCallback<gfx::AcceleratedWidget()> surface_callback =
+      base::BindOnce(&VrShell::GetRenderSurface, base::Unretained(this));
+
   gl_thread_ = std::make_unique<VrGLThread>(
-      weak_ptr_factory_.GetWeakPtr(), main_thread_task_runner_, gvr_api,
-      ui_initial_state, reprojected_rendering_, HasDaydreamSupport(env),
-      pause_content);
+      weak_ptr_factory_.GetWeakPtr(), main_thread_task_runner_,
+      &gl_surface_created_event_, gvr_api, ui_initial_state,
+      reprojected_rendering_, HasDaydreamSupport(env), pause_content,
+      low_density, std::move(surface_callback));
   ui_ = gl_thread_.get();
   toolbar_ = std::make_unique<ToolbarHelper>(ui_, this);
   autocomplete_controller_ =
@@ -173,9 +186,8 @@ VrShell::VrShell(JNIEnv* env,
                           ui_initial_state.web_vr_autopresentation_expected);
   }
 
-  if (AssetsLoader::GetInstance()->ComponentReady()) {
-    LoadAssets();
-  } else {
+  can_load_new_assets_ = AssetsLoader::GetInstance()->ComponentReady();
+  if (!can_load_new_assets_) {
     waiting_for_assets_component_timer_.Start(
         FROM_HERE, kAssetsComponentWaitDelay,
         base::BindRepeating(&VrShell::OnAssetsComponentWaitTimeout,
@@ -195,6 +207,12 @@ VrShell::VrShell(JNIEnv* env,
 
 void VrShell::Destroy(JNIEnv* env, const JavaParamRef<jobject>& obj) {
   delete this;
+}
+
+bool VrShell::HasUiFinishedLoading(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& obj) {
+  return ui_finished_loading_;
 }
 
 void VrShell::SwapContents(JNIEnv* env,
@@ -222,12 +240,14 @@ void VrShell::SwapContents(JNIEnv* env,
 
   if (web_contents_) {
     vr_input_connection_.reset(new VrInputConnection(web_contents_));
-    PostToGlThread(FROM_HERE,
-                   base::BindOnce(&VrGLThread::SetInputConnection,
-                                  base::Unretained(gl_thread_.get()),
-                                  vr_input_connection_->GetWeakPtr()));
+    PostToGlThread(FROM_HERE, base::BindOnce(&VrGLThread::SetInputConnection,
+                                             base::Unretained(gl_thread_.get()),
+                                             vr_input_connection_.get()));
   } else {
     vr_input_connection_ = nullptr;
+    PostToGlThread(FROM_HERE,
+                   base::BindOnce(&VrGLThread::SetInputConnection,
+                                  base::Unretained(gl_thread_.get()), nullptr));
   }
 
   vr_web_contents_observer_ = std::make_unique<VrWebContentsObserver>(
@@ -235,7 +255,7 @@ void VrShell::SwapContents(JNIEnv* env,
 
   // TODO(https://crbug.com/684661): Make SessionMetricsHelper tab-aware and
   // able to track multiple tabs.
-  if (web_contents_) {
+  if (web_contents_ && !SessionMetricsHelper::FromWebContents(web_contents_)) {
     SessionMetricsHelper::CreateForWebContents(
         web_contents_,
         webvr_mode_ ? Mode::kWebXrVrPresentation : Mode::kVrBrowsingRegular,
@@ -280,7 +300,6 @@ VrShell::~VrShell() {
   DVLOG(1) << __FUNCTION__ << "=" << this;
   content_surface_texture_ = nullptr;
   overlay_surface_texture_ = nullptr;
-  poll_capturing_media_task_.Cancel();
   if (gvr_gamepad_source_active_) {
     device::GamepadDataFetcherManager::GetInstance()->RemoveSourceFactory(
         device::GAMEPAD_SOURCE_GVR);
@@ -316,23 +335,18 @@ void VrShell::PostToGlThread(const base::Location& from_here,
                                                       std::move(task));
 }
 
-void VrShell::OnContentPaused(bool paused) {
-  if (!vr_shell_enabled_)
-    return;
-  device::VRDevice* device = delegate_provider_->GetDevice();
-  if (!device)
-    return;
-
-  // TODO(mthiesse): The page is no longer visible when in menu mode. We
-  // should unfocus or otherwise let it know it's hidden.
-  if (paused)
-    device->Blur();
-  else
-    device->Focus();
-}
-
-void VrShell::Navigate(GURL url) {
+void VrShell::Navigate(GURL url, NavigationMethod method) {
   JNIEnv* env = base::android::AttachCurrentThread();
+
+  // Record metrics.
+  if (method == NavigationMethod::kOmniboxSuggestionSelected ||
+      method == NavigationMethod::kOmniboxUrlEntry) {
+    SessionMetricsHelper* metrics_helper =
+        SessionMetricsHelper::FromWebContents(web_contents_);
+    if (metrics_helper)
+      metrics_helper->RecordUrlRequested(url, method);
+  }
+
   Java_VrShellImpl_loadUrl(
       env, j_vr_shell_,
       base::android::ConvertUTF8ToJavaString(env, url.spec()));
@@ -343,9 +357,74 @@ void VrShell::NavigateBack() {
   Java_VrShellImpl_navigateBack(env, j_vr_shell_);
 }
 
-void VrShell::ExitCct() {
+void VrShell::NavigateForward() {
   JNIEnv* env = base::android::AttachCurrentThread();
-  Java_VrShellImpl_exitCct(env, j_vr_shell_);
+  Java_VrShellImpl_navigateForward(env, j_vr_shell_);
+}
+
+void VrShell::ReloadTab() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_reloadTab(env, j_vr_shell_);
+}
+
+void VrShell::OpenNewTab(bool incognito) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_openNewTab(env, j_vr_shell_, incognito);
+}
+
+void VrShell::SelectTab(int id, bool incognito) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_selectTab(env, j_vr_shell_, id, incognito);
+}
+
+void VrShell::OpenBookmarks() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_openBookmarks(env, j_vr_shell_);
+}
+
+void VrShell::OpenRecentTabs() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_openRecentTabs(env, j_vr_shell_);
+}
+
+void VrShell::OpenHistory() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_openHistory(env, j_vr_shell_);
+}
+
+void VrShell::OpenDownloads() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_openDownloads(env, j_vr_shell_);
+}
+
+void VrShell::OpenShare() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_openShare(env, j_vr_shell_);
+}
+
+void VrShell::OpenSettings() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_openSettings(env, j_vr_shell_);
+}
+
+void VrShell::CloseTab(int id, bool incognito) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_closeTab(env, j_vr_shell_, id, incognito);
+}
+
+void VrShell::CloseAllTabs() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_closeAllTabs(env, j_vr_shell_);
+}
+
+void VrShell::CloseAllIncognitoTabs() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_closeAllIncognitoTabs(env, j_vr_shell_);
+}
+
+void VrShell::OpenFeedback() {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_openFeedback(env, j_vr_shell_);
 }
 
 void VrShell::CloseHostedDialog() {
@@ -363,7 +442,7 @@ void VrShell::ToggleCardboardGamepad(bool enabled) {
   }
 
   if (!cardboard_gamepad_source_active_ && enabled) {
-    device::VRDevice* device = delegate_provider_->GetDevice();
+    device::GvrDevice* device = delegate_provider_->GetDevice();
     if (!device)
       return;
 
@@ -382,7 +461,7 @@ void VrShell::ToggleGvrGamepad(bool enabled) {
   // Enable/disable updating gamepad state.
   if (enabled) {
     DCHECK(!gvr_gamepad_source_active_);
-    device::VRDevice* device = delegate_provider_->GetDevice();
+    device::GvrDevice* device = delegate_provider_->GetDevice();
     if (!device)
       return;
 
@@ -429,10 +508,17 @@ void VrShell::OnPause(JNIEnv* env, const JavaParamRef<jobject>& obj) {
     metrics_helper->SetVRActive(false);
   SetIsInVR(GetNonNativePageWebContents(), false);
 
-  poll_capturing_media_task_.Cancel();
+  poll_capturing_state_task_.Cancel();
 }
 
 void VrShell::OnResume(JNIEnv* env, const JavaParamRef<jobject>& obj) {
+  // Calling WaitForAssets before VrShellGl::OnResume so that the UI won't
+  // accidentally produce an initial frame with UI.
+  if (can_load_new_assets_) {
+    ui_->WaitForAssets();
+    LoadAssets();
+  }
+
   PostToGlThread(FROM_HERE, base::BindOnce(&VrShellGl::OnResume,
                                            gl_thread_->GetVrShellGl()));
 
@@ -442,7 +528,7 @@ void VrShell::OnResume(JNIEnv* env, const JavaParamRef<jobject>& obj) {
     metrics_helper->SetVRActive(true);
   SetIsInVR(GetNonNativePageWebContents(), true);
 
-  PollMediaAccessFlag();
+  PollCapturingState();
 }
 
 void VrShell::SetSurface(JNIEnv* env,
@@ -453,15 +539,13 @@ void VrShell::SetSurface(JNIEnv* env,
     return;
   gfx::AcceleratedWidget window =
       ANativeWindow_fromSurface(base::android::AttachCurrentThread(), surface);
-  PostToGlThread(FROM_HERE, base::BindOnce(&VrShellGl::InitializeGl,
-                                           gl_thread_->GetVrShellGl(),
-                                           base::Unretained(window)));
+  surface_window_ = window;
+  gl_surface_created_event_.Signal();
 }
 
 void VrShell::SetWebVrMode(JNIEnv* env,
                            const JavaParamRef<jobject>& obj,
-                           bool enabled,
-                           bool show_toast) {
+                           bool enabled) {
   webvr_mode_ = enabled;
   SessionMetricsHelper* metrics_helper =
       SessionMetricsHelper::FromWebContents(web_contents_);
@@ -470,7 +554,10 @@ void VrShell::SetWebVrMode(JNIEnv* env,
   PostToGlThread(FROM_HERE,
                  base::BindOnce(&VrShellGl::SetWebVrMode,
                                 gl_thread_->GetVrShellGl(), enabled));
-  ui_->SetWebVrMode(enabled, show_toast);
+  // We create and dispose a page info in order to get notifed of page
+  // permissions.
+  CreatePageInfo();
+  ui_->SetWebVrMode(enabled);
 
   if (!webvr_mode_ && !web_vr_autopresentation_expected_) {
     AssetsLoader::GetInstance()->GetMetricsHelper()->OnEnter(Mode::kVrBrowsing);
@@ -494,6 +581,16 @@ bool VrShell::IsDisplayingUrlForTesting(
   return ShouldDisplayURL();
 }
 
+base::android::ScopedJavaLocalRef<jobject>
+VrShell::GetVrInputConnectionForTesting(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& obj) {
+  if (!vr_input_connection_)
+    return nullptr;
+
+  return vr_input_connection_->GetJavaObject();
+}
+
 void VrShell::OnLoadProgressChanged(JNIEnv* env,
                                     const JavaParamRef<jobject>& obj,
                                     double progress) {
@@ -504,17 +601,20 @@ void VrShell::OnTabListCreated(JNIEnv* env,
                                const JavaParamRef<jobject>& obj,
                                jobjectArray tabs,
                                jobjectArray incognito_tabs) {
-  ProcessTabArray(env, tabs, false);
-  ProcessTabArray(env, incognito_tabs, true);
-  ui_->FlushTabList();
-}
+  ui_->RemoveAllTabs();
+  size_t len = env->GetArrayLength(incognito_tabs);
+  for (size_t i = 0; i < len; ++i) {
+    ScopedJavaLocalRef<jobject> j_tab(
+        env, env->GetObjectArrayElement(incognito_tabs, i));
+    TabAndroid* tab = TabAndroid::GetNativeTab(env, j_tab);
+    ui_->AddOrUpdateTab(tab->GetAndroidId(), true, tab->GetTitle());
+  }
 
-void VrShell::ProcessTabArray(JNIEnv* env, jobjectArray tabs, bool incognito) {
-  size_t len = env->GetArrayLength(tabs);
+  len = env->GetArrayLength(tabs);
   for (size_t i = 0; i < len; ++i) {
     ScopedJavaLocalRef<jobject> j_tab(env, env->GetObjectArrayElement(tabs, i));
     TabAndroid* tab = TabAndroid::GetNativeTab(env, j_tab);
-    ui_->AppendToTabList(incognito, tab->GetAndroidId(), tab->GetTitle());
+    ui_->AddOrUpdateTab(tab->GetAndroidId(), false, tab->GetTitle());
   }
 }
 
@@ -523,22 +623,22 @@ void VrShell::OnTabUpdated(JNIEnv* env,
                            jboolean incognito,
                            jint id,
                            jstring jtitle) {
-  std::string title;
-  base::android::ConvertJavaStringToUTF8(env, jtitle, &title);
-  ui_->UpdateTab(incognito, id, title);
+  base::string16 title;
+  base::android::ConvertJavaStringToUTF16(env, jtitle, &title);
+  ui_->AddOrUpdateTab(id, incognito, title);
 }
 
 void VrShell::OnTabRemoved(JNIEnv* env,
                            const JavaParamRef<jobject>& obj,
                            jboolean incognito,
                            jint id) {
-  ui_->RemoveTab(incognito, id);
+  ui_->RemoveTab(id, incognito);
 }
 
 void VrShell::SetAlertDialog(JNIEnv* env,
                              const base::android::JavaParamRef<jobject>& obj,
-                             int width,
-                             int height) {
+                             float width,
+                             float height) {
   PostToGlThread(FROM_HERE, base::BindOnce(&VrShellGl::EnableAlertDialog,
                                            gl_thread_->GetVrShellGl(),
                                            gl_thread_.get(), width, height));
@@ -549,31 +649,68 @@ void VrShell::CloseAlertDialog(
     const base::android::JavaParamRef<jobject>& obj) {
   PostToGlThread(FROM_HERE, base::BindOnce(&VrShellGl::DisableAlertDialog,
                                            gl_thread_->GetVrShellGl()));
+  // This will refresh our permissions after an alert is closed which should
+  // ensure that long press on the app button gives accurate results.
+  CreatePageInfo();
 }
 
-void VrShell::SetAlertDialogSize(
+void VrShell::SetDialogBufferSize(
     JNIEnv* env,
     const base::android::JavaParamRef<jobject>& obj,
     int width,
     int height) {
   if (ui_surface_texture_)
     ui_surface_texture_->SetDefaultBufferSize(width, height);
+}
+
+void VrShell::SetAlertDialogSize(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& obj,
+    float width,
+    float height) {
   PostToGlThread(FROM_HERE,
                  base::BindOnce(&VrShellGl::SetAlertDialogSize,
                                 gl_thread_->GetVrShellGl(), width, height));
 }
 
+void VrShell::SetDialogLocation(JNIEnv* env,
+                                const base::android::JavaParamRef<jobject>& obj,
+                                float x,
+                                float y) {
+  PostToGlThread(FROM_HERE, base::BindOnce(&VrShellGl::SetDialogLocation,
+                                           gl_thread_->GetVrShellGl(), x, y));
+}
+
+void VrShell::SetDialogFloating(JNIEnv* env,
+                                const base::android::JavaParamRef<jobject>& obj,
+                                bool floating) {
+  PostToGlThread(FROM_HERE,
+                 base::BindOnce(&VrShellGl::SetDialogFloating,
+                                gl_thread_->GetVrShellGl(), floating));
+}
+
+void VrShell::ShowToast(JNIEnv* env,
+                        const base::android::JavaParamRef<jobject>& obj,
+                        jstring jtext) {
+  base::string16 text;
+  base::android::ConvertJavaStringToUTF16(env, jtext, &text);
+  PostToGlThread(FROM_HERE, base::BindOnce(&VrShellGl::ShowToast,
+                                           gl_thread_->GetVrShellGl(), text));
+}
+
+void VrShell::CancelToast(JNIEnv* env,
+                          const base::android::JavaParamRef<jobject>& obj) {
+  PostToGlThread(FROM_HERE, base::BindOnce(&VrShellGl::CancelToast,
+                                           gl_thread_->GetVrShellGl()));
+}
+
 void VrShell::ConnectPresentingService(
-    device::mojom::VRSubmitFrameClientPtr submit_client,
-    device::mojom::VRPresentationProviderRequest request,
     device::mojom::VRDisplayInfoPtr display_info,
-    device::mojom::VRRequestPresentOptionsPtr present_options) {
-  PostToGlThread(
-      FROM_HERE,
-      base::BindOnce(&VrShellGl::ConnectPresentingService,
-                     gl_thread_->GetVrShellGl(), submit_client.PassInterface(),
-                     std::move(request), std::move(display_info),
-                     std::move(present_options)));
+    device::mojom::XRDeviceRuntimeSessionOptionsPtr options) {
+  PostToGlThread(FROM_HERE,
+                 base::BindOnce(&VrShellGl::ConnectPresentingService,
+                                gl_thread_->GetVrShellGl(),
+                                std::move(display_info), std::move(options)));
 }
 
 void VrShell::SetHistoryButtonsEnabled(JNIEnv* env,
@@ -613,18 +750,21 @@ void VrShell::DialogSurfaceCreated(jobject surface,
   Java_VrShellImpl_dialogSurfaceCreated(env, j_vr_shell_, ref);
 }
 
-void VrShell::GvrDelegateReady(
-    gvr::ViewerType viewer_type,
-    device::mojom::VRDisplayFrameTransportOptionsPtr transport_options) {
-  frame_transport_options_ = std::move(transport_options);
+void VrShell::GvrDelegateReady(gvr::ViewerType viewer_type) {
   delegate_provider_->SetDelegate(this, viewer_type);
 }
 
-device::mojom::VRDisplayFrameTransportOptionsPtr
-VrShell::GetVRDisplayFrameTransportOptions() {
-  // Caller takes ownership. Must return a copy to support having this called
-  // multiple times during the lifetime of this instance.
-  return frame_transport_options_.Clone();
+void VrShell::SendRequestPresentReply(
+    bool success,
+    device::mojom::VRSubmitFrameClientRequest request,
+    device::mojom::VRPresentationProviderPtrInfo provider_info,
+    device::mojom::VRDisplayFrameTransportOptionsPtr transport_options) {
+  device::mojom::VRPresentationProviderPtr provider;
+  provider.Bind(std::move(provider_info));
+
+  delegate_provider_->SendRequestPresentReply(success, std::move(request),
+                                              std::move(provider),
+                                              std::move(transport_options));
 }
 
 void VrShell::BufferBoundsChanged(JNIEnv* env,
@@ -655,6 +795,12 @@ void VrShell::ResumeContentRendering(JNIEnv* env,
                                            gl_thread_->GetVrShellGl()));
 }
 
+void VrShell::OnOverlayTextureEmptyChanged(JNIEnv* env,
+                                           const JavaParamRef<jobject>& object,
+                                           jboolean empty) {
+  ui_->SetOverlayTextureEmpty(empty);
+}
+
 void VrShell::ContentWebContentsDestroyed() {
   web_contents_ = nullptr;
 }
@@ -679,6 +825,21 @@ void VrShell::LogUnsupportedModeUserMetric(JNIEnv* env,
                                            const JavaParamRef<jobject>& obj,
                                            int mode) {
   LogUnsupportedModeUserMetric((UiUnsupportedMode)mode);
+}
+
+void VrShell::RecordVrStartAction(VrStartAction action) {
+  SessionMetricsHelper* metrics_helper =
+      SessionMetricsHelper::FromWebContents(web_contents_);
+  if (metrics_helper) {
+    metrics_helper->RecordVrStartAction(action);
+  }
+}
+
+void VrShell::RecordPresentationStartAction(PresentationStartAction action) {
+  SessionMetricsHelper* metrics_helper =
+      SessionMetricsHelper::FromWebContents(web_contents_);
+  if (metrics_helper)
+    metrics_helper->RecordPresentationStartAction(action);
 }
 
 void VrShell::ShowSoftInput(JNIEnv* env,
@@ -723,14 +884,11 @@ content::WebContents* VrShell::GetNonNativePageWebContents() const {
 void VrShell::OnUnsupportedMode(UiUnsupportedMode mode) {
   switch (mode) {
     case UiUnsupportedMode::kUnhandledCodePoint:  // Fall through.
+    case UiUnsupportedMode::kUnhandledCertificateInfo:
+    case UiUnsupportedMode::kUnhandledConnectionSecurityInfo:
     case UiUnsupportedMode::kGenericUnsupportedFeature:
       ExitVrDueToUnsupportedMode(mode);
       return;
-    case UiUnsupportedMode::kUnhandledPageInfo: {
-      JNIEnv* env = base::android::AttachCurrentThread();
-      Java_VrShellImpl_onUnhandledPageInfo(env, j_vr_shell_);
-      return;
-    }
     case UiUnsupportedMode::kVoiceSearchNeedsRecordAudioOsPermission: {
       JNIEnv* env = base::android::AttachCurrentThread();
       Java_VrShellImpl_onUnhandledPermissionPrompt(env, j_vr_shell_);
@@ -741,8 +899,15 @@ void VrShell::OnUnsupportedMode(UiUnsupportedMode mode) {
       Java_VrShellImpl_onNeedsKeyboardUpdate(env, j_vr_shell_);
       return;
     }
+    // Is not sent by the UI anymore. Enum value still exists to show correct
+    // exit prompt if vr-browsing-native-android-ui flag is false.
+    case UiUnsupportedMode::kUnhandledPageInfo:
+    // kSearchEnginePromo should directly DOFF without showing a promo. So it
+    // should never be used from VR ui thread.
+    case UiUnsupportedMode::kSearchEnginePromo:
+    // Should never be used as a mode.
     case UiUnsupportedMode::kCount:
-      NOTREACHED();  // Should never be used as a mode.
+      NOTREACHED();
       return;
   }
 
@@ -763,6 +928,7 @@ void VrShell::OnExitVrPromptResult(UiUnsupportedMode reason,
       break;
   }
 
+  DCHECK_NE(reason, UiUnsupportedMode::kCount);
   if (reason == UiUnsupportedMode::kVoiceSearchNeedsRecordAudioOsPermission) {
     // Note that we already measure the number of times the user exits VR
     // because of the record audio permission through
@@ -828,7 +994,10 @@ void VrShell::SetVoiceSearchActive(bool active) {
     Profile* profile = ProfileManager::GetActiveUserProfile();
     std::string profile_locale = g_browser_process->GetApplicationLocale();
     speech_recognizer_.reset(new SpeechRecognizer(
-        this, ui_, profile->GetRequestContext(), profile_locale));
+        this, ui_,
+        content::BrowserContext::GetDefaultStoragePartition(profile)
+            ->GetURLLoaderFactoryForBrowserProcessIOThread(),
+        profile->GetRequestContext(), profile_locale));
   }
   if (active) {
     speech_recognizer_->Start();
@@ -849,31 +1018,40 @@ void VrShell::StopAutocomplete() {
   autocomplete_controller_->Stop();
 }
 
+void VrShell::ShowPageInfo() {
+  Java_VrShellImpl_showPageInfo(base::android::AttachCurrentThread(),
+                                j_vr_shell_);
+}
+
 bool VrShell::HasAudioPermission() {
   JNIEnv* env = base::android::AttachCurrentThread();
   return Java_VrShellImpl_hasAudioPermission(env, j_vr_shell_);
 }
 
-void VrShell::PollMediaAccessFlag() {
-  poll_capturing_media_task_.Cancel();
-
-  poll_capturing_media_task_.Reset(base::BindRepeating(
-      &VrShell::PollMediaAccessFlag, base::Unretained(this)));
+void VrShell::PollCapturingState() {
+  poll_capturing_state_task_.Reset(base::BindRepeating(
+      &VrShell::PollCapturingState, base::Unretained(this)));
   main_thread_task_runner_->PostDelayedTask(
-      FROM_HERE, poll_capturing_media_task_.callback(),
-      poll_media_access_interval_);
+      FROM_HERE, poll_capturing_state_task_.callback(),
+      kPollCapturingStateInterval);
 
-  int num_tabs_capturing_audio = 0;
-  int num_tabs_capturing_video = 0;
-  int num_tabs_capturing_screen = 0;
-  int num_tabs_bluetooth_connected = 0;
   scoped_refptr<MediaStreamCaptureIndicator> indicator =
       MediaCaptureDevicesDispatcher::GetInstance()
           ->GetMediaStreamCaptureIndicator();
 
+  capturing_state_.audio_capture_enabled = false;
+  capturing_state_.video_capture_enabled = false;
+  capturing_state_.screen_capture_enabled = false;
+  capturing_state_.bluetooth_connected = false;
+  capturing_state_.background_audio_capture_enabled = false;
+  capturing_state_.background_video_capture_enabled = false;
+  capturing_state_.background_screen_capture_enabled = false;
+  capturing_state_.background_bluetooth_connected = false;
+
   std::unique_ptr<content::RenderWidgetHostIterator> widgets(
       content::RenderWidgetHost::GetRenderWidgetHosts());
   while (content::RenderWidgetHost* rwh = widgets->GetNextHost()) {
+    bool is_foreground = rwh->GetProcess()->VisibleClientCount() > 0;
     content::RenderViewHost* rvh = content::RenderViewHost::From(rwh);
     if (!rvh)
       continue;
@@ -883,48 +1061,43 @@ void VrShell::PollMediaAccessFlag() {
       continue;
     if (web_contents->GetRenderViewHost() != rvh)
       continue;
+
     // Because a WebContents can only have one current RVH at a time, there will
     // be no duplicate WebContents here.
-    if (indicator->IsCapturingAudio(web_contents))
-      num_tabs_capturing_audio++;
-    if (indicator->IsCapturingVideo(web_contents))
-      num_tabs_capturing_video++;
-    if (indicator->IsBeingMirrored(web_contents))
-      num_tabs_capturing_screen++;
-    if (web_contents->IsConnectedToBluetoothDevice())
-      num_tabs_bluetooth_connected++;
+    if (indicator->IsCapturingAudio(web_contents)) {
+      if (is_foreground)
+        capturing_state_.audio_capture_enabled = true;
+      else
+        capturing_state_.background_audio_capture_enabled = true;
+    }
+    if (indicator->IsCapturingVideo(web_contents)) {
+      if (is_foreground)
+        capturing_state_.video_capture_enabled = true;
+      else
+        capturing_state_.background_video_capture_enabled = true;
+    }
+    if (indicator->IsBeingMirrored(web_contents)) {
+      if (is_foreground)
+        capturing_state_.screen_capture_enabled = true;
+      else
+        capturing_state_.background_screen_capture_enabled = true;
+    }
+    if (web_contents->IsConnectedToBluetoothDevice()) {
+      if (is_foreground)
+        capturing_state_.bluetooth_connected = true;
+      else
+        capturing_state_.background_bluetooth_connected = true;
+    }
   }
 
   geolocation_config_->IsHighAccuracyLocationBeingCaptured(base::BindRepeating(
-      &VrShell::SetHighAccuracyLocation, base::Unretained(this)));
-
-  bool is_capturing_audio = num_tabs_capturing_audio > 0;
-  bool is_capturing_video = num_tabs_capturing_video > 0;
-  bool is_capturing_screen = num_tabs_capturing_screen > 0;
-  bool is_bluetooth_connected = num_tabs_bluetooth_connected > 0;
-  if (is_capturing_audio != is_capturing_audio_) {
-    ui_->SetAudioCaptureEnabled(is_capturing_audio);
-    is_capturing_audio_ = is_capturing_audio;
-  }
-  if (is_capturing_video != is_capturing_video_) {
-    ui_->SetVideoCaptureEnabled(is_capturing_video);
-    is_capturing_video_ = is_capturing_video;
-  }
-  if (is_capturing_screen != is_capturing_screen_) {
-    ui_->SetScreenCaptureEnabled(is_capturing_screen);
-    is_capturing_screen_ = is_capturing_screen;
-  }
-  if (is_bluetooth_connected != is_bluetooth_connected_) {
-    ui_->SetBluetoothConnected(is_bluetooth_connected);
-    is_bluetooth_connected_ = is_bluetooth_connected;
-  }
-}
-
-void VrShell::SetHighAccuracyLocation(bool high_accuracy_location) {
-  if (high_accuracy_location == high_accuracy_location_)
-    return;
-  ui_->SetLocationAccessEnabled(high_accuracy_location);
-  high_accuracy_location_ = high_accuracy_location;
+      [](VrShell* shell, BrowserUiInterface* ui,
+         CapturingStateModel* capturing_state, bool high_accuracy_location) {
+        capturing_state->location_access_enabled = high_accuracy_location;
+        ui->SetCapturingState(*capturing_state);
+      },
+      base::Unretained(this), base::Unretained(ui_),
+      base::Unretained(&capturing_state_)));
 }
 
 void VrShell::ClearFocusedElement() {
@@ -934,7 +1107,7 @@ void VrShell::ClearFocusedElement() {
   web_contents_->ClearFocusedElement();
 }
 
-void VrShell::ProcessContentGesture(std::unique_ptr<blink::WebInputEvent> event,
+void VrShell::ProcessContentGesture(std::unique_ptr<InputEvent> event,
                                     int content_id) {
   // Block the events if they don't belong to the current content
   if (content_id_ != content_id)
@@ -943,15 +1116,14 @@ void VrShell::ProcessContentGesture(std::unique_ptr<blink::WebInputEvent> event,
   if (!android_ui_gesture_target_)
     return;
 
-  android_ui_gesture_target_->DispatchWebInputEvent(std::move(event));
+  android_ui_gesture_target_->DispatchInputEvent(std::move(event));
 }
 
-void VrShell::ProcessDialogGesture(
-    std::unique_ptr<blink::WebInputEvent> event) {
+void VrShell::ProcessDialogGesture(std::unique_ptr<InputEvent> event) {
   if (!dialog_gesture_target_)
     return;
 
-  dialog_gesture_target_->DispatchWebInputEvent(std::move(event));
+  dialog_gesture_target_->DispatchInputEvent(std::move(event));
 }
 
 void VrShell::UpdateGamepadData(device::GvrGamepadData pad) {
@@ -1016,7 +1188,7 @@ void VrShell::OnVoiceResults(const base::string16& result) {
   SessionMetricsHelper* metrics_helper =
       SessionMetricsHelper::FromWebContents(web_contents_);
   if (metrics_helper && input_was_url)
-    metrics_helper->RecordUrlRequestedByVoice(url);
+    metrics_helper->RecordUrlRequested(url, NavigationMethod::kVoiceSearch);
 
   Java_VrShellImpl_loadUrl(
       env, j_vr_shell_,
@@ -1036,14 +1208,17 @@ void VrShell::OnAssetsLoaded(AssetsLoadStatus status,
 
   AssetsLoader::GetInstance()->GetMetricsHelper()->OnAssetsLoaded(
       status, component_version);
+  ui_finished_loading_ = true;
 }
 
 void VrShell::LoadAssets() {
+  can_load_new_assets_ = false;
   AssetsLoader::GetInstance()->Load(
       base::BindOnce(&VrShell::OnAssetsLoaded, base::Unretained(this)));
 }
 
 void VrShell::OnAssetsComponentReady() {
+  can_load_new_assets_ = true;
   // We don't apply updates after the timer expires because that would lead to
   // replacing the user's environment. New updates will be applied when
   // re-entering VR.
@@ -1055,7 +1230,38 @@ void VrShell::OnAssetsComponentReady() {
 
 void VrShell::OnAssetsComponentWaitTimeout() {
   ui_->OnAssetsUnavailable();
+  ui_finished_loading_ = true;
 }
+
+void VrShell::SetCookieInfo(const CookieInfoList& cookie_info_list) {}
+
+void VrShell::SetPermissionInfo(const PermissionInfoList& permission_info_list,
+                                ChosenObjectInfoList chosen_object_info_list) {
+  // Here we'll check the current web contents for potentially in-use
+  // permissions. Accepting bluetooth is immersive mode  is not currently
+  // supported, so we will not check here. Also, the ability to cast is not a
+  // page-specific potentiality, so we will not check for this, either.
+  for (const auto& info : permission_info_list) {
+    switch (info.type) {
+      case CONTENT_SETTINGS_TYPE_GEOLOCATION:
+        capturing_state_.location_access_potentially_enabled =
+            info.setting == CONTENT_SETTING_ALLOW;
+        break;
+      case CONTENT_SETTINGS_TYPE_MEDIASTREAM_MIC:
+        capturing_state_.audio_capture_potentially_enabled =
+            info.setting == CONTENT_SETTING_ALLOW;
+        break;
+      case CONTENT_SETTINGS_TYPE_MEDIASTREAM_CAMERA:
+        capturing_state_.video_capture_potentially_enabled =
+            info.setting == CONTENT_SETTING_ALLOW;
+        break;
+      default:
+        break;
+    }
+  }
+}
+
+void VrShell::SetIdentityInfo(const IdentityInfo& identity_info) {}
 
 void VrShell::AcceptDoffPromptForTesting(
     JNIEnv* env,
@@ -1063,6 +1269,64 @@ void VrShell::AcceptDoffPromptForTesting(
   PostToGlThread(FROM_HERE,
                  base::BindOnce(&VrShellGl::AcceptDoffPromptForTesting,
                                 gl_thread_->GetVrShellGl()));
+}
+
+void VrShell::SetUiExpectingActivityForTesting(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& obj,
+    jint quiescence_timeout_ms) {
+  UiTestActivityExpectation ui_expectation;
+  ui_expectation.quiescence_timeout_ms = quiescence_timeout_ms;
+  PostToGlThread(FROM_HERE,
+                 base::BindOnce(&VrShellGl::SetUiExpectingActivityForTesting,
+                                gl_thread_->GetVrShellGl(), ui_expectation));
+}
+
+void VrShell::ReportUiActivityResultForTesting(VrUiTestActivityResult result) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  Java_VrShellImpl_reportUiActivityResultForTesting(env, j_vr_shell_,
+                                                    static_cast<int>(result));
+}
+
+void VrShell::PerformControllerActionForTesting(
+    JNIEnv* env,
+    const base::android::JavaParamRef<jobject>& obj,
+    jint element_name,
+    jint action_type,
+    jfloat x,
+    jfloat y) {
+  ControllerTestInput controller_input;
+  controller_input.element_name =
+      static_cast<UserFriendlyElementName>(element_name);
+  controller_input.action = static_cast<VrControllerTestAction>(action_type);
+  controller_input.position = gfx::PointF(x, y);
+  PostToGlThread(FROM_HERE,
+                 base::BindOnce(&VrShellGl::PerformControllerActionForTesting,
+                                gl_thread_->GetVrShellGl(), controller_input));
+}
+
+std::unique_ptr<PageInfo> VrShell::CreatePageInfo() {
+  if (!web_contents_)
+    return nullptr;
+
+  content::NavigationEntry* entry =
+      web_contents_->GetController().GetVisibleEntry();
+  if (!entry)
+    return nullptr;
+
+  SecurityStateTabHelper* helper =
+      SecurityStateTabHelper::FromWebContents(web_contents_);
+  security_state::SecurityInfo security_info;
+  helper->GetSecurityInfo(&security_info);
+
+  return std::make_unique<PageInfo>(
+      this, Profile::FromBrowserContext(web_contents_->GetBrowserContext()),
+      TabSpecificContentSettings::FromWebContents(web_contents_), web_contents_,
+      entry->GetVirtualURL(), security_info);
+}
+
+gfx::AcceleratedWidget VrShell::GetRenderSurface() {
+  return surface_window_;
 }
 
 // ----------------------------------------------------------------------------
@@ -1073,8 +1337,6 @@ jlong JNI_VrShellImpl_Init(JNIEnv* env,
                            const JavaParamRef<jobject>& obj,
                            const JavaParamRef<jobject>& delegate,
                            jboolean for_web_vr,
-                           jboolean web_vr_autopresentation_expected,
-                           jboolean in_cct,
                            jboolean browsing_disabled,
                            jboolean has_or_can_request_audio_permission,
                            jlong gvr_api,
@@ -1083,25 +1345,25 @@ jlong JNI_VrShellImpl_Init(JNIEnv* env,
                            jfloat display_height_meters,
                            jint display_width_pixels,
                            jint display_pixel_height,
-                           jboolean pause_content) {
+                           jboolean pause_content,
+                           jboolean low_density,
+                           jboolean is_standalone_vr_device) {
   UiInitialState ui_initial_state;
   ui_initial_state.browsing_disabled = browsing_disabled;
-  ui_initial_state.in_cct = in_cct;
   ui_initial_state.in_web_vr = for_web_vr;
-  ui_initial_state.web_vr_autopresentation_expected =
-      web_vr_autopresentation_expected;
   ui_initial_state.has_or_can_request_audio_permission =
       has_or_can_request_audio_permission;
-  ui_initial_state.skips_redraw_when_not_dirty =
-      base::FeatureList::IsEnabled(features::kVrBrowsingExperimentalRendering);
   ui_initial_state.assets_supported = AssetsLoader::AssetsSupported();
+  ui_initial_state.is_standalone_vr_device = is_standalone_vr_device;
+  ui_initial_state.create_tabs_view =
+      base::FeatureList::IsEnabled(chrome::android::kVrBrowsingTabsView);
 
   return reinterpret_cast<intptr_t>(new VrShell(
       env, obj, ui_initial_state,
       VrShellDelegate::GetNativeVrShellDelegate(env, delegate),
       reinterpret_cast<gvr_context*>(gvr_api), reprojected_rendering,
       display_width_meters, display_height_meters, display_width_pixels,
-      display_pixel_height, pause_content));
+      display_pixel_height, pause_content, low_density));
 }
 
 }  // namespace vr

@@ -12,7 +12,6 @@
 #include "base/files/file.h"
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
-#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/strings/string16.h"
 #include "base/test/scoped_feature_list.h"
@@ -139,8 +138,8 @@ OfflinePageUtilsTest::~OfflinePageUtilsTest() {}
 
 void OfflinePageUtilsTest::SetUp() {
   // Create a test web contents.
-  web_contents_.reset(content::WebContents::Create(
-      content::WebContents::CreateParams(profile())));
+  web_contents_ = content::WebContents::Create(
+      content::WebContents::CreateParams(profile()));
   OfflinePageTabHelper::CreateForWebContents(web_contents_.get());
 
   // Set up the factory for testing.
@@ -182,8 +181,7 @@ void OfflinePageUtilsTest::SavePage(
   save_page_params.url = url;
   save_page_params.client_id = client_id;
   OfflinePageModelFactory::GetForBrowserContext(profile())->SavePage(
-      save_page_params,
-      std::move(archiver),
+      save_page_params, std::move(archiver), web_contents_.get(),
       base::Bind(&OfflinePageUtilsTest::OnSavePageDone, AsWeakPtr()));
   RunUntilIdle();
 }
@@ -393,20 +391,18 @@ TEST_F(OfflinePageUtilsTest, TestGetCachedOfflinePageSizeBetween) {
   // The clock will be at 03:00:00 after adding pages.
   OfflinePageModel* model =
       OfflinePageModelFactory::GetForBrowserContext(profile());
-  auto clock = std::make_unique<base::SimpleTestClock>();
-  base::SimpleTestClock* clock_ptr = clock.get();
-  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(
-      std::move(clock));
-  CreateCachedOfflinePages(clock_ptr);
+  base::SimpleTestClock clock;
+  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(&clock);
+  CreateCachedOfflinePages(&clock);
 
   // Advance the clock so that we don't hit the time check boundary.
-  clock_ptr->Advance(base::TimeDelta::FromMinutes(5));
+  clock.Advance(base::TimeDelta::FromMinutes(5));
 
   // Get the size of cached offline pages between 01:05:00 and 03:05:00.
   bool ret = OfflinePageUtils::GetCachedOfflinePageSizeBetween(
       profile(),
       base::Bind(&OfflinePageUtilsTest::OnSizeInBytesCalculated, AsWeakPtr()),
-      clock_ptr->Now() - base::TimeDelta::FromHours(2), clock_ptr->Now());
+      clock.Now() - base::TimeDelta::FromHours(2), clock.Now());
   RunUntilIdle();
   EXPECT_TRUE(ret);
   EXPECT_EQ(kTestFileSize * 2, last_cache_size());
@@ -416,12 +412,10 @@ TEST_F(OfflinePageUtilsTest, TestGetCachedOfflinePageSizeNoPageInModel) {
   // Set a test clock.
   OfflinePageModel* model =
       OfflinePageModelFactory::GetForBrowserContext(profile());
-  auto clock = std::make_unique<base::SimpleTestClock>();
-  base::SimpleTestClock* clock_ptr = clock.get();
-  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(
-      std::move(clock));
+  base::SimpleTestClock clock;
+  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(&clock);
 
-  clock_ptr->Advance(base::TimeDelta::FromHours(3));
+  clock.Advance(base::TimeDelta::FromHours(3));
 
   // Get the size of cached offline pages between 01:00:00 and 03:00:00.
   // Since no temporary pages were added to the model, the cache size should be
@@ -429,7 +423,7 @@ TEST_F(OfflinePageUtilsTest, TestGetCachedOfflinePageSizeNoPageInModel) {
   bool ret = OfflinePageUtils::GetCachedOfflinePageSizeBetween(
       profile(),
       base::Bind(&OfflinePageUtilsTest::OnSizeInBytesCalculated, AsWeakPtr()),
-      clock_ptr->Now() - base::TimeDelta::FromHours(2), clock_ptr->Now());
+      clock.Now() - base::TimeDelta::FromHours(2), clock.Now());
   RunUntilIdle();
   EXPECT_TRUE(ret);
   EXPECT_EQ(0, last_cache_size());
@@ -440,20 +434,18 @@ TEST_F(OfflinePageUtilsTest, TestGetCachedOfflinePageSizeNoPageInRange) {
   // The clock will be at 03:00:00 after adding pages.
   OfflinePageModel* model =
       OfflinePageModelFactory::GetForBrowserContext(profile());
-  auto clock = std::make_unique<base::SimpleTestClock>();
-  base::SimpleTestClock* clock_ptr = clock.get();
-  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(
-      std::move(clock));
-  CreateCachedOfflinePages(clock_ptr);
+  base::SimpleTestClock clock;
+  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(&clock);
+  CreateCachedOfflinePages(&clock);
 
   // Advance the clock so that we don't hit the time check boundary.
-  clock_ptr->Advance(base::TimeDelta::FromMinutes(5));
+  clock.Advance(base::TimeDelta::FromMinutes(5));
 
   // Get the size of cached offline pages between 03:04:00 and 03:05:00.
   bool ret = OfflinePageUtils::GetCachedOfflinePageSizeBetween(
       profile(),
       base::Bind(&OfflinePageUtilsTest::OnSizeInBytesCalculated, AsWeakPtr()),
-      clock_ptr->Now() - base::TimeDelta::FromMinutes(1), clock_ptr->Now());
+      clock.Now() - base::TimeDelta::FromMinutes(1), clock.Now());
   RunUntilIdle();
   EXPECT_TRUE(ret);
   EXPECT_EQ(0, last_cache_size());
@@ -464,20 +456,18 @@ TEST_F(OfflinePageUtilsTest, TestGetCachedOfflinePageSizeAllPagesInRange) {
   // The clock will be at 03:00:00 after adding pages.
   OfflinePageModel* model =
       OfflinePageModelFactory::GetForBrowserContext(profile());
-  auto clock = std::make_unique<base::SimpleTestClock>();
-  base::SimpleTestClock* clock_ptr = clock.get();
-  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(
-      std::move(clock));
-  CreateCachedOfflinePages(clock_ptr);
+  base::SimpleTestClock clock;
+  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(&clock);
+  CreateCachedOfflinePages(&clock);
 
   // Advance the clock to 23:00:00.
-  clock_ptr->Advance(base::TimeDelta::FromHours(20));
+  clock.Advance(base::TimeDelta::FromHours(20));
 
   // Get the size of cached offline pages between -01:00:00 and 23:00:00.
   bool ret = OfflinePageUtils::GetCachedOfflinePageSizeBetween(
       profile(),
       base::Bind(&OfflinePageUtilsTest::OnSizeInBytesCalculated, AsWeakPtr()),
-      clock_ptr->Now() - base::TimeDelta::FromHours(24), clock_ptr->Now());
+      clock.Now() - base::TimeDelta::FromHours(24), clock.Now());
   RunUntilIdle();
   EXPECT_TRUE(ret);
   EXPECT_EQ(kTestFileSize * 4, last_cache_size());
@@ -488,14 +478,12 @@ TEST_F(OfflinePageUtilsTest, TestGetCachedOfflinePageSizeAllPagesInvalidRange) {
   // The clock will be at 03:00:00 after adding pages.
   OfflinePageModel* model =
       OfflinePageModelFactory::GetForBrowserContext(profile());
-  auto clock = std::make_unique<base::SimpleTestClock>();
-  base::SimpleTestClock* clock_ptr = clock.get();
-  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(
-      std::move(clock));
-  CreateCachedOfflinePages(clock_ptr);
+  base::SimpleTestClock clock;
+  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(&clock);
+  CreateCachedOfflinePages(&clock);
 
   // Advance the clock to 23:00:00.
-  clock_ptr->Advance(base::TimeDelta::FromHours(20));
+  clock.Advance(base::TimeDelta::FromHours(20));
 
   // Get the size of cached offline pages between 23:00:00 and -01:00:00, which
   // is an invalid range, the return value will be false and there will be no
@@ -503,7 +491,7 @@ TEST_F(OfflinePageUtilsTest, TestGetCachedOfflinePageSizeAllPagesInvalidRange) {
   bool ret = OfflinePageUtils::GetCachedOfflinePageSizeBetween(
       profile(),
       base::Bind(&OfflinePageUtilsTest::OnSizeInBytesCalculated, AsWeakPtr()),
-      clock_ptr->Now(), clock_ptr->Now() - base::TimeDelta::FromHours(24));
+      clock.Now(), clock.Now() - base::TimeDelta::FromHours(24));
   RunUntilIdle();
   EXPECT_FALSE(ret);
 }
@@ -513,11 +501,9 @@ TEST_F(OfflinePageUtilsTest, TestGetCachedOfflinePageSizeEdgeCase) {
   // The clock will be at 03:00:00 after adding pages.
   OfflinePageModel* model =
       OfflinePageModelFactory::GetForBrowserContext(profile());
-  auto clock = std::make_unique<base::SimpleTestClock>();
-  base::SimpleTestClock* clock_ptr = clock.get();
-  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(
-      std::move(clock));
-  CreateCachedOfflinePages(clock_ptr);
+  base::SimpleTestClock clock;
+  static_cast<OfflinePageModelTaskified*>(model)->SetClockForTesting(&clock);
+  CreateCachedOfflinePages(&clock);
 
   // Get the size of cached offline pages between 02:00:00 and 03:00:00, since
   // we are using a [begin_time, end_time) range so there will be only 1 page
@@ -525,7 +511,7 @@ TEST_F(OfflinePageUtilsTest, TestGetCachedOfflinePageSizeEdgeCase) {
   bool ret = OfflinePageUtils::GetCachedOfflinePageSizeBetween(
       profile(),
       base::Bind(&OfflinePageUtilsTest::OnSizeInBytesCalculated, AsWeakPtr()),
-      clock_ptr->Now() - base::TimeDelta::FromHours(1), clock_ptr->Now());
+      clock.Now() - base::TimeDelta::FromHours(1), clock.Now());
   RunUntilIdle();
   EXPECT_TRUE(ret);
   EXPECT_EQ(kTestFileSize * 1, last_cache_size());

@@ -49,6 +49,15 @@ class BrowserTestBase : public testing::Test {
   // Override this to add command line flags specific to your test.
   virtual void SetUpCommandLine(base::CommandLine* command_line) {}
 
+  // Override this to disallow accesses to be production-compatible.
+  virtual bool AllowFileAccessFromFiles() const;
+
+  // Crash the Network Service process. Should only be called when
+  // out-of-process Network Service is enabled. Re-applies any added host
+  // resolver rules, though network tasks started before the call returns may
+  // racily start before the rules have been re-applied.
+  void SimulateNetworkServiceCrash();
+
   // Returns the host resolver being used for the tests. Subclasses might want
   // to configure it inside tests.
   net::RuleBasedHostResolverProc* host_resolver() {

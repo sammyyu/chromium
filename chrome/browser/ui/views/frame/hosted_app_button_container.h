@@ -8,21 +8,34 @@
 #include <memory>
 
 #include "base/macros.h"
-#include "chrome/browser/ui/views/frame/browser_view_button_provider.h"
+#include "chrome/browser/ui/views/frame/immersive_mode_controller.h"
+#include "chrome/browser/ui/views/frame/toolbar_button_provider.h"
 #include "chrome/browser/ui/views/location_bar/content_setting_image_view.h"
+#include "chrome/browser/ui/views/page_action/page_action_icon_view.h"
 #include "chrome/browser/ui/views/toolbar/browser_actions_container.h"
+#include "ui/views/accessible_pane_view.h"
 #include "ui/views/controls/button/menu_button.h"
 #include "ui/views/controls/button/menu_button_listener.h"
 #include "ui/views/view.h"
 
-class AppMenu;
-class HostedAppMenuModel;
+namespace {
+class HostedAppNonClientFrameViewAshTest;
+}
+
+class AppMenuButton;
 class BrowserView;
+class HostedAppMenuButton;
+
+namespace views {
+class MenuButton;
+}
 
 // A container for hosted app buttons in the title bar.
-class HostedAppButtonContainer : public views::View,
+class HostedAppButtonContainer : public views::AccessiblePaneView,
                                  public BrowserActionsContainer::Delegate,
-                                 public BrowserViewButtonProvider {
+                                 public PageActionIconView::Delegate,
+                                 public ToolbarButtonProvider,
+                                 public ImmersiveModeController::Observer {
  public:
   // |active_icon_color| and |inactive_icon_color| indicate the colors to use
   // for button icons when the window is focused and blurred respectively.
@@ -31,8 +44,7 @@ class HostedAppButtonContainer : public views::View,
                            SkColor inactive_icon_color);
   ~HostedAppButtonContainer() override;
 
-  // Updates the visibility of each content setting.
-  void RefreshContentSettingViews();
+  void UpdateContentSettingViewsVisibility();
 
   // Sets the container to paints its buttons the active/inactive color.
   void SetPaintAsActive(bool active);
@@ -42,48 +54,27 @@ class HostedAppButtonContainer : public views::View,
   void StartTitlebarAnimation(base::TimeDelta origin_text_slide_duration);
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(HostedAppNonClientFrameViewAshTest, HostedAppFrame);
+  friend class HostedAppNonClientFrameViewAshTest;
+  friend class HostedAppGlassBrowserFrameViewTest;
+  friend class ImmersiveModeControllerAshHostedAppBrowserTest;
+
+  static void DisableAnimationForTesting();
 
   class ContentSettingsContainer;
+
+  views::View* GetContentSettingContainerForTesting();
 
   const std::vector<ContentSettingImageView*>&
   GetContentSettingViewsForTesting() const;
 
-  // The 'app menu' button for the hosted app.
-  class AppMenuButton : public views::MenuButton,
-                        public views::MenuButtonListener {
-   public:
-    explicit AppMenuButton(BrowserView* browser_view);
-    ~AppMenuButton() override;
-
-    // Sets the color of the menu button icon.
-    void SetIconColor(SkColor color);
-
-    // views::MenuButtonListener:
-    void OnMenuButtonClicked(views::MenuButton* source,
-                             const gfx::Point& point,
-                             const ui::Event* event) override;
-
-    AppMenu* menu() { return menu_.get(); }
-
-   private:
-    // The containing browser view.
-    BrowserView* browser_view_;
-
-    // App model and menu.
-    // Note that the menu should be destroyed before the model it uses, so the
-    // menu should be listed later.
-    std::unique_ptr<HostedAppMenuModel> menu_model_;
-    std::unique_ptr<AppMenu> menu_;
-
-    DISALLOW_COPY_AND_ASSIGN(AppMenuButton);
-  };
-
   void FadeInContentSettingButtons();
+
+  void UpdateIconsColor();
 
   // views::View:
   void ChildPreferredSizeChanged(views::View* child) override;
   void ChildVisibilityChanged(views::View* child) override;
+  const char* GetClassName() const override;
 
   // BrowserActionsContainer::Delegate:
   views::MenuButton* GetOverflowReferenceView() override;
@@ -93,23 +84,35 @@ class HostedAppButtonContainer : public views::View,
       Browser* browser,
       ToolbarActionsBar* main_bar) const override;
 
-  // BrowserViewButtonProvider:
+  // PageActionIconView::Delegate:
+  content::WebContents* GetWebContentsForPageActionIconView() override;
+
+  // ToolbarButtonProvider:
   BrowserActionsContainer* GetBrowserActionsContainer() override;
-  views::MenuButton* GetAppMenuButton() override;
+  PageActionIconContainerView* GetPageActionIconContainerView() override;
+  AppMenuButton* GetAppMenuButton() override;
+  gfx::Rect GetFindBarBoundingBox(int contents_height) const override;
+  void FocusToolbar() override;
+  views::AccessiblePaneView* GetAsAccessiblePaneView() override;
+
+  // ImmersiveModeController::Observer:
+  void OnImmersiveRevealStarted() override;
 
   // The containing browser view.
   BrowserView* browser_view_;
 
   // Button colors.
+  bool paint_as_active_ = true;
   const SkColor active_icon_color_;
   const SkColor inactive_icon_color_;
 
   base::OneShotTimer fade_in_content_setting_buttons_timer_;
 
   // Owned by the views hierarchy.
-  AppMenuButton* app_menu_button_;
-  ContentSettingsContainer* content_settings_container_;
-  BrowserActionsContainer* browser_actions_container_;
+  ContentSettingsContainer* content_settings_container_ = nullptr;
+  PageActionIconContainerView* page_action_icon_container_view_ = nullptr;
+  BrowserActionsContainer* browser_actions_container_ = nullptr;
+  HostedAppMenuButton* app_menu_button_ = nullptr;
 
   base::OneShotTimer opening_animation_timer_;
 

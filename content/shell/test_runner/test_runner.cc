@@ -18,12 +18,13 @@
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "build/build_config.h"
+#include "cc/paint/paint_canvas.h"
+#include "content/shell/common/layout_test/layout_test_switches.h"
 #include "content/shell/test_runner/layout_and_paint_async_then.h"
 #include "content/shell/test_runner/layout_dump.h"
 #include "content/shell/test_runner/mock_content_settings_client.h"
 #include "content/shell/test_runner/mock_screen_orientation_client.h"
 #include "content/shell/test_runner/mock_web_document_subresource_filter.h"
-#include "content/shell/test_runner/mock_web_speech_recognizer.h"
 #include "content/shell/test_runner/pixel_dump.h"
 #include "content/shell/test_runner/spell_check_client.h"
 #include "content/shell/test_runner/test_common.h"
@@ -39,27 +40,26 @@
 #include "gin/wrappable.h"
 #include "services/device/public/cpp/generic_sensor/motion_data.h"
 #include "services/device/public/cpp/generic_sensor/orientation_data.h"
-#include "third_party/WebKit/public/platform/WebCanvas.h"
-#include "third_party/WebKit/public/platform/WebData.h"
-#include "third_party/WebKit/public/platform/WebPoint.h"
-#include "third_party/WebKit/public/platform/WebURLResponse.h"
-#include "third_party/WebKit/public/platform/modules/serviceworker/WebServiceWorkerRegistration.h"
-#include "third_party/WebKit/public/web/WebArrayBuffer.h"
-#include "third_party/WebKit/public/web/WebArrayBufferConverter.h"
-#include "third_party/WebKit/public/web/WebDocument.h"
-#include "third_party/WebKit/public/web/WebDocumentLoader.h"
-#include "third_party/WebKit/public/web/WebFindOptions.h"
-#include "third_party/WebKit/public/web/WebFrame.h"
-#include "third_party/WebKit/public/web/WebInputElement.h"
-#include "third_party/WebKit/public/web/WebKit.h"
-#include "third_party/WebKit/public/web/WebLocalFrame.h"
-#include "third_party/WebKit/public/web/WebPageImportanceSignals.h"
-#include "third_party/WebKit/public/web/WebScriptSource.h"
-#include "third_party/WebKit/public/web/WebSecurityPolicy.h"
-#include "third_party/WebKit/public/web/WebSerializedScriptValue.h"
-#include "third_party/WebKit/public/web/WebSettings.h"
-#include "third_party/WebKit/public/web/WebSurroundingText.h"
-#include "third_party/WebKit/public/web/WebView.h"
+#include "third_party/blink/public/platform/modules/service_worker/web_service_worker_registration.h"
+#include "third_party/blink/public/platform/web_data.h"
+#include "third_party/blink/public/platform/web_point.h"
+#include "third_party/blink/public/platform/web_url_response.h"
+#include "third_party/blink/public/web/blink.h"
+#include "third_party/blink/public/web/web_array_buffer.h"
+#include "third_party/blink/public/web/web_array_buffer_converter.h"
+#include "third_party/blink/public/web/web_document.h"
+#include "third_party/blink/public/web/web_document_loader.h"
+#include "third_party/blink/public/web/web_find_options.h"
+#include "third_party/blink/public/web/web_frame.h"
+#include "third_party/blink/public/web/web_input_element.h"
+#include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_page_importance_signals.h"
+#include "third_party/blink/public/web/web_script_source.h"
+#include "third_party/blink/public/web/web_security_policy.h"
+#include "third_party/blink/public/web/web_serialized_script_value.h"
+#include "third_party/blink/public/web/web_settings.h"
+#include "third_party/blink/public/web/web_surrounding_text.h"
+#include "third_party/blink/public/web/web_view.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "ui/display/display_switches.h"
@@ -69,7 +69,7 @@
 #include "ui/gfx/skia_util.h"
 
 #if defined(OS_LINUX) || defined(OS_ANDROID) || defined(OS_FUCHSIA)
-#include "third_party/WebKit/public/platform/WebFontRenderStyle.h"
+#include "third_party/blink/public/platform/web_font_render_style.h"
 #endif
 
 using namespace blink;
@@ -111,8 +111,6 @@ class TestRunnerBindings : public gin::Wrappable<TestRunnerBindings> {
   gin::ObjectTemplateBuilder GetObjectTemplateBuilder(
       v8::Isolate* isolate) override;
 
-  void AddMockSpeechRecognitionResult(const std::string& transcript,
-                                      double confidence);
   void AddOriginAccessWhitelistEntry(const std::string& source_origin,
                                      const std::string& destination_protocol,
                                      const std::string& destination_host,
@@ -209,6 +207,7 @@ class TestRunnerBindings : public gin::Wrappable<TestRunnerBindings> {
   void SetDumpConsoleMessages(bool value);
   void SetDumpJavaScriptDialogs(bool value);
   void SetEffectiveConnectionType(const std::string& connection_type);
+  void SetFileChooserPaths(const std::vector<std::string>& paths);
   void SetMockSpellCheckerEnabled(bool enabled);
   void SetImagesAllowed(bool allowed);
   void SetIsolatedWorldContentSecurityPolicy(int world_id,
@@ -217,11 +216,7 @@ class TestRunnerBindings : public gin::Wrappable<TestRunnerBindings> {
                                       v8::Local<v8::Value> origin);
   void SetJavaScriptCanAccessClipboard(bool can_access);
   void SetMIDIAccessorResult(bool result);
-  void SetMockDeviceMotion(gin::Arguments* args);
-  void SetMockDeviceOrientation(gin::Arguments* args);
   void SetMockScreenOrientation(const std::string& orientation);
-  void SetMockSpeechRecognitionError(const std::string& error,
-                                     const std::string& message);
   void SetPOSIXLocale(const std::string& locale);
   void SetPageVisibility(const std::string& new_visibility);
   void SetPermission(const std::string& name,
@@ -318,11 +313,11 @@ void TestRunnerBindings::Install(
   //
   // 1. For normal reftest, we would like to take screenshots after web fonts
   //    are loaded, i.e. replicate the behavior of this injected script:
-  //    https://github.com/w3c/web-platform-tests/blob/master/tools/wptrunner/wptrunner/executors/reftest-wait_webdriver.js
+  //    https://github.com/web-platform-tests/wpt/blob/master/tools/wptrunner/wptrunner/executors/reftest-wait_webdriver.js
   // 2. For reftests with a 'reftest-wait' class on the root element, reference
   //    comparison is delayed until that class attribute is removed. To support
   //    this feature, we use a mutation observer.
-  //    http://web-platform-tests.org/writing-tests/reftests.html#controlling-when-comparison-occurs
+  //    https://web-platform-tests.org/writing-tests/reftests.html#controlling-when-comparison-occurs
   //
   // Note that this method may be called multiple times on a frame, so we put
   // the code behind a flag. The flag is safe to be installed on testRunner
@@ -365,8 +360,6 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
   return gin::Wrappable<TestRunnerBindings>::GetObjectTemplateBuilder(isolate)
       .SetMethod("abortModal", &TestRunnerBindings::NotImplemented)
       .SetMethod("addDisallowedURL", &TestRunnerBindings::NotImplemented)
-      .SetMethod("addMockSpeechRecognitionResult",
-                 &TestRunnerBindings::AddMockSpeechRecognitionResult)
       .SetMethod("addOriginAccessWhitelistEntry",
                  &TestRunnerBindings::AddOriginAccessWhitelistEntry)
       .SetMethod("addWebPageOverlay", &TestRunnerBindings::AddWebPageOverlay)
@@ -530,6 +523,8 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
                  &TestRunnerBindings::SetDumpJavaScriptDialogs)
       .SetMethod("setEffectiveConnectionType",
                  &TestRunnerBindings::SetEffectiveConnectionType)
+      .SetMethod("setFileChooserPaths",
+                 &TestRunnerBindings::SetFileChooserPaths)
       .SetMethod("setMockSpellCheckerEnabled",
                  &TestRunnerBindings::SetMockSpellCheckerEnabled)
       .SetMethod("setIconDatabaseEnabled", &TestRunnerBindings::NotImplemented)
@@ -544,14 +539,8 @@ gin::ObjectTemplateBuilder TestRunnerBindings::GetObjectTemplateBuilder(
                  &TestRunnerBindings::SetMIDIAccessorResult)
       .SetMethod("setMainFrameIsFirstResponder",
                  &TestRunnerBindings::NotImplemented)
-      .SetMethod("setMockDeviceMotion",
-                 &TestRunnerBindings::SetMockDeviceMotion)
-      .SetMethod("setMockDeviceOrientation",
-                 &TestRunnerBindings::SetMockDeviceOrientation)
       .SetMethod("setMockScreenOrientation",
                  &TestRunnerBindings::SetMockScreenOrientation)
-      .SetMethod("setMockSpeechRecognitionError",
-                 &TestRunnerBindings::SetMockSpeechRecognitionError)
       .SetMethod("setPOSIXLocale", &TestRunnerBindings::SetPOSIXLocale)
       .SetMethod("setPageVisibility", &TestRunnerBindings::SetPageVisibility)
       .SetMethod("setPermission", &TestRunnerBindings::SetPermission)
@@ -760,6 +749,12 @@ void TestRunnerBindings::SetEffectiveConnectionType(
     runner_->SetEffectiveConnectionType(web_type);
 }
 
+void TestRunnerBindings::SetFileChooserPaths(
+    const std::vector<std::string>& paths) {
+  if (runner_)
+    runner_->SetFileChooserPaths(paths);
+}
+
 void TestRunnerBindings::SetMockSpellCheckerEnabled(bool enabled) {
   if (runner_)
     runner_->SetMockSpellCheckerEnabled(enabled);
@@ -896,84 +891,6 @@ bool TestRunnerBindings::DisableAutoResizeMode(int new_width, int new_height) {
   if (runner_)
     return runner_->DisableAutoResizeMode(new_width, new_height);
   return false;
-}
-
-void TestRunnerBindings::SetMockDeviceMotion(gin::Arguments* args) {
-  if (!runner_)
-    return;
-
-  bool has_acceleration_x = false;
-  double acceleration_x = 0.0;
-  bool has_acceleration_y = false;
-  double acceleration_y = 0.0;
-  bool has_acceleration_z = false;
-  double acceleration_z = 0.0;
-  bool has_acceleration_including_gravity_x = false;
-  double acceleration_including_gravity_x = 0.0;
-  bool has_acceleration_including_gravity_y = false;
-  double acceleration_including_gravity_y = 0.0;
-  bool has_acceleration_including_gravity_z = false;
-  double acceleration_including_gravity_z = 0.0;
-  bool has_rotation_rate_alpha = false;
-  double rotation_rate_alpha = 0.0;
-  bool has_rotation_rate_beta = false;
-  double rotation_rate_beta = 0.0;
-  bool has_rotation_rate_gamma = false;
-  double rotation_rate_gamma = 0.0;
-  double interval = false;
-
-  args->GetNext(&has_acceleration_x);
-  args->GetNext(&acceleration_x);
-  args->GetNext(&has_acceleration_y);
-  args->GetNext(&acceleration_y);
-  args->GetNext(&has_acceleration_z);
-  args->GetNext(&acceleration_z);
-  args->GetNext(&has_acceleration_including_gravity_x);
-  args->GetNext(&acceleration_including_gravity_x);
-  args->GetNext(&has_acceleration_including_gravity_y);
-  args->GetNext(&acceleration_including_gravity_y);
-  args->GetNext(&has_acceleration_including_gravity_z);
-  args->GetNext(&acceleration_including_gravity_z);
-  args->GetNext(&has_rotation_rate_alpha);
-  args->GetNext(&rotation_rate_alpha);
-  args->GetNext(&has_rotation_rate_beta);
-  args->GetNext(&rotation_rate_beta);
-  args->GetNext(&has_rotation_rate_gamma);
-  args->GetNext(&rotation_rate_gamma);
-  args->GetNext(&interval);
-
-  runner_->SetMockDeviceMotion(
-      has_acceleration_x, acceleration_x, has_acceleration_y, acceleration_y,
-      has_acceleration_z, acceleration_z, has_acceleration_including_gravity_x,
-      acceleration_including_gravity_x, has_acceleration_including_gravity_y,
-      acceleration_including_gravity_y, has_acceleration_including_gravity_z,
-      acceleration_including_gravity_z, has_rotation_rate_alpha,
-      rotation_rate_alpha, has_rotation_rate_beta, rotation_rate_beta,
-      has_rotation_rate_gamma, rotation_rate_gamma, interval);
-}
-
-void TestRunnerBindings::SetMockDeviceOrientation(gin::Arguments* args) {
-  if (!runner_)
-    return;
-
-  bool has_alpha = false;
-  double alpha = 0.0;
-  bool has_beta = false;
-  double beta = 0.0;
-  bool has_gamma = false;
-  double gamma = 0.0;
-  bool absolute = false;
-
-  args->GetNext(&has_alpha);
-  args->GetNext(&alpha);
-  args->GetNext(&has_beta);
-  args->GetNext(&beta);
-  args->GetNext(&has_gamma);
-  args->GetNext(&gamma);
-  args->GetNext(&absolute);
-
-  runner_->SetMockDeviceOrientation(has_alpha, alpha, has_beta, beta, has_gamma,
-                                    gamma, absolute);
 }
 
 void TestRunnerBindings::SetMockScreenOrientation(
@@ -1386,20 +1303,6 @@ void TestRunnerBindings::SimulateWebNotificationClose(const std::string& title,
   runner_->SimulateWebNotificationClose(title, by_user);
 }
 
-void TestRunnerBindings::AddMockSpeechRecognitionResult(
-    const std::string& transcript,
-    double confidence) {
-  if (runner_)
-    runner_->AddMockSpeechRecognitionResult(transcript, confidence);
-}
-
-void TestRunnerBindings::SetMockSpeechRecognitionError(
-    const std::string& error,
-    const std::string& message) {
-  if (runner_)
-    runner_->SetMockSpeechRecognitionError(error, message);
-}
-
 void TestRunnerBindings::AddWebPageOverlay() {
   if (view_runner_)
     view_runner_->AddWebPageOverlay();
@@ -1529,7 +1432,7 @@ void TestRunner::WorkQueue::ProcessWorkSoon() {
 
   if (!queue_.empty()) {
     // We delay processing queued work to avoid recursion problems.
-    controller_->delegate_->PostTask(base::Bind(
+    controller_->delegate_->PostTask(base::BindOnce(
         &TestRunner::WorkQueue::ProcessWork, weak_factory_.GetWeakPtr()));
   } else if (!controller_->layout_test_runtime_flags_.wait_until_done()) {
     controller_->delegate_->TestFinished();
@@ -1607,8 +1510,6 @@ void TestRunner::SetDelegate(WebTestDelegate* delegate) {
   delegate_ = delegate;
   mock_content_settings_client_->SetDelegate(delegate);
   spellcheck_->SetDelegate(delegate);
-  if (speech_recognizer_)
-    speech_recognizer_->SetDelegate(delegate);
 }
 
 void TestRunner::SetMainView(WebView* web_view) {
@@ -1622,7 +1523,7 @@ void TestRunner::Reset() {
   top_loading_frame_ = nullptr;
   layout_test_runtime_flags_.Reset();
   mock_screen_orientation_client_->ResetData();
-  drag_image_.Reset();
+  drag_image_.reset();
 
   WebSecurityPolicy::ResetOriginAccessWhitelists();
 #if defined(OS_LINUX) || defined(OS_ANDROID) || defined(OS_FUCHSIA)
@@ -1666,6 +1567,7 @@ void TestRunner::Reset() {
     close_remaining_windows_ = true;
 
   spellcheck_->Reset();
+  file_chooser_paths_.reset();
 }
 
 void TestRunner::SetTestIsRunning(bool running) {
@@ -1732,22 +1634,36 @@ std::string TestRunner::DumpLayout(blink::WebLocalFrame* frame) {
   return ::test_runner::DumpLayout(frame, layout_test_runtime_flags_);
 }
 
-void TestRunner::DumpPixelsAsync(
+bool TestRunner::DumpPixelsAsync(
     blink::WebLocalFrame* frame,
     base::OnceCallback<void(const SkBitmap&)> callback) {
   if (layout_test_runtime_flags_.dump_drag_image()) {
-    if (drag_image_.IsNull()) {
+    if (drag_image_.isNull()) {
       // This means the test called dumpDragImage but did not initiate a drag.
       // Return a blank image so that the test fails.
       SkBitmap bitmap;
       bitmap.allocN32Pixels(1, 1);
       bitmap.eraseColor(0);
       std::move(callback).Run(bitmap);
-      return;
+      return false;
     }
 
-    std::move(callback).Run(drag_image_.GetSkBitmap());
-    return;
+    std::move(callback).Run(drag_image_);
+    return false;
+  }
+
+  // If we need to do a display compositor pixel dump, then delegate that to the
+  // browser by returning true. Note that printing case can be handled here.
+  if (!layout_test_runtime_flags_.is_printing() &&
+      base::CommandLine::ForCurrentProcess()->HasSwitch(
+          switches::kEnableDisplayCompositorPixelDump)) {
+    // Because of the plumbing, we should still call the callback with an empty
+    // bitmap, but return true so that the browser also captures the pixels.
+    SkBitmap bitmap;
+    bitmap.allocN32Pixels(1, 1);
+    bitmap.eraseColor(0);
+    std::move(callback).Run(bitmap);
+    return true;
   }
 
   // See if we need to draw the selection bounds rect on top of the snapshot.
@@ -1773,6 +1689,7 @@ void TestRunner::DumpPixelsAsync(
     test_runner::DumpPixelsAsync(frame, delegate_->GetDeviceScaleFactor(),
                                  std::move(callback));
   }
+  return false;
 }
 
 void TestRunner::ReplicateLayoutTestRuntimeFlagsChanges(
@@ -1947,9 +1864,9 @@ void TestRunner::setToolTipText(const WebString& text) {
   tooltip_text_ = text.Utf8();
 }
 
-void TestRunner::setDragImage(const blink::WebImage& drag_image) {
+void TestRunner::setDragImage(const SkBitmap& drag_image) {
   if (layout_test_runtime_flags_.dump_drag_image()) {
-    if (drag_image_.IsNull())
+    if (drag_image_.isNull())
       drag_image_ = drag_image;
   }
 }
@@ -2190,97 +2107,8 @@ bool TestRunner::DisableAutoResizeMode(int new_width, int new_height) {
   return true;
 }
 
-void TestRunner::SetMockDeviceMotion(bool has_acceleration_x,
-                                     double acceleration_x,
-                                     bool has_acceleration_y,
-                                     double acceleration_y,
-                                     bool has_acceleration_z,
-                                     double acceleration_z,
-                                     bool has_acceleration_including_gravity_x,
-                                     double acceleration_including_gravity_x,
-                                     bool has_acceleration_including_gravity_y,
-                                     double acceleration_including_gravity_y,
-                                     bool has_acceleration_including_gravity_z,
-                                     double acceleration_including_gravity_z,
-                                     bool has_rotation_rate_alpha,
-                                     double rotation_rate_alpha,
-                                     bool has_rotation_rate_beta,
-                                     double rotation_rate_beta,
-                                     bool has_rotation_rate_gamma,
-                                     double rotation_rate_gamma,
-                                     double interval) {
-  device::MotionData motion;
-
-  // acceleration
-  motion.has_acceleration_x = has_acceleration_x;
-  motion.acceleration_x = acceleration_x;
-  motion.has_acceleration_y = has_acceleration_y;
-  motion.acceleration_y = acceleration_y;
-  motion.has_acceleration_z = has_acceleration_z;
-  motion.acceleration_z = acceleration_z;
-
-  // accelerationIncludingGravity
-  motion.has_acceleration_including_gravity_x =
-      has_acceleration_including_gravity_x;
-  motion.acceleration_including_gravity_x = acceleration_including_gravity_x;
-  motion.has_acceleration_including_gravity_y =
-      has_acceleration_including_gravity_y;
-  motion.acceleration_including_gravity_y = acceleration_including_gravity_y;
-  motion.has_acceleration_including_gravity_z =
-      has_acceleration_including_gravity_z;
-  motion.acceleration_including_gravity_z = acceleration_including_gravity_z;
-
-  // rotationRate
-  motion.has_rotation_rate_alpha = has_rotation_rate_alpha;
-  motion.rotation_rate_alpha = rotation_rate_alpha;
-  motion.has_rotation_rate_beta = has_rotation_rate_beta;
-  motion.rotation_rate_beta = rotation_rate_beta;
-  motion.has_rotation_rate_gamma = has_rotation_rate_gamma;
-  motion.rotation_rate_gamma = rotation_rate_gamma;
-
-  // interval
-  motion.interval = interval;
-
-  delegate_->SetDeviceMotionData(motion);
-}
-
-void TestRunner::SetMockDeviceOrientation(bool has_alpha,
-                                          double alpha,
-                                          bool has_beta,
-                                          double beta,
-                                          bool has_gamma,
-                                          double gamma,
-                                          bool absolute) {
-  device::OrientationData orientation;
-
-  // alpha
-  orientation.has_alpha = has_alpha;
-  orientation.alpha = alpha;
-
-  // beta
-  orientation.has_beta = has_beta;
-  orientation.beta = beta;
-
-  // gamma
-  orientation.has_gamma = has_gamma;
-  orientation.gamma = gamma;
-
-  // absolute
-  orientation.absolute = absolute;
-
-  delegate_->SetDeviceOrientationData(orientation);
-}
-
 MockScreenOrientationClient* TestRunner::getMockScreenOrientationClient() {
   return mock_screen_orientation_client_.get();
-}
-
-MockWebSpeechRecognizer* TestRunner::getMockWebSpeechRecognizer() {
-  if (!speech_recognizer_.get()) {
-    speech_recognizer_.reset(new MockWebSpeechRecognizer());
-    speech_recognizer_->SetDelegate(delegate_);
-  }
-  return speech_recognizer_.get();
 }
 
 void TestRunner::SetMockScreenOrientation(const std::string& orientation_str) {
@@ -2702,18 +2530,6 @@ void TestRunner::SimulateWebNotificationClose(const std::string& title,
   delegate_->SimulateWebNotificationClose(title, by_user);
 }
 
-void TestRunner::AddMockSpeechRecognitionResult(const std::string& transcript,
-                                                double confidence) {
-  getMockWebSpeechRecognizer()->AddMockResult(WebString::FromUTF8(transcript),
-                                              confidence);
-}
-
-void TestRunner::SetMockSpeechRecognitionError(const std::string& error,
-                                               const std::string& message) {
-  getMockWebSpeechRecognizer()->SetError(WebString::FromUTF8(error),
-                                         WebString::FromUTF8(message));
-}
-
 void TestRunner::OnLayoutTestRuntimeFlagsChanged() {
   if (layout_test_runtime_flags_.tracked_dictionary().changed_values().empty())
     return;
@@ -2723,6 +2539,10 @@ void TestRunner::OnLayoutTestRuntimeFlagsChanged() {
   delegate_->OnLayoutTestRuntimeFlagsChanged(
       layout_test_runtime_flags_.tracked_dictionary().changed_values());
   layout_test_runtime_flags_.tracked_dictionary().ResetChangeTracking();
+}
+
+void TestRunner::SetFileChooserPaths(const std::vector<std::string>& paths) {
+  file_chooser_paths_ = paths;
 }
 
 void TestRunner::LocationChangeDone() {

@@ -8,8 +8,8 @@
 
 #include <memory>
 
+#include "base/bind.h"
 #include "base/bind_helpers.h"
-#import "base/mac/bind_objc_block.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
@@ -47,7 +47,10 @@ struct CookieStoreIOSTestTraits {
         std::make_unique<NSHTTPSystemCookieStore>());
   }
 
-  static void RunUntilIdle() { base::RunLoop().RunUntilIdle(); }
+  static void DeliverChangeNotifications() {
+    CookieStoreIOS::NotifySystemCookiesChanged();
+    base::RunLoop().RunUntilIdle();
+  }
 
   static const bool supports_http_only = false;
   static const bool supports_non_dotted_domains = false;
@@ -56,10 +59,11 @@ struct CookieStoreIOSTestTraits {
   static const bool has_path_prefix_bug = true;
   static const bool forbids_setting_empty_name = true;
   static const bool supports_global_cookie_tracking = false;
-  // TODO(crbug.com/813931): Fix the bugs uncovered by these tests.
   static const bool supports_url_cookie_tracking = false;
-  static const bool supports_named_cookie_tracking = false;
-  static const bool supports_multiple_tracking_callbacks = false;
+  static const bool supports_named_cookie_tracking = true;
+  static const bool supports_multiple_tracking_callbacks = true;
+  static const bool has_exact_change_cause = false;
+  static const bool has_exact_change_ordering = false;
   static const int creation_time_granularity_in_ms = 1000;
 
   base::MessageLoop loop_;
@@ -168,7 +172,7 @@ class CookieStoreIOSTest : public PlatformTest {
     base::WeakPtr<SystemCookieStore> weak_system_store =
         system_store_->GetWeakPtr();
     system_store_->GetCookiesForURLAsync(
-        gurl, base::BindBlockArc(^(NSArray<NSHTTPCookie*>* cookies) {
+        gurl, base::BindOnce(^(NSArray<NSHTTPCookie*>* cookies) {
           for (NSHTTPCookie* cookie in cookies) {
             if ([[cookie name] isEqualToString:base::SysUTF8ToNSString(name)] &&
                 weak_system_store) {

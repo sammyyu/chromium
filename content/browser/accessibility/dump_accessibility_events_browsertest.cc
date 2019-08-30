@@ -189,10 +189,19 @@ IN_PROC_BROWSER_TEST_F(DumpAccessibilityEventsTest,
   RunEventTest(FILE_PATH_LITERAL("aria-treeitem-focus.html"));
 }
 
-// http:/crbug.com/791268
 IN_PROC_BROWSER_TEST_F(DumpAccessibilityEventsTest,
-                       DISABLED_AccessibilityEventsAriaComboBoxFocus) {
+                       AccessibilityEventsAriaComboBoxFocus) {
   RunEventTest(FILE_PATH_LITERAL("aria-combo-box-focus.html"));
+}
+
+IN_PROC_BROWSER_TEST_F(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaComboBoxDelayAddList) {
+  RunEventTest(FILE_PATH_LITERAL("aria-combo-box-delay-add-list.html"));
+}
+
+IN_PROC_BROWSER_TEST_F(DumpAccessibilityEventsTest,
+                       AccessibilityEventsAriaComboBoxDelayShowList) {
+  RunEventTest(FILE_PATH_LITERAL("aria-combo-box-delay-show-list.html"));
 }
 
 IN_PROC_BROWSER_TEST_F(DumpAccessibilityEventsTest,

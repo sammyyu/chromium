@@ -20,12 +20,14 @@
 #include "components/sync/model/entity_data.h"
 #include "components/sync/model/model_type_change_processor.h"
 #include "components/sync/model/mutable_data_batch.h"
+#include "components/sync/model_impl/client_tag_based_model_type_processor.h"
 #include "components/sync/model_impl/sync_metadata_store_change_list.h"
 #include "net/base/escape.h"
 
 using base::Optional;
 using base::Time;
 using sync_pb::AutofillSpecifics;
+using syncer::ClientTagBasedModelTypeProcessor;
 using syncer::EntityChange;
 using syncer::EntityChangeList;
 using syncer::EntityData;
@@ -281,24 +283,24 @@ void AutocompleteSyncBridge::CreateForWebDataServiceAndBackend(
     AutofillWebDataService* web_data_service,
     AutofillWebDataBackend* web_data_backend) {
   web_data_service->GetDBUserData()->SetUserData(
-      UserDataKey(), std::make_unique<AutocompleteSyncBridge>(
-                         web_data_backend,
-                         base::BindRepeating(&ModelTypeChangeProcessor::Create,
-                                             base::RepeatingClosure())));
+      UserDataKey(),
+      std::make_unique<AutocompleteSyncBridge>(
+          web_data_backend,
+          std::make_unique<ClientTagBasedModelTypeProcessor>(
+              syncer::AUTOFILL, /*dump_stack=*/base::RepeatingClosure())));
 }
 
 // static
-base::WeakPtr<ModelTypeSyncBridge> AutocompleteSyncBridge::FromWebDataService(
+ModelTypeSyncBridge* AutocompleteSyncBridge::FromWebDataService(
     AutofillWebDataService* web_data_service) {
   return static_cast<AutocompleteSyncBridge*>(
-             web_data_service->GetDBUserData()->GetUserData(UserDataKey()))
-      ->AsWeakPtr();
+      web_data_service->GetDBUserData()->GetUserData(UserDataKey()));
 }
 
 AutocompleteSyncBridge::AutocompleteSyncBridge(
     AutofillWebDataBackend* backend,
-    const ChangeProcessorFactory& change_processor_factory)
-    : ModelTypeSyncBridge(change_processor_factory, syncer::AUTOFILL),
+    std::unique_ptr<ModelTypeChangeProcessor> change_processor)
+    : ModelTypeSyncBridge(std::move(change_processor)),
       web_data_backend_(backend),
       scoped_observer_(this) {
   DCHECK(web_data_backend_);
@@ -385,7 +387,7 @@ void AutocompleteSyncBridge::AutocompleteSyncBridge::GetData(
   std::move(callback).Run(std::move(batch));
 }
 
-void AutocompleteSyncBridge::GetAllData(DataCallback callback) {
+void AutocompleteSyncBridge::GetAllDataForDebugging(DataCallback callback) {
   DCHECK(thread_checker_.CalledOnValidThread());
 
   std::vector<AutofillEntry> entries;

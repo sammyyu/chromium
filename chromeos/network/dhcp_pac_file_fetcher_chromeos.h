@@ -11,7 +11,9 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "chromeos/chromeos_export.h"
+#include "net/base/completion_once_callback.h"
 #include "net/proxy_resolution/dhcp_pac_file_fetcher.h"
+#include "net/traffic_annotation/network_traffic_annotation.h"
 #include "url/gurl.h"
 
 namespace base {
@@ -38,8 +40,9 @@ class CHROMEOS_EXPORT DhcpPacFileFetcherChromeos
 
   // net::DhcpPacFileFetcher
   int Fetch(base::string16* utf16_text,
-            const net::CompletionCallback& callback,
-            const net::NetLogWithSource& net_log) override;
+            net::CompletionOnceCallback callback,
+            const net::NetLogWithSource& net_log,
+            const net::NetworkTrafficAnnotationTag traffic_annotation) override;
   void Cancel() override;
   void OnShutdown() override;
   const GURL& GetPacURL() const override;
@@ -47,9 +50,12 @@ class CHROMEOS_EXPORT DhcpPacFileFetcherChromeos
 
  private:
   void ContinueFetch(base::string16* utf16_text,
-                     net::CompletionCallback callback,
+                     const net::NetworkTrafficAnnotationTag traffic_annotation,
                      std::string pac_url);
 
+  void OnFetchCompleted(int result);
+
+  net::CompletionOnceCallback callback_;
   std::unique_ptr<net::PacFileFetcher> pac_file_fetcher_;
   scoped_refptr<base::SingleThreadTaskRunner> network_handler_task_runner_;
 

@@ -7,38 +7,36 @@
 
 #include "base/android/jni_android.h"
 #include "base/android/scoped_java_ref.h"
-#include "base/callback.h"
-#include "chrome/browser/download/download_confirmation_result.h"
-#include "chrome/browser/download/download_target_determiner_delegate.h"
+#include "chrome/browser/download/download_location_dialog_result.h"
+#include "chrome/browser/download/download_location_dialog_type.h"
 #include "ui/gfx/native_widget_types.h"
 
-namespace content {
-class WebContents;
-}  // namespace content
+namespace base {
+class FilePath;
+}  // namespace base
 
 class DownloadLocationDialogBridge {
  public:
-  DownloadLocationDialogBridge();
-  ~DownloadLocationDialogBridge();
+  using LocationCallback = base::OnceCallback<void(DownloadLocationDialogResult,
+                                                   const base::FilePath&)>;
 
-  void ShowDialog(
-      content::WebContents* web_contents,
-      const base::FilePath& suggested_path,
-      const DownloadTargetDeterminerDelegate::ConfirmationCallback& callback);
+  virtual ~DownloadLocationDialogBridge() = default;
 
-  void OnComplete(JNIEnv* env,
-                  const base::android::JavaParamRef<jobject>& obj,
-                  const base::android::JavaParamRef<jstring>& returned_path);
+  // Show a download location picker dialog to determine the download path.
+  // The path selected by the user will be returned in |location_callback|.
+  virtual void ShowDialog(gfx::NativeWindow native_window,
+                          int64_t total_bytes,
+                          DownloadLocationDialogType dialog_type,
+                          const base::FilePath& suggested_path,
+                          LocationCallback location_callback) = 0;
 
-  void OnCanceled(JNIEnv* env, const base::android::JavaParamRef<jobject>& obj);
+  virtual void OnComplete(
+      JNIEnv* env,
+      const base::android::JavaParamRef<jobject>& obj,
+      const base::android::JavaParamRef<jstring>& returned_path) = 0;
 
- private:
-  jboolean is_dialog_showing_;
-  base::android::ScopedJavaGlobalRef<jobject> java_obj_;
-  DownloadTargetDeterminerDelegate::ConfirmationCallback
-      dialog_complete_callback_;
-
-  DISALLOW_COPY_AND_ASSIGN(DownloadLocationDialogBridge);
+  virtual void OnCanceled(JNIEnv* env,
+                          const base::android::JavaParamRef<jobject>& obj) = 0;
 };
 
 #endif  // CHROME_BROWSER_ANDROID_DOWNLOAD_DOWNLOAD_LOCATION_DIALOG_BRIDGE_H_

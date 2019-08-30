@@ -15,67 +15,23 @@
 #include "chrome/browser/chromeos/arc/optin/arc_terms_of_service_default_negotiator.h"
 #include "chrome/browser/chromeos/login/users/fake_chrome_user_manager.h"
 #include "chrome/browser/consent_auditor/consent_auditor_factory.h"
-#include "chrome/browser/sync/user_event_service_factory.h"
+#include "chrome/browser/consent_auditor/consent_auditor_test_utils.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
+#include "chrome/browser/signin/signin_manager_factory.h"
 #include "chrome/grit/generated_resources.h"
 #include "chrome/test/base/browser_with_test_window_test.h"
 #include "chrome/test/base/testing_browser_process.h"
 #include "chrome/test/base/testing_profile.h"
 #include "components/arc/arc_prefs.h"
-#include "components/consent_auditor/consent_auditor.h"
+#include "components/consent_auditor/fake_consent_auditor.h"
 #include "components/prefs/pref_service.h"
 #include "components/sync_preferences/testing_pref_service_syncable.h"
 #include "components/user_manager/scoped_user_manager.h"
 #include "content/public/test/test_browser_thread_bundle.h"
+#include "services/identity/public/cpp/identity_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace arc {
-
-// TODO(jhorwich): Integrate with centralized FakeConsentAuditor.
-class FakeConsentAuditor : public consent_auditor::ConsentAuditor {
- public:
-  static std::unique_ptr<KeyedService> Build(content::BrowserContext* context) {
-    return std::make_unique<FakeConsentAuditor>(
-        Profile::FromBrowserContext(context));
-  }
-
-  explicit FakeConsentAuditor(Profile* profile)
-      : ConsentAuditor(
-            profile->GetPrefs(),
-            browser_sync::UserEventServiceFactory::GetForProfile(profile),
-            std::string(),
-            std::string()) {}
-  ~FakeConsentAuditor() override = default;
-
-  void RecordGaiaConsent(consent_auditor::Feature feature,
-                         const std::vector<int>& description_grd_ids,
-                         int confirmation_grd_id,
-                         consent_auditor::ConsentStatus status) override {
-    std::vector<int> ids = description_grd_ids;
-    ids.push_back(confirmation_grd_id);
-    recorded_id_vectors_.push_back(ids);
-    recorded_features_.push_back(feature);
-    recorded_statuses_.push_back(status);
-  }
-
-  const std::vector<std::vector<int>>& recorded_id_vectors() {
-    return recorded_id_vectors_;
-  }
-
-  const std::vector<consent_auditor::Feature>& recorded_features() {
-    return recorded_features_;
-  }
-
-  const std::vector<consent_auditor::ConsentStatus>& recorded_statuses() {
-    return recorded_statuses_;
-  }
-
- private:
-  std::vector<std::vector<int>> recorded_id_vectors_;
-  std::vector<consent_auditor::Feature> recorded_features_;
-  std::vector<consent_auditor::ConsentStatus> recorded_statuses_;
-
-  DISALLOW_COPY_AND_ASSIGN(FakeConsentAuditor);
-};
 
 class ArcTermsOfServiceDefaultNegotiatorTest
     : public BrowserWithTestWindowTest {
@@ -87,6 +43,9 @@ class ArcTermsOfServiceDefaultNegotiatorTest
     BrowserWithTestWindowTest::SetUp();
     user_manager_enabler_ = std::make_unique<user_manager::ScopedUserManager>(
         std::make_unique<chromeos::FakeChromeUserManager>());
+    IdentityManagerFactory::GetForProfile(profile())
+        ->SetPrimaryAccountSynchronously("gaia_id", "testing@account.com",
+                                         /*refresh_token=*/std::string());
 
     support_host_ = std::make_unique<ArcSupportHost>(profile());
     fake_arc_support_ = std::make_unique<FakeArcSupport>(support_host_.get());
@@ -107,14 +66,20 @@ class ArcTermsOfServiceDefaultNegotiatorTest
   FakeArcSupport* fake_arc_support() { return fake_arc_support_.get(); }
   ArcTermsOfServiceNegotiator* negotiator() { return negotiator_.get(); }
 
-  FakeConsentAuditor* consent_auditor() {
-    return static_cast<FakeConsentAuditor*>(
+  consent_auditor::FakeConsentAuditor* consent_auditor() {
+    return static_cast<consent_auditor::FakeConsentAuditor*>(
         ConsentAuditorFactory::GetForProfile(profile()));
+  }
+
+  std::string GetAuthenticatedAccountId() {
+    return IdentityManagerFactory::GetForProfile(profile())
+        ->GetPrimaryAccountInfo()
+        .account_id;
   }
 
   // BrowserWithTestWindowTest:
   TestingProfile::TestingFactories GetTestingFactories() override {
-    return {{ConsentAuditorFactory::GetInstance(), FakeConsentAuditor::Build}};
+    return {{ConsentAuditorFactory::GetInstance(), BuildFakeConsentAuditor}};
   }
 
  private:
@@ -218,16 +183,17 @@ TEST_F(ArcTermsOfServiceDefaultNegotiatorTest, Accept) {
   EXPECT_TRUE(
       profile()->GetPrefs()->GetBoolean(prefs::kArcLocationServiceEnabled));
 
-  // Make sure consent auditing is recording expected consents.
+  // Make sure consent auditing records expected consents.
   std::vector<int> tos_consent =
       ArcSupportHost::ComputePlayToSConsentIds(tos_content);
-  tos_consent.push_back(IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE);
-  const std::vector<int> backup_consent = {IDS_ARC_OPT_IN_DIALOG_BACKUP_RESTORE,
-                                           IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE};
-  const std::vector<int> location_consent = {
-      IDS_ARC_OPT_IN_LOCATION_SETTING, IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE};
+  const std::vector<int> backup_consent = {
+      IDS_ARC_OPT_IN_DIALOG_BACKUP_RESTORE};
+  const std::vector<int> location_consent = {IDS_ARC_OPT_IN_LOCATION_SETTING};
   const std::vector<std::vector<int>> consent_ids = {
       tos_consent, backup_consent, location_consent};
+  const std::vector<int> confirmation_ids = {
+      IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE, IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE,
+      IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE};
   const std::vector<consent_auditor::Feature> features = {
       consent_auditor::Feature::PLAY_STORE,
       consent_auditor::Feature::BACKUP_AND_RESTORE,
@@ -236,7 +202,10 @@ TEST_F(ArcTermsOfServiceDefaultNegotiatorTest, Accept) {
       consent_auditor::ConsentStatus::GIVEN,
       consent_auditor::ConsentStatus::GIVEN,
       consent_auditor::ConsentStatus::GIVEN};
+
+  EXPECT_EQ(consent_auditor()->account_id(), GetAuthenticatedAccountId());
   EXPECT_EQ(consent_auditor()->recorded_id_vectors(), consent_ids);
+  EXPECT_EQ(consent_auditor()->recorded_confirmation_ids(), confirmation_ids);
   EXPECT_EQ(consent_auditor()->recorded_features(), features);
   EXPECT_EQ(consent_auditor()->recorded_statuses(), statuses);
 }
@@ -280,22 +249,36 @@ TEST_F(ArcTermsOfServiceDefaultNegotiatorTest, AcceptWithUnchecked) {
   EXPECT_FALSE(
       profile()->GetPrefs()->GetBoolean(prefs::kArcLocationServiceEnabled));
 
-  // Make sure consent auditing is only recording the ToS accept.
+  // Make sure consent auditing records the ToS accept as GIVEN, but the other
+  // consents as NOT_GIVEN.
   std::vector<int> tos_consent =
       ArcSupportHost::ComputePlayToSConsentIds(tos_content);
-  tos_consent.push_back(IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE);
-  const std::vector<std::vector<int>> consent_ids = {tos_consent};
+  const std::vector<int> backup_consent = {
+      IDS_ARC_OPT_IN_DIALOG_BACKUP_RESTORE};
+  const std::vector<int> location_consent = {IDS_ARC_OPT_IN_LOCATION_SETTING};
+  const std::vector<std::vector<int>> consent_ids = {
+      tos_consent, backup_consent, location_consent};
+  const std::vector<int> confirmation_ids = {
+      IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE, IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE,
+      IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE};
   const std::vector<consent_auditor::Feature> features = {
-      consent_auditor::Feature::PLAY_STORE};
+      consent_auditor::Feature::PLAY_STORE,
+      consent_auditor::Feature::BACKUP_AND_RESTORE,
+      consent_auditor::Feature::GOOGLE_LOCATION_SERVICE};
   const std::vector<consent_auditor::ConsentStatus> statuses = {
-      consent_auditor::ConsentStatus::GIVEN};
+      consent_auditor::ConsentStatus::GIVEN,
+      consent_auditor::ConsentStatus::NOT_GIVEN,
+      consent_auditor::ConsentStatus::NOT_GIVEN};
+
+  EXPECT_EQ(consent_auditor()->account_id(), GetAuthenticatedAccountId());
   EXPECT_EQ(consent_auditor()->recorded_id_vectors(), consent_ids);
+  EXPECT_EQ(consent_auditor()->recorded_confirmation_ids(), confirmation_ids);
   EXPECT_EQ(consent_auditor()->recorded_features(), features);
   EXPECT_EQ(consent_auditor()->recorded_statuses(), statuses);
 }
 
 TEST_F(ArcTermsOfServiceDefaultNegotiatorTest, AcceptWithManagedToS) {
-  // Verifies that we don't record ToS consent if the ToS is not shown due to
+  // Verifies that we record an empty ToS consent if the ToS is not shown due to
   // a managed user scenario.
   // Also verifies that a managed setting for Backup and Restore is not recorded
   // while an unmanaged setting for Location Services still is recorded.
@@ -327,15 +310,24 @@ TEST_F(ArcTermsOfServiceDefaultNegotiatorTest, AcceptWithManagedToS) {
   EXPECT_TRUE(
       profile()->GetPrefs()->GetBoolean(prefs::kArcLocationServiceEnabled));
 
-  // Make sure consent auditing is recording expected consents.
-  const std::vector<int> location_consent = {
-      IDS_ARC_OPT_IN_LOCATION_SETTING, IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE};
-  const std::vector<std::vector<int>> consent_ids = {location_consent};
+  // Make sure consent auditing records expected consents.
+  std::vector<int> tos_consent = ArcSupportHost::ComputePlayToSConsentIds("");
+
+  const std::vector<int> location_consent = {IDS_ARC_OPT_IN_LOCATION_SETTING};
+  const std::vector<std::vector<int>> consent_ids = {tos_consent,
+                                                     location_consent};
+  const std::vector<int> confirmation_ids = {
+      IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE, IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE};
   const std::vector<consent_auditor::Feature> features = {
+      consent_auditor::Feature::PLAY_STORE,
       consent_auditor::Feature::GOOGLE_LOCATION_SERVICE};
   const std::vector<consent_auditor::ConsentStatus> statuses = {
+      consent_auditor::ConsentStatus::GIVEN,
       consent_auditor::ConsentStatus::GIVEN};
+
+  EXPECT_EQ(consent_auditor()->account_id(), GetAuthenticatedAccountId());
   EXPECT_EQ(consent_auditor()->recorded_id_vectors(), consent_ids);
+  EXPECT_EQ(consent_auditor()->recorded_confirmation_ids(), confirmation_ids);
   EXPECT_EQ(consent_auditor()->recorded_features(), features);
   EXPECT_EQ(consent_auditor()->recorded_statuses(), statuses);
 }
@@ -349,6 +341,11 @@ TEST_F(ArcTermsOfServiceDefaultNegotiatorTest, Cancel) {
   EXPECT_EQ(status, Status::PENDING);
   EXPECT_EQ(fake_arc_support()->ui_page(), ArcSupportHost::UIPage::TERMS);
 
+  // Emulate showing of a ToS page with a hard-coded ToS.
+  std::string tos_content = "fake ToS";
+  fake_arc_support()->set_tos_content(tos_content);
+  fake_arc_support()->set_tos_shown(true);
+
   // Check the preference related checkbox.
   fake_arc_support()->set_metrics_mode(true);
   fake_arc_support()->set_backup_and_restore_mode(true);
@@ -361,7 +358,7 @@ TEST_F(ArcTermsOfServiceDefaultNegotiatorTest, Cancel) {
       profile()->GetPrefs()->GetBoolean(prefs::kArcLocationServiceEnabled));
 
   // Clicking "CANCEL" button closes the window.
-  fake_arc_support()->Close();
+  fake_arc_support()->ClickCancelButton();
   EXPECT_EQ(status, Status::CANCELLED);
 
   // Make sure preference checkbox values are discarded.
@@ -369,6 +366,34 @@ TEST_F(ArcTermsOfServiceDefaultNegotiatorTest, Cancel) {
       profile()->GetPrefs()->GetBoolean(prefs::kArcBackupRestoreEnabled));
   EXPECT_FALSE(
       profile()->GetPrefs()->GetBoolean(prefs::kArcLocationServiceEnabled));
+
+  // Make sure consent auditing is recording all consents as NOT_GIVEN.
+  std::vector<int> tos_consent =
+      ArcSupportHost::ComputePlayToSConsentIds(tos_content);
+  const std::vector<int> backup_consent = {
+      IDS_ARC_OPT_IN_DIALOG_BACKUP_RESTORE};
+  const std::vector<int> location_consent = {IDS_ARC_OPT_IN_LOCATION_SETTING};
+  const std::vector<std::vector<int>> consent_ids = {
+      tos_consent, backup_consent, location_consent};
+
+  const std::vector<int> confirmation_ids = {
+      IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE, IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE,
+      IDS_ARC_OPT_IN_DIALOG_BUTTON_AGREE};
+
+  const std::vector<consent_auditor::Feature> features = {
+      consent_auditor::Feature::PLAY_STORE,
+      consent_auditor::Feature::BACKUP_AND_RESTORE,
+      consent_auditor::Feature::GOOGLE_LOCATION_SERVICE};
+  const std::vector<consent_auditor::ConsentStatus> statuses = {
+      consent_auditor::ConsentStatus::NOT_GIVEN,
+      consent_auditor::ConsentStatus::NOT_GIVEN,
+      consent_auditor::ConsentStatus::NOT_GIVEN};
+
+  EXPECT_EQ(consent_auditor()->account_id(), GetAuthenticatedAccountId());
+  EXPECT_EQ(consent_auditor()->recorded_id_vectors(), consent_ids);
+  EXPECT_EQ(consent_auditor()->recorded_confirmation_ids(), confirmation_ids);
+  EXPECT_EQ(consent_auditor()->recorded_features(), features);
+  EXPECT_EQ(consent_auditor()->recorded_statuses(), statuses);
 }
 
 TEST_F(ArcTermsOfServiceDefaultNegotiatorTest, Retry) {

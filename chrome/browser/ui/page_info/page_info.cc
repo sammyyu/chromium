@@ -16,6 +16,7 @@
 #include "base/i18n/time_formatting.h"
 #include "base/macros.h"
 #include "base/metrics/field_trial.h"
+#include "base/metrics/histogram_functions.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "base/strings/string_number_conversions.h"
@@ -93,6 +94,10 @@ using base::ASCIIToUTF16;
 using base::UTF8ToUTF16;
 using base::UTF16ToUTF8;
 using content::BrowserThread;
+#if defined(SAFE_BROWSING_DB_LOCAL)
+using PasswordReuseEvent =
+    safe_browsing::LoginReputationClientRequest::PasswordReuseEvent;
+#endif  // SAFE_BROWSING_DB_LOCAL
 
 namespace {
 
@@ -118,6 +123,7 @@ ContentSettingsType kPermissionType[] = {
     CONTENT_SETTINGS_TYPE_AUTOPLAY,
     CONTENT_SETTINGS_TYPE_MIDI_SYSEX,
     CONTENT_SETTINGS_TYPE_CLIPBOARD_READ,
+    CONTENT_SETTINGS_TYPE_USB_GUARD,
 };
 
 // Checks whether this permission is currently the factory default, as set by
@@ -150,7 +156,7 @@ bool ShouldShowPermission(
   // value when it has been activated on the current origin.
   if (info.type == CONTENT_SETTINGS_TYPE_ADS) {
     if (!base::FeatureList::IsEnabled(
-            subresource_filter::kSafeBrowsingSubresourceFilterExperimentalUI)) {
+            subresource_filter::kSafeBrowsingSubresourceFilter)) {
       return false;
     }
 
@@ -279,38 +285,6 @@ void ReportAnyInsecureContent(const security_state::SecurityInfo& security_info,
   }
 }
 
-void GetSiteIdentityByMaliciousContentStatus(
-    security_state::MaliciousContentStatus malicious_content_status,
-    PageInfo::SiteIdentityStatus* status,
-    base::string16* details) {
-  switch (malicious_content_status) {
-    case security_state::MALICIOUS_CONTENT_STATUS_NONE:
-      NOTREACHED();
-      break;
-    case security_state::MALICIOUS_CONTENT_STATUS_MALWARE:
-      *status = PageInfo::SITE_IDENTITY_STATUS_MALWARE;
-      *details = l10n_util::GetStringUTF16(IDS_PAGE_INFO_MALWARE_DETAILS);
-      break;
-    case security_state::MALICIOUS_CONTENT_STATUS_SOCIAL_ENGINEERING:
-      *status = PageInfo::SITE_IDENTITY_STATUS_SOCIAL_ENGINEERING;
-      *details =
-          l10n_util::GetStringUTF16(IDS_PAGE_INFO_SOCIAL_ENGINEERING_DETAILS);
-      break;
-    case security_state::MALICIOUS_CONTENT_STATUS_UNWANTED_SOFTWARE:
-      *status = PageInfo::SITE_IDENTITY_STATUS_UNWANTED_SOFTWARE;
-      *details =
-          l10n_util::GetStringUTF16(IDS_PAGE_INFO_UNWANTED_SOFTWARE_DETAILS);
-      break;
-    case security_state::MALICIOUS_CONTENT_STATUS_PASSWORD_REUSE:
-#if defined(SAFE_BROWSING_DB_LOCAL)
-      *status = PageInfo::SITE_IDENTITY_STATUS_PASSWORD_REUSE;
-      *details =
-          l10n_util::GetStringUTF16(IDS_PAGE_INFO_CHANGE_PASSWORD_DETAILS);
-#endif
-      break;
-  }
-}
-
 base::string16 GetSimpleSiteName(const GURL& url) {
   return url_formatter::FormatUrlForSecurityDisplay(
       url, url_formatter::SchemeDisplay::OMIT_HTTP_AND_HTTPS);
@@ -328,6 +302,37 @@ const PageInfo::ChooserUIInfo kChooserUIInfo[] = {
      IDS_PAGE_INFO_USB_DEVICE_LABEL, IDS_PAGE_INFO_USB_DEVICE_SECONDARY_LABEL,
      IDS_PAGE_INFO_DELETE_USB_DEVICE, "name"},
 };
+
+// Time open histogram prefixes.
+const char kPageInfoTimePrefix[] = "Security.PageInfo.TimeOpen";
+const char kPageInfoTimeActionPrefix[] = "Security.PageInfo.TimeOpen.Action";
+const char kPageInfoTimeNoActionPrefix[] =
+    "Security.PageInfo.TimeOpen.NoAction";
+
+std::string GetHistogramSuffixForSecurityLevel(
+    security_state::SecurityLevel level) {
+  switch (level) {
+    case security_state::EV_SECURE:
+      return "EV_SECURE";
+    case security_state::SECURE:
+      return "SECURE";
+    case security_state::NONE:
+      return "NONE";
+    case security_state::HTTP_SHOW_WARNING:
+      return "HTTP_SHOW_WARNING";
+    case security_state::SECURE_WITH_POLICY_INSTALLED_CERT:
+      return "SECURE_WITH_POLICY_INSTALLED_CERT";
+    case security_state::DANGEROUS:
+      return "DANGEROUS";
+    default:
+      return "OTHER";
+  }
+}
+
+std::string GetHistogramName(const char* prefix,
+                             security_state::SecurityLevel level) {
+  return std::string(prefix) + "." + GetHistogramSuffixForSecurityLevel(level);
+}
 
 }  // namespace
 
@@ -357,7 +362,8 @@ PageInfo::PageInfo(PageInfoUI* ui,
           safe_browsing::ChromePasswordProtectionService::
               GetPasswordProtectionService(profile_)),
 #endif
-      show_change_password_buttons_(false) {
+      show_change_password_buttons_(false),
+      did_perform_action_(false) {
   Init(url, security_info);
 
   PresentSitePermissions();
@@ -367,6 +373,10 @@ PageInfo::PageInfo(PageInfoUI* ui,
   // Every time the Page Info UI is opened a |PageInfo| object is
   // created. So this counts how ofter the Page Info UI is opened.
   RecordPageInfoAction(PAGE_INFO_OPENED);
+
+  // Record the time when the Page Info UI is opened so the total time it is
+  // open can be measured.
+  start_time_ = base::TimeTicks::Now();
 }
 
 PageInfo::~PageInfo() {
@@ -380,9 +390,32 @@ PageInfo::~PageInfo() {
                               user_decision,
                               END_OF_SSL_CERTIFICATE_DECISIONS_DID_REVOKE_ENUM);
   }
+
+  // Record the total time the Page Info UI was open for all opens as well as
+  // split between whether any action was taken.
+  base::UmaHistogramCustomTimes(
+      GetHistogramName(kPageInfoTimePrefix, security_level_),
+      base::TimeTicks::Now() - start_time_,
+      base::TimeDelta::FromMilliseconds(1), base::TimeDelta::FromHours(1), 100);
+  if (did_perform_action_) {
+    base::UmaHistogramCustomTimes(
+        GetHistogramName(kPageInfoTimeActionPrefix, security_level_),
+        base::TimeTicks::Now() - start_time_,
+        base::TimeDelta::FromMilliseconds(1), base::TimeDelta::FromHours(1),
+        100);
+  } else {
+    base::UmaHistogramCustomTimes(
+        GetHistogramName(kPageInfoTimeNoActionPrefix, security_level_),
+        base::TimeTicks::Now() - start_time_,
+        base::TimeDelta::FromMilliseconds(1), base::TimeDelta::FromHours(1),
+        100);
+  }
 }
 
 void PageInfo::RecordPageInfoAction(PageInfoAction action) {
+  if (action != PAGE_INFO_OPENED)
+    did_perform_action_ = true;
+
   UMA_HISTOGRAM_ENUMERATION("WebsiteSettings.Action", action, PAGE_INFO_COUNT);
 
   std::string histogram_name;
@@ -532,8 +565,15 @@ void PageInfo::OnChangePasswordButtonPressed(
     content::WebContents* web_contents) {
 #if defined(SAFE_BROWSING_DB_LOCAL)
   DCHECK(password_protection_service_);
+  DCHECK(site_identity_status_ == SITE_IDENTITY_STATUS_SIGN_IN_PASSWORD_REUSE ||
+         site_identity_status_ ==
+             SITE_IDENTITY_STATUS_ENTERPRISE_PASSWORD_REUSE);
   password_protection_service_->OnUserAction(
-      web_contents, safe_browsing::PasswordProtectionService::PAGE_INFO,
+      web_contents,
+      site_identity_status_ == SITE_IDENTITY_STATUS_SIGN_IN_PASSWORD_REUSE
+          ? PasswordReuseEvent::SIGN_IN_PASSWORD
+          : PasswordReuseEvent::ENTERPRISE_PASSWORD,
+      safe_browsing::PasswordProtectionService::PAGE_INFO,
       safe_browsing::PasswordProtectionService::CHANGE_PASSWORD);
 #endif
 }
@@ -542,8 +582,15 @@ void PageInfo::OnWhitelistPasswordReuseButtonPressed(
     content::WebContents* web_contents) {
 #if defined(SAFE_BROWSING_DB_LOCAL)
   DCHECK(password_protection_service_);
+  DCHECK(site_identity_status_ == SITE_IDENTITY_STATUS_SIGN_IN_PASSWORD_REUSE ||
+         site_identity_status_ ==
+             SITE_IDENTITY_STATUS_ENTERPRISE_PASSWORD_REUSE);
   password_protection_service_->OnUserAction(
-      web_contents, safe_browsing::PasswordProtectionService::PAGE_INFO,
+      web_contents,
+      site_identity_status_ == SITE_IDENTITY_STATUS_SIGN_IN_PASSWORD_REUSE
+          ? PasswordReuseEvent::SIGN_IN_PASSWORD
+          : PasswordReuseEvent::ENTERPRISE_PASSWORD,
+      safe_browsing::PasswordProtectionService::PAGE_INFO,
       safe_browsing::PasswordProtectionService::MARK_AS_LEGITIMATE);
 #endif
 }
@@ -597,8 +644,11 @@ void PageInfo::Init(const GURL& url,
         security_info.malicious_content_status, &site_identity_status_,
         &site_identity_details_);
     show_change_password_buttons_ =
-        security_info.malicious_content_status ==
-        security_state::MALICIOUS_CONTENT_STATUS_PASSWORD_REUSE;
+        (security_info.malicious_content_status ==
+             security_state::MALICIOUS_CONTENT_STATUS_SIGN_IN_PASSWORD_REUSE ||
+         security_info.malicious_content_status ==
+             security_state::
+                 MALICIOUS_CONTENT_STATUS_ENTERPRISE_PASSWORD_REUSE);
   } else if (certificate_ &&
              (!net::IsCertStatusError(security_info.cert_status) ||
               net::IsCertStatusMinorError(security_info.cert_status))) {
@@ -867,6 +917,12 @@ void PageInfo::PresentSitePermissions() {
   for (const ChooserUIInfo& ui_info : kChooserUIInfo) {
     ChooserContextBase* context = ui_info.get_context(profile_);
     const GURL origin = site_url_.GetOrigin();
+
+    // Hide individual object permissions because when the chooser is blocked
+    // previously granted device permissions are also ignored.
+    if (!context->CanRequestObjectPermission(origin, origin))
+      continue;
+
     auto chosen_objects = context->GetGrantedObjects(origin, origin);
     for (std::unique_ptr<base::DictionaryValue>& object : chosen_objects) {
       chosen_object_info_list.push_back(
@@ -923,9 +979,19 @@ void PageInfo::PresentSiteIdentity() {
   ui_->SetIdentityInfo(info);
 #if defined(SAFE_BROWSING_DB_LOCAL)
   if (password_protection_service_ && show_change_password_buttons_) {
-    password_protection_service_->RecordWarningAction(
-        safe_browsing::PasswordProtectionService::PAGE_INFO,
-        safe_browsing::PasswordProtectionService::SHOWN);
+    if (site_identity_status_ == SITE_IDENTITY_STATUS_SIGN_IN_PASSWORD_REUSE) {
+      password_protection_service_->RecordWarningAction(
+          safe_browsing::PasswordProtectionService::PAGE_INFO,
+          safe_browsing::PasswordProtectionService::SHOWN,
+          safe_browsing::LoginReputationClientRequest::PasswordReuseEvent::
+              SIGN_IN_PASSWORD);
+    } else {
+      password_protection_service_->RecordWarningAction(
+          safe_browsing::PasswordProtectionService::PAGE_INFO,
+          safe_browsing::PasswordProtectionService::SHOWN,
+          safe_browsing::LoginReputationClientRequest::PasswordReuseEvent::
+              ENTERPRISE_PASSWORD);
+    }
   }
 #endif
 }
@@ -940,4 +1006,49 @@ std::vector<ContentSettingsType> PageInfo::GetAllPermissionsForTesting() {
     permission_list.push_back(kPermissionType[i]);
   }
   return permission_list;
+}
+
+void PageInfo::GetSiteIdentityByMaliciousContentStatus(
+    security_state::MaliciousContentStatus malicious_content_status,
+    PageInfo::SiteIdentityStatus* status,
+    base::string16* details) {
+  switch (malicious_content_status) {
+    case security_state::MALICIOUS_CONTENT_STATUS_NONE:
+      NOTREACHED();
+      break;
+    case security_state::MALICIOUS_CONTENT_STATUS_MALWARE:
+      *status = PageInfo::SITE_IDENTITY_STATUS_MALWARE;
+      *details = l10n_util::GetStringUTF16(IDS_PAGE_INFO_MALWARE_DETAILS);
+      break;
+    case security_state::MALICIOUS_CONTENT_STATUS_SOCIAL_ENGINEERING:
+      *status = PageInfo::SITE_IDENTITY_STATUS_SOCIAL_ENGINEERING;
+      *details =
+          l10n_util::GetStringUTF16(IDS_PAGE_INFO_SOCIAL_ENGINEERING_DETAILS);
+      break;
+    case security_state::MALICIOUS_CONTENT_STATUS_UNWANTED_SOFTWARE:
+      *status = PageInfo::SITE_IDENTITY_STATUS_UNWANTED_SOFTWARE;
+      *details =
+          l10n_util::GetStringUTF16(IDS_PAGE_INFO_UNWANTED_SOFTWARE_DETAILS);
+      break;
+    case security_state::MALICIOUS_CONTENT_STATUS_SIGN_IN_PASSWORD_REUSE:
+#if defined(SAFE_BROWSING_DB_LOCAL)
+      *status = PageInfo::SITE_IDENTITY_STATUS_SIGN_IN_PASSWORD_REUSE;
+      // |password_protection_service_| may be null in test.
+      *details = password_protection_service_
+                     ? password_protection_service_->GetWarningDetailText(
+                           PasswordReuseEvent::SIGN_IN_PASSWORD)
+                     : base::string16();
+#endif
+      break;
+    case security_state::MALICIOUS_CONTENT_STATUS_ENTERPRISE_PASSWORD_REUSE:
+#if defined(SAFE_BROWSING_DB_LOCAL)
+      *status = PageInfo::SITE_IDENTITY_STATUS_ENTERPRISE_PASSWORD_REUSE;
+      // |password_protection_service_| maybe null in test.
+      *details = password_protection_service_
+                     ? password_protection_service_->GetWarningDetailText(
+                           PasswordReuseEvent::ENTERPRISE_PASSWORD)
+                     : base::string16();
+#endif
+      break;
+  }
 }

@@ -2,7 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "components/offline_pages/core/offline_page_metadata_store_sql.h"
+#include "components/offline_pages/core/offline_page_metadata_store.h"
 
 #include <stdint.h>
 
@@ -20,8 +20,9 @@
 #include "components/offline_pages/core/client_namespace_constants.h"
 #include "components/offline_pages/core/model/offline_page_item_generator.h"
 #include "components/offline_pages/core/offline_page_item.h"
-#include "components/offline_pages/core/offline_page_metadata_store_sql.h"
+#include "components/offline_pages/core/offline_page_metadata_store.h"
 #include "components/offline_pages/core/offline_page_model.h"
+#include "components/offline_pages/core/offline_page_thumbnail.h"
 #include "components/offline_pages/core/offline_store_utils.h"
 #include "sql/connection.h"
 #include "sql/meta_table.h"
@@ -47,6 +48,7 @@ int64_t kOfflineId = 12345LL;
 const char kTestRequestOrigin[] = "request.origin";
 int64_t kTestSystemDownloadId = 42LL;
 const char kTestDigest[] = "test-digest";
+const base::Time kThumbnailExpiration = store_utils::FromDatabaseTime(42);
 
 // Build a store with outdated schema to simulate the upgrading process.
 void BuildTestStoreWithSchemaFromM52(const base::FilePath& file) {
@@ -462,6 +464,22 @@ void BuildTestStoreWithSchemaVersion1(const base::FilePath& file) {
   InjectItemInM62Store(&connection, generator.CreateItem());
 }
 
+void BuildTestStoreWithSchemaVersion2(const base::FilePath& file) {
+  BuildTestStoreWithSchemaVersion1(file);
+  sql::Connection db;
+  ASSERT_TRUE(db.Open(file.Append(FILE_PATH_LITERAL("OfflinePages.db"))));
+  sql::MetaTable meta_table;
+  ASSERT_TRUE(meta_table.Init(&db, OfflinePageMetadataStore::kCurrentVersion,
+                              OfflinePageMetadataStore::kCompatibleVersion));
+  static const char kSql[] =
+      "CREATE TABLE page_thumbnails"
+      " (offline_id INTEGER PRIMARY KEY NOT NULL,"
+      " expiration INTEGER NOT NULL,"
+      " thumbnail BLOB NOT NULL"
+      ")";
+  ASSERT_TRUE(db.Execute(kSql));
+}
+
 // Create an offline page item from a SQL result.  Expects complete rows with
 // all columns present.
 OfflinePageItem MakeOfflinePageItem(sql::Statement* statement) {
@@ -501,10 +519,7 @@ OfflinePageItem MakeOfflinePageItem(sql::Statement* statement) {
 std::vector<OfflinePageItem> GetOfflinePagesSync(sql::Connection* db) {
   std::vector<OfflinePageItem> result;
 
-  if (!db)
-    return result;
-
-  const char kSql[] = "SELECT * FROM " OFFLINE_PAGES_TABLE_V1;
+  static const char kSql[] = "SELECT * FROM " OFFLINE_PAGES_TABLE_V1;
   sql::Statement statement(db->GetCachedStatement(SQL_FROM_HERE, kSql));
 
   while (statement.Step())
@@ -531,8 +546,8 @@ class OfflinePageMetadataStoreTest : public testing::Test {
     PumpLoop();
   }
 
-  std::unique_ptr<OfflinePageMetadataStoreSQL> BuildStore() {
-    auto store = std::make_unique<OfflinePageMetadataStoreSQL>(
+  std::unique_ptr<OfflinePageMetadataStore> BuildStore() {
+    auto store = std::make_unique<OfflinePageMetadataStore>(
         base::ThreadTaskRunnerHandle::Get(), TempPath());
     PumpLoop();
     return store;
@@ -548,14 +563,14 @@ class OfflinePageMetadataStoreTest : public testing::Test {
   }
   base::FilePath TempPath() const { return temp_directory_.GetPath(); }
 
-  OfflinePageItem CheckThatStoreHasOneItem(OfflinePageMetadataStoreSQL* store) {
+  OfflinePageItem CheckThatStoreHasOneItem(OfflinePageMetadataStore* store) {
     std::vector<OfflinePageItem> pages = GetOfflinePages(store);
     EXPECT_EQ(1U, pages.size());
     return pages[0];
   }
 
   void CheckThatOfflinePageCanBeSaved(
-      std::unique_ptr<OfflinePageMetadataStoreSQL> store) {
+      std::unique_ptr<OfflinePageMetadataStore> store) {
     size_t store_size = GetOfflinePages(store.get()).size();
     OfflinePageItem offline_page(GURL(kTestURL), 1234LL, kTestClientId1,
                                  base::FilePath(kFilePath), kFileSize);
@@ -578,6 +593,18 @@ class OfflinePageMetadataStoreTest : public testing::Test {
     EXPECT_EQ(offline_page, pages[0]);
   }
 
+  void CheckThatPageThumbnailCanBeSaved(OfflinePageMetadataStore* store) {
+    OfflinePageThumbnail thumbnail;
+    thumbnail.offline_id = kOfflineId;
+    thumbnail.expiration = kThumbnailExpiration;
+    thumbnail.thumbnail = "content";
+
+    AddThumbnail(store, thumbnail);
+    std::vector<OfflinePageThumbnail> thumbnails = GetThumbnails(store);
+    EXPECT_EQ(1UL, thumbnails.size());
+    EXPECT_EQ(thumbnail, thumbnails[0]);
+  }
+
   void VerifyMetaVersions() {
     sql::Connection connection;
     ASSERT_TRUE(connection.Open(temp_directory_.GetPath().Append(
@@ -587,56 +614,82 @@ class OfflinePageMetadataStoreTest : public testing::Test {
     sql::MetaTable meta_table;
     EXPECT_TRUE(meta_table.Init(&connection, 1, 1));
 
-    EXPECT_EQ(2, meta_table.GetVersionNumber());
-    EXPECT_EQ(1, meta_table.GetCompatibleVersionNumber());
+    EXPECT_EQ(OfflinePageMetadataStore::kCurrentVersion,
+              meta_table.GetVersionNumber());
+    EXPECT_EQ(OfflinePageMetadataStore::kCompatibleVersion,
+              meta_table.GetCompatibleVersionNumber());
   }
 
   void LoadAndCheckStore() {
-    auto store = std::make_unique<OfflinePageMetadataStoreSQL>(
+    auto store = std::make_unique<OfflinePageMetadataStore>(
         base::ThreadTaskRunnerHandle::Get(), TempPath());
     OfflinePageItem item = CheckThatStoreHasOneItem(store.get());
+    CheckThatPageThumbnailCanBeSaved((OfflinePageMetadataStore*)store.get());
+    CheckThatOfflinePageCanBeSaved(std::move(store));
+    VerifyMetaVersions();
+  }
+
+  void LoadAndCheckStoreFromMetaVersion1AndUp() {
+    // At meta version 1, more items were added to the database for testing,
+    // which necessitates different checks.
+    auto store = std::make_unique<OfflinePageMetadataStore>(
+        base::ThreadTaskRunnerHandle::Get(), TempPath());
+    std::vector<OfflinePageItem> pages = GetOfflinePages(store.get());
+    EXPECT_EQ(5U, pages.size());
+
+    // TODO(fgorski): Use persistent namespaces from the client policy
+    // controller once an appropriate method is available.
+    std::set<std::string> upgradeable_namespaces{
+        kAsyncNamespace, kDownloadNamespace, kBrowserActionsNamespace,
+        kNTPSuggestionsNamespace};
+
+    for (const OfflinePageItem& page : pages) {
+      if (upgradeable_namespaces.count(page.client_id.name_space) > 0)
+        EXPECT_EQ(5, page.upgrade_attempt);
+      else
+        EXPECT_EQ(0, page.upgrade_attempt);
+    }
+    CheckThatPageThumbnailCanBeSaved((OfflinePageMetadataStore*)store.get());
     CheckThatOfflinePageCanBeSaved(std::move(store));
     VerifyMetaVersions();
   }
 
   template <typename T>
-  T ExecuteSync(OfflinePageMetadataStoreSQL* store,
-                base::OnceCallback<T(sql::Connection*)> run_callback) {
+  T ExecuteSync(OfflinePageMetadataStore* store,
+                base::OnceCallback<T(sql::Connection*)> run_callback,
+                T default_value) {
     bool called = false;
     T result;
     auto result_callback = base::BindLambdaForTesting([&](T async_result) {
       result = std::move(async_result);
       called = true;
     });
-    store->Execute<T>(std::move(run_callback), result_callback);
+    store->Execute<T>(std::move(run_callback), result_callback, default_value);
     PumpLoop();
     EXPECT_TRUE(called);
     return result;
   }
 
   void GetOfflinePagesAsync(
-      OfflinePageMetadataStoreSQL* store,
+      OfflinePageMetadataStore* store,
       base::OnceCallback<void(std::vector<OfflinePageItem>)> callback) {
     auto run_callback = base::BindOnce(&GetOfflinePagesSync);
     store->Execute<std::vector<OfflinePageItem>>(std::move(run_callback),
-                                                 std::move(callback));
+                                                 std::move(callback), {});
   }
 
   std::vector<OfflinePageItem> GetOfflinePages(
-      OfflinePageMetadataStoreSQL* store) {
+      OfflinePageMetadataStore* store) {
     return ExecuteSync<std::vector<OfflinePageItem>>(
-        store, base::BindOnce(&GetOfflinePagesSync));
+        store, base::BindOnce(&GetOfflinePagesSync), {});
   }
 
-  ItemActionStatus AddOfflinePage(OfflinePageMetadataStoreSQL* store,
+  ItemActionStatus AddOfflinePage(OfflinePageMetadataStore* store,
                                   const OfflinePageItem& item) {
     auto result_callback = base::BindLambdaForTesting([&](sql::Connection* db) {
-      if (!db)
-        return ItemActionStatus::STORE_ERROR;
-
       // Using 'INSERT OR FAIL' or 'INSERT OR ABORT' in the query below
       // causes debug builds to DLOG.
-      const char kSql[] =
+      static const char kSql[] =
           "INSERT OR IGNORE INTO " OFFLINE_PAGES_TABLE_V1
           " (offline_id, online_url, client_namespace, client_id, "
           "file_path, "
@@ -672,9 +725,52 @@ class OfflinePageMetadataStoreTest : public testing::Test {
         return ItemActionStatus::ALREADY_EXISTS;
       return ItemActionStatus::SUCCESS;
     });
-    return ExecuteSync<ItemActionStatus>(store, result_callback);
+    return ExecuteSync<ItemActionStatus>(store, result_callback,
+                                         ItemActionStatus::SUCCESS);
   }
 
+  std::vector<OfflinePageThumbnail> GetThumbnails(
+      OfflinePageMetadataStore* store) {
+    std::vector<OfflinePageThumbnail> thumbnails;
+    auto run_callback = base::BindLambdaForTesting([&](sql::Connection* db) {
+      static const char kSql[] = "SELECT * FROM page_thumbnails";
+      sql::Statement statement(db->GetCachedStatement(SQL_FROM_HERE, kSql));
+
+      while (statement.Step()) {
+        OfflinePageThumbnail thumb;
+        thumb.offline_id = statement.ColumnInt64(0);
+        thumb.expiration =
+            store_utils::FromDatabaseTime(statement.ColumnInt64(1));
+        statement.ColumnBlobAsString(2, &thumb.thumbnail);
+        thumbnails.push_back(std::move(thumb));
+      }
+
+      EXPECT_TRUE(statement.Succeeded());
+      return thumbnails;
+    });
+    return ExecuteSync<std::vector<OfflinePageThumbnail>>(store, run_callback,
+                                                          {});
+  }
+
+  void AddThumbnail(OfflinePageMetadataStore* store,
+                    const OfflinePageThumbnail& thumbnail) {
+    std::vector<OfflinePageThumbnail> thumbnails;
+    auto run_callback = base::BindLambdaForTesting([&](sql::Connection* db) {
+      static const char kSql[] =
+          "INSERT INTO page_thumbnails"
+          " (offline_id, expiration, thumbnail) VALUES (?, ?, ?)";
+      sql::Statement statement(db->GetCachedStatement(SQL_FROM_HERE, kSql));
+
+      statement.BindInt64(0, thumbnail.offline_id);
+      statement.BindInt64(1, store_utils::ToDatabaseTime(thumbnail.expiration));
+      statement.BindString(2, thumbnail.thumbnail);
+      EXPECT_TRUE(statement.Run());
+      return thumbnails;
+    });
+    ExecuteSync<std::vector<OfflinePageThumbnail>>(store, run_callback, {});
+  }
+
+ protected:
   base::ScopedTempDir temp_directory_;
   scoped_refptr<base::TestMockTimeTaskRunner> task_runner_;
   base::ThreadTaskRunnerHandle task_runner_handle_;
@@ -683,12 +779,12 @@ class OfflinePageMetadataStoreTest : public testing::Test {
 // Loads empty store and makes sure that there are no offline pages stored in
 // it.
 TEST_F(OfflinePageMetadataStoreTest, LoadEmptyStore) {
-  std::unique_ptr<OfflinePageMetadataStoreSQL> store(BuildStore());
+  std::unique_ptr<OfflinePageMetadataStore> store(BuildStore());
   EXPECT_EQ(0U, GetOfflinePages(store.get()).size());
 }
 
 TEST_F(OfflinePageMetadataStoreTest, GetOfflinePagesFromInvalidStore) {
-  std::unique_ptr<OfflinePageMetadataStoreSQL> store(BuildStore());
+  std::unique_ptr<OfflinePageMetadataStore> store(BuildStore());
 
   // Because execute method is self-healing this part of the test expects a
   // positive results now.
@@ -755,26 +851,12 @@ TEST_F(OfflinePageMetadataStoreTest, LoadVersion62Store) {
 
 TEST_F(OfflinePageMetadataStoreTest, LoadStoreWithMetaVersion1) {
   BuildTestStoreWithSchemaVersion1(TempPath());
-  auto store = std::make_unique<OfflinePageMetadataStoreSQL>(
-      base::ThreadTaskRunnerHandle::Get(), TempPath());
+  LoadAndCheckStoreFromMetaVersion1AndUp();
+}
 
-  std::vector<OfflinePageItem> pages = GetOfflinePages(store.get());
-  EXPECT_EQ(5U, pages.size());
-
-  // TODO(fgorski): Use persistent namespaces from the client policy controller
-  // once an appropriate method is available.
-  std::set<std::string> upgradeable_namespaces{
-      kAsyncNamespace, kDownloadNamespace, kBrowserActionsNamespace,
-      kNTPSuggestionsNamespace};
-
-  for (const OfflinePageItem& page : pages) {
-    if (upgradeable_namespaces.count(page.client_id.name_space) > 0)
-      EXPECT_EQ(5, page.upgrade_attempt);
-    else
-      EXPECT_EQ(0, page.upgrade_attempt);
-  }
-  CheckThatOfflinePageCanBeSaved(std::move(store));
-  VerifyMetaVersions();
+TEST_F(OfflinePageMetadataStoreTest, LoadStoreWithMetaVersion2) {
+  BuildTestStoreWithSchemaVersion2(TempPath());
+  LoadAndCheckStoreFromMetaVersion1AndUp();
 }
 
 // Adds metadata of an offline page into a store and then opens the store
@@ -784,7 +866,7 @@ TEST_F(OfflinePageMetadataStoreTest, AddOfflinePage) {
 }
 
 TEST_F(OfflinePageMetadataStoreTest, AddSameOfflinePageTwice) {
-  std::unique_ptr<OfflinePageMetadataStoreSQL> store(BuildStore());
+  std::unique_ptr<OfflinePageMetadataStore> store(BuildStore());
 
   OfflinePageItem offline_page(GURL(kTestURL), 1234LL, kTestClientId1,
                                base::FilePath(kFilePath), kFileSize);
@@ -799,7 +881,7 @@ TEST_F(OfflinePageMetadataStoreTest, AddSameOfflinePageTwice) {
 
 // Adds metadata of multiple offline pages into a store and removes some.
 TEST_F(OfflinePageMetadataStoreTest, AddRemoveMultipleOfflinePages) {
-  std::unique_ptr<OfflinePageMetadataStoreSQL> store(BuildStore());
+  std::unique_ptr<OfflinePageMetadataStore> store(BuildStore());
 
   // Add an offline page.
   OfflinePageItem offline_page_1(GURL(kTestURL), 12345LL, kTestClientId1,
@@ -833,13 +915,13 @@ TEST_F(OfflinePageMetadataStoreTest, AddRemoveMultipleOfflinePages) {
 }
 
 TEST_F(OfflinePageMetadataStoreTest, StoreCloses) {
-  std::unique_ptr<OfflinePageMetadataStoreSQL> store(BuildStore());
+  std::unique_ptr<OfflinePageMetadataStore> store(BuildStore());
   GetOfflinePages(store.get());
 
   EXPECT_TRUE(task_runner()->HasPendingTask());
   EXPECT_LT(base::TimeDelta(), task_runner()->NextPendingTaskDelay());
 
-  FastForwardBy(OfflinePageMetadataStoreSQL::kClosingDelay);
+  FastForwardBy(OfflinePageMetadataStore::kClosingDelay);
   PumpLoop();
   EXPECT_EQ(StoreState::NOT_LOADED, store->GetStateForTesting());
 
@@ -849,7 +931,7 @@ TEST_F(OfflinePageMetadataStoreTest, StoreCloses) {
 }
 
 TEST_F(OfflinePageMetadataStoreTest, MultiplePendingCalls) {
-  auto store = std::make_unique<OfflinePageMetadataStoreSQL>(
+  auto store = std::make_unique<OfflinePageMetadataStore>(
       base::ThreadTaskRunnerHandle::Get(), TempPath());
   EXPECT_FALSE(task_runner()->HasPendingTask());
   EXPECT_EQ(StoreState::NOT_LOADED, store->GetStateForTesting());

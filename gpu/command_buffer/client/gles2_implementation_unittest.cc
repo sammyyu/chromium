@@ -461,6 +461,8 @@ class GLES2ImplementationTest : public testing::Test {
     return limits;
   }
 
+  void ResetErrorMessageCallback() { gl_->error_message_callback_.Reset(); }
+
   TestContext test_contexts_[kNumTestContexts];
 
   scoped_refptr<ShareGroup> share_group_;
@@ -572,6 +574,30 @@ class GLES2ImplementationStrictSharedTest : public GLES2ImplementationTest {
     ResApi::Delete(gl1, 1, &id2);
     ResApi::Gen(gl2, 1, &id3);
     EXPECT_EQ(id1, id3);
+  }
+
+  // Require that deleting definitely-invalid IDs produces an error.
+  template <class ResApi>
+  void DeletingInvalidIdGeneratesError() {
+    GLES2Implementation* gl1 = test_contexts_[0].gl_.get();
+    GLuint id1;
+    ResApi::Gen(gl1, 1, &id1);
+    const GLuint kDefinitelyInvalidId = 0xBEEF;
+    EXPECT_EQ(GL_NO_ERROR, CheckError());
+    ResApi::Delete(gl1, 1, &kDefinitelyInvalidId);
+    EXPECT_EQ(GL_INVALID_VALUE, CheckError());
+  }
+
+  // Require that double-deleting IDs produces an error.
+  template <class ResApi>
+  void DoubleDeletingIdGeneratesError() {
+    GLES2Implementation* gl1 = test_contexts_[0].gl_.get();
+    GLuint id1;
+    ResApi::Gen(gl1, 1, &id1);
+    ResApi::Delete(gl1, 1, &id1);
+    EXPECT_EQ(GL_NO_ERROR, CheckError());
+    ResApi::Delete(gl1, 1, &id1);
+    EXPECT_EQ(GL_INVALID_VALUE, CheckError());
   }
 };
 
@@ -2947,6 +2973,34 @@ TEST_F(GLES2ImplementationStrictSharedTest,
   CrossContextGenerationAutoFlushTest<GenTexturesAPI>();
 }
 
+// Test deleting an invalid ID.
+TEST_F(GLES2ImplementationStrictSharedTest,
+       DeletingInvalidIdGeneratesErrorBuffers) {
+  DeletingInvalidIdGeneratesError<GenBuffersAPI>();
+}
+TEST_F(GLES2ImplementationStrictSharedTest,
+       DeletingInvalidIdGeneratesErrorRenderbuffers) {
+  DeletingInvalidIdGeneratesError<GenRenderbuffersAPI>();
+}
+TEST_F(GLES2ImplementationStrictSharedTest,
+       DeletingInvalidIdGeneratesErrorTextures) {
+  DeletingInvalidIdGeneratesError<GenTexturesAPI>();
+}
+
+// Test double-deleting the same ID.
+TEST_F(GLES2ImplementationStrictSharedTest,
+       DoubleDeletingIdGeneratesErrorBuffers) {
+  DoubleDeletingIdGeneratesError<GenBuffersAPI>();
+}
+TEST_F(GLES2ImplementationStrictSharedTest,
+       DoubleDeletingIdGeneratesErrorRenderbuffers) {
+  DoubleDeletingIdGeneratesError<GenRenderbuffersAPI>();
+}
+TEST_F(GLES2ImplementationStrictSharedTest,
+       DoubleDeletingIdGeneratesErrorTextures) {
+  DoubleDeletingIdGeneratesError<GenTexturesAPI>();
+}
+
 TEST_F(GLES2ImplementationTest, GetString) {
   const uint32_t kBucketId = GLES2Implementation::kResultBucketId;
   const Str7 kString = {"foobar"};
@@ -3496,10 +3550,10 @@ TEST_F(GLES2ImplementationTest, ProduceTextureDirectCHROMIUM) {
     GLbyte data[GL_MAILBOX_SIZE_CHROMIUM];
   };
 
-  Mailbox mailbox = Mailbox::Generate();
+  Mailbox mailbox;
+  gl_->ProduceTextureDirectCHROMIUM(kTexturesStartId, mailbox.name);
   Cmds expected;
   expected.cmd.Init(kTexturesStartId, mailbox.name);
-  gl_->ProduceTextureDirectCHROMIUM(kTexturesStartId, mailbox.name);
   EXPECT_EQ(0, memcmp(&expected, commands_, sizeof(expected)));
 }
 
@@ -4133,53 +4187,6 @@ TEST_F(GLES2ImplementationTest, DeleteBuffersUnmapsDataStore) {
   EXPECT_EQ(GL_INVALID_OPERATION, CheckError());
 }
 
-TEST_F(GLES3ImplementationTest, GetBufferSubDataAsyncCHROMIUM) {
-  const GLuint kBufferId = 123;
-  void* mem;
-
-  std::vector<GLenum> targets = {
-      GL_ARRAY_BUFFER,      GL_ELEMENT_ARRAY_BUFFER,      GL_COPY_READ_BUFFER,
-      GL_COPY_WRITE_BUFFER, GL_TRANSFORM_FEEDBACK_BUFFER, GL_UNIFORM_BUFFER,
-      GL_PIXEL_PACK_BUFFER, GL_PIXEL_UNPACK_BUFFER,
-  };
-
-  // Positive tests
-  for (size_t i = 0; i < targets.size(); i++) {
-    gl_->BindBuffer(targets[i], kBufferId);
-    mem = gl_->GetBufferSubDataAsyncCHROMIUM(targets[i], 10, 64);
-    EXPECT_TRUE(mem != nullptr);
-    EXPECT_EQ(GL_NO_ERROR, CheckError());
-    gl_->FreeSharedMemory(mem);
-    EXPECT_EQ(GL_NO_ERROR, CheckError());
-    gl_->BindBuffer(targets[i], 0);
-  }
-
-  // Negative tests: invalid target
-  for (size_t i = 0; i < targets.size(); i++) {
-    GLenum wrong_target = targets[(i + 1) % targets.size()];
-    gl_->BindBuffer(targets[i], kBufferId);
-    mem = gl_->GetBufferSubDataAsyncCHROMIUM(wrong_target, 10, 64);
-    EXPECT_TRUE(mem == nullptr);
-    EXPECT_EQ(GL_INVALID_OPERATION, CheckError());
-    gl_->BindBuffer(targets[i], 0);
-  }
-}
-
-TEST_F(GLES3ImplementationTest, GetBufferSubDataAsyncCHROMIUMInvalidValue) {
-  const GLuint kBufferId = 123;
-  void* mem;
-
-  gl_->BindBuffer(GL_ARRAY_BUFFER, kBufferId);
-
-  mem = gl_->GetBufferSubDataAsyncCHROMIUM(GL_ARRAY_BUFFER, -1, 64);
-  EXPECT_TRUE(mem == nullptr);
-  EXPECT_EQ(GL_INVALID_VALUE, CheckError());
-
-  mem = gl_->GetBufferSubDataAsyncCHROMIUM(GL_ARRAY_BUFFER, 0, -1);
-  EXPECT_TRUE(mem == nullptr);
-  EXPECT_EQ(GL_INVALID_VALUE, CheckError());
-}
-
 TEST_F(GLES2ImplementationTest, GetInternalformativ) {
   const GLint kNumSampleCounts = 8;
   struct Cmds {
@@ -4409,6 +4416,29 @@ TEST_F(GLES2ImplementationTest, DiscardableTextureLockCounting) {
       EXPECT_EQ(0, bound_texture_id);
     }
   }
+}
+
+struct ErrorMessageCounter {
+  explicit ErrorMessageCounter(GLES2Implementation* gl) : gl(gl) {}
+
+  void Callback(const char* message, int32_t id) {
+    if (++num_calls == 1)
+      gl->ShaderBinary(-1, nullptr, 0, nullptr, 0);
+  }
+
+  GLES2Implementation* gl;
+  int32_t num_calls = 0;
+};
+
+TEST_F(GLES2ImplementationTest, ReentrantErrorCallbacksShouldNotCrash) {
+  ErrorMessageCounter counter(gl_);
+  gl_->SetErrorMessageCallback(base::BindRepeating(
+      &ErrorMessageCounter::Callback, base::Unretained(&counter)));
+  // Call any function which can easily provoke an error. See also the
+  // callback above.
+  gl_->ShaderBinary(-1, nullptr, 0, nullptr, 0);
+  EXPECT_EQ(2, counter.num_calls);
+  ResetErrorMessageCallback();
 }
 
 #include "base/macros.h"

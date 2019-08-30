@@ -11,11 +11,15 @@
 #include "base/time/time.h"
 #include "base/timer/timer.h"
 #include "chrome/browser/upgrade_observer.h"
+#include "components/prefs/pref_change_registrar.h"
 #include "ui/base/idle/idle.h"
 #include "ui/gfx/image/image.h"
 
 class PrefRegistrySimple;
 class UpgradeObserver;
+namespace base {
+class TickClock;
+}
 
 ///////////////////////////////////////////////////////////////////////////////
 // UpgradeDetector
@@ -51,6 +55,10 @@ class UpgradeDetector {
 
   virtual ~UpgradeDetector();
 
+  // Returns the default delta from upgrade detection until high annoyance is
+  // reached.
+  static base::TimeDelta GetDefaultHighAnnoyanceThreshold();
+
   static void RegisterPrefs(PrefRegistrySimple* registry);
 
   // Returns the time at which an available upgrade was detected.
@@ -72,8 +80,8 @@ class UpgradeDetector {
     return upgrade_available_ == UPGRADE_NEEDED_OUTDATED_INSTALL_NO_AU;
   }
 
-  // Notifify this object that the user has acknowledged the critical update
-  // so we don't need to complain about it for now.
+  // Notify this object that the user has acknowledged the critical update so we
+  // don't need to complain about it for now.
   void acknowledge_critical_update() {
     critical_update_acknowledged_ = true;
   }
@@ -84,6 +92,10 @@ class UpgradeDetector {
   }
 
   bool is_factory_reset_required() const { return is_factory_reset_required_; }
+
+#if defined(OS_CHROMEOS)
+  bool is_rollback() const { return is_rollback_; }
+#endif  // defined(OS_CHROMEOS)
 
   // Retrieves the right icon based on the degree of severity (see
   // UpgradeNotificationAnnoyanceLevel, each level has an an accompanying icon
@@ -129,7 +141,14 @@ class UpgradeDetector {
     UPGRADE_NEEDED_OUTDATED_INSTALL_NO_AU,
   };
 
-  UpgradeDetector();
+  explicit UpgradeDetector(const base::TickClock* tick_clock);
+
+  // Returns the notification period specified via the
+  // RelaunchNotificationPeriod policy setting, or a zero delta if unset or out
+  // of range.
+  static base::TimeDelta GetRelaunchNotificationPeriod();
+
+  const base::TickClock* tick_clock() { return tick_clock_; }
 
   // Notifies that update is recommended and triggers different actions based
   // on the update availability.
@@ -187,10 +206,19 @@ class UpgradeDetector {
     is_factory_reset_required_ = is_factory_reset_required;
   }
 
+#if defined(OS_CHROMEOS)
+  void set_is_rollback(bool is_rollback) { is_rollback_ = is_rollback; }
+#endif  // defined(OS_CHROMEOS)
+
  private:
   FRIEND_TEST_ALL_PREFIXES(AppMenuModelTest, Basics);
   FRIEND_TEST_ALL_PREFIXES(SystemTrayClientTest, UpdateTrayIcon);
   friend class UpgradeMetricsProviderTest;
+
+  // Handles a change to the browser.relaunch_notification_period Local State
+  // preference. Subclasses should call NotifyUpgrade if observers are to be
+  // notified of the change (generally speaking, if an upgrade is available).
+  virtual void OnRelaunchNotificationPeriodPrefChanged() = 0;
 
   // Initiates an Idle check. See IdleCallback below.
   void CheckIdle();
@@ -198,6 +226,13 @@ class UpgradeDetector {
   // The callback for the IdleCheck. Tells us whether Chrome has received any
   // input events since the specified time.
   void IdleCallback(ui::IdleState state);
+
+  // A provider of TimeTicks to the detector and its timers.
+  const base::TickClock* const tick_clock_;
+
+  // Observes changes to the browser.relaunch_notification_period Local State
+  // preference.
+  PrefChangeRegistrar pref_change_registrar_;
 
   // Whether any software updates are available (experiment updates are tracked
   // separately via additional member variables below).
@@ -217,6 +252,13 @@ class UpgradeDetector {
 
   // Whether a factory reset is needed to complete an update.
   bool is_factory_reset_required_;
+
+#if defined(OS_CHROMEOS)
+  // Whether the update is actually an admin-initiated rollback of the device
+  // to an earlier version of Chrome OS, which results in the device being
+  // wiped when it's rebooted.
+  bool is_rollback_ = false;
+#endif  // defined(OS_CHROMEOS)
 
   // A timer to check to see if we've been idle for long enough to show the
   // critical warning. Should only be set if |upgrade_available_| is

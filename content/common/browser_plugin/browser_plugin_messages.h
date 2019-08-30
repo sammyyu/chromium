@@ -9,21 +9,22 @@
 
 #include "base/process/process.h"
 #include "base/unguessable_token.h"
-#include "cc/ipc/cc_param_traits.h"
+#include "cc/trees/render_frame_metadata.h"
 #include "components/viz/common/surfaces/surface_info.h"
 #include "content/common/content_export.h"
 #include "content/common/content_param_traits.h"
 #include "content/common/cursors/webcursor.h"
 #include "content/common/edit_command.h"
+#include "content/common/frame_visual_properties.h"
 #include "content/public/common/drop_data.h"
 #include "content/public/common/screen_info.h"
 #include "ipc/ipc_channel_handle.h"
 #include "ipc/ipc_message_macros.h"
 #include "ipc/ipc_message_utils.h"
-#include "third_party/WebKit/public/platform/WebDragOperation.h"
-#include "third_party/WebKit/public/platform/WebFocusType.h"
-#include "third_party/WebKit/public/web/WebDragStatus.h"
-#include "third_party/WebKit/public/web/WebImeTextSpan.h"
+#include "third_party/blink/public/platform/web_drag_operation.h"
+#include "third_party/blink/public/platform/web_focus_type.h"
+#include "third_party/blink/public/web/web_drag_status.h"
+#include "third_party/blink/public/web/web_ime_text_span.h"
 #include "ui/gfx/geometry/point.h"
 #include "ui/gfx/geometry/rect.h"
 #include "ui/gfx/geometry/size.h"
@@ -155,12 +156,10 @@ IPC_MESSAGE_CONTROL1(BrowserPluginHostMsg_UnlockMouse_ACK,
                      int /* browser_plugin_instance_id */)
 
 // Sent when plugin's position has changed.
-IPC_MESSAGE_CONTROL5(BrowserPluginHostMsg_UpdateResizeParams,
+IPC_MESSAGE_CONTROL3(BrowserPluginHostMsg_SynchronizeVisualProperties,
                      int /* browser_plugin_instance_id */,
-                     gfx::Rect /* frame_rect */,
-                     content::ScreenInfo /* screen_info */,
-                     uint64_t /* sequence_number */,
-                     viz::LocalSurfaceId /* local_surface_id */)
+                     viz::LocalSurfaceId /* local_surface_id */,
+                     content::FrameVisualProperties /* resize_params */)
 
 // -----------------------------------------------------------------------------
 // These messages are from the browser process to the embedder.
@@ -188,11 +187,22 @@ IPC_MESSAGE_CONTROL2(BrowserPluginMsg_AdvanceFocus,
                      int /* browser_plugin_instance_id */,
                      bool /* reverse */)
 
-// When a guest resizes due to auto-resize, this message informs the
-// BrowserPlugin to request a new viz::LocalSurfaceId.
-IPC_MESSAGE_CONTROL2(BrowserPluginMsg_ResizeDueToAutoResize,
+// Informs the BrowserPlugin that the guest's visual properties have changed.
+IPC_MESSAGE_CONTROL2(BrowserPluginMsg_DidUpdateVisualProperties,
                      int /* browser_plugin_instance_id */,
-                     uint64_t /* sequence_number */)
+                     cc::RenderFrameMetadata /* metadata */)
+
+// Requests a viz::LocalSurfaceId to enable auto-resize mode from the parent
+// renderer.
+IPC_MESSAGE_CONTROL3(BrowserPluginMsg_EnableAutoResize,
+                     int /* browser_plugin_instance_id */,
+                     gfx::Size /* min_size */,
+                     gfx::Size /* max_size */)
+
+// Requests a viz::LocalSurfaceId to disable auto-resize-mode from the parent
+// renderer.
+IPC_MESSAGE_CONTROL1(BrowserPluginMsg_DisableAutoResize,
+                     int /* browser_plugin_instance_id */)
 
 // When the guest starts/stops listening to touch events, it needs to notify the
 // plugin in the embedder about it.
@@ -205,7 +215,7 @@ IPC_MESSAGE_CONTROL2(BrowserPluginMsg_SetCursor,
                      int /* browser_plugin_instance_id */,
                      content::WebCursor /* cursor */)
 
-IPC_MESSAGE_CONTROL2(BrowserPluginMsg_SetChildFrameSurface,
+IPC_MESSAGE_CONTROL2(BrowserPluginMsg_FirstSurfaceActivation,
                      int /* browser_plugin_instance_id */,
                      viz::SurfaceInfo /* surface_info */)
 

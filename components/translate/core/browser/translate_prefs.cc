@@ -10,6 +10,7 @@
 
 #include "base/feature_list.h"
 #include "base/i18n/rtl.h"
+#include "base/stl_util.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
@@ -17,6 +18,7 @@
 #include "base/strings/utf_string_conversions.h"
 #include "base/values.h"
 #include "build/build_config.h"
+#include "components/language/core/common/language_experiments.h"
 #include "components/language/core/common/locale_util.h"
 #include "components/pref_registry/pref_registry_syncable.h"
 #include "components/prefs/pref_service.h"
@@ -30,6 +32,8 @@
 
 namespace translate {
 
+const char kForceTriggerTranslateCount[] =
+    "translate_force_trigger_on_english_count";
 const char TranslatePrefs::kPrefTranslateSiteBlacklist[] =
     "translate_site_blacklist";
 const char TranslatePrefs::kPrefTranslateWhitelists[] = "translate_whitelists";
@@ -106,6 +110,9 @@ const base::Feature kRegionalLocalesAsDisplayUI{
 
 const base::Feature kTranslateRecentTarget{"TranslateRecentTarget",
                                            base::FEATURE_ENABLED_BY_DEFAULT};
+
+const base::Feature kTranslateUI{"TranslateUI",
+                                 base::FEATURE_ENABLED_BY_DEFAULT};
 
 DenialTimeUpdate::DenialTimeUpdate(PrefService* prefs,
                                    const std::string& language,
@@ -245,8 +252,7 @@ void TranslatePrefs::AddToLanguageList(const std::string& input_language,
   }
 
   // Add the language to the list.
-  if (std::find(languages.begin(), languages.end(), chrome_language) ==
-      languages.end()) {
+  if (!base::ContainsValue(languages, chrome_language)) {
     languages.push_back(chrome_language);
     UpdateLanguageList(languages);
   }
@@ -265,6 +271,12 @@ void TranslatePrefs::RemoveFromLanguageList(const std::string& input_language) {
   const auto& it =
       std::find(languages.begin(), languages.end(), chrome_language);
   if (it != languages.end()) {
+    // If the language being removed is the most recent language, erase that
+    // data so that Chrome won't try to translate to it next time Translate is
+    // triggered.
+    if (chrome_language == GetRecentTargetLanguage())
+      SetRecentTargetLanguage("");
+
     languages.erase(it);
     UpdateLanguageList(languages);
 
@@ -770,6 +782,21 @@ std::string TranslatePrefs::GetRecentTargetLanguage() const {
   return prefs_->GetString(kPrefTranslateRecentTarget);
 }
 
+int TranslatePrefs::GetForceTriggerOnEnglishPagesCount() const {
+  return prefs_->GetInteger(kForceTriggerTranslateCount);
+}
+
+void TranslatePrefs::ReportForceTriggerOnEnglishPages() {
+  int current_count = GetForceTriggerOnEnglishPagesCount();
+  prefs_->SetInteger(kForceTriggerTranslateCount, current_count + 1);
+}
+
+void TranslatePrefs::ReportAcceptedAfterForceTriggerOnEnglishPages() {
+  int current_count = GetForceTriggerOnEnglishPagesCount();
+  if (current_count > 0)
+    prefs_->SetInteger(kForceTriggerTranslateCount, current_count - 1);
+}
+
 // static
 void TranslatePrefs::RegisterProfilePrefs(
     user_prefs::PrefRegistrySyncable* registry) {
@@ -795,6 +822,10 @@ void TranslatePrefs::RegisterProfilePrefs(
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
   registry->RegisterStringPref(kPrefTranslateRecentTarget, "",
                                user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+  registry->RegisterIntegerPref(
+      kForceTriggerTranslateCount, 0,
+      user_prefs::PrefRegistrySyncable::SYNCABLE_PREF);
+
 #if defined(OS_ANDROID)
   registry->RegisterDictionaryPref(
       kPrefTranslateAutoAlwaysCount,

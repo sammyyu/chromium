@@ -18,10 +18,12 @@
 #include "ui/gfx/animation/slide_animation.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/rect.h"
+#include "ui/views/controls/button/button.h"
 #include "ui/views/controls/image_view.h"
 #include "ui/views/view.h"
 
 class OmniboxPopupContentsView;
+enum class OmniboxPart;
 enum class OmniboxPartState;
 enum class OmniboxTint;
 
@@ -29,36 +31,18 @@ namespace gfx {
 class Image;
 }
 
+class OmniboxMatchCellView;
 class OmniboxTabSwitchButton;
-class OmniboxTextView;
 
 class OmniboxResultView : public views::View,
-                          private gfx::AnimationDelegate {
+                          private gfx::AnimationDelegate,
+                          public views::ButtonListener {
  public:
-  // Keep these ordered from least dominant (normal) to most dominant
-  // (selected).
-  // TODO(tapted): Remove these: replace with OmniboxPartState.
-  enum ResultViewState {
-    NORMAL = 0,
-    HOVERED,
-    SELECTED,
-    NUM_STATES
-  };
-
-  enum ColorKind {
-    TEXT,
-    DIMMED_TEXT,
-    URL,
-    INVISIBLE_TEXT,
-    NUM_KINDS
-  };
-
-  OmniboxResultView(OmniboxPopupContentsView* model,
-                    int model_index,
-                    const gfx::FontList& font_list);
+  OmniboxResultView(OmniboxPopupContentsView* model, int model_index);
   ~OmniboxResultView() override;
 
-  SkColor GetColor(ResultViewState state, ColorKind kind) const;
+  // Helper to get the color for |part| using the current state and tint.
+  SkColor GetColor(OmniboxPart part) const;
 
   // Updates the match used to paint the contents of this result view. We copy
   // the match so that we can continue to paint the last result even after the
@@ -72,7 +56,6 @@ class OmniboxResultView : public views::View,
   // Invoked when this result view has been selected.
   void OnSelected();
 
-  ResultViewState GetState() const;
   OmniboxPartState GetThemeState() const;
   OmniboxTint GetTint() const;
 
@@ -80,12 +63,15 @@ class OmniboxResultView : public views::View,
   void OnMatchIconUpdated();
 
   // Stores the image in a local data member and schedules a repaint.
-  void SetAnswerImage(const gfx::ImageSkia& image);
+  void SetRichSuggestionImage(const gfx::ImageSkia& image);
 
-  // Allow other classes to trigger navigation.
-  void OpenMatch(WindowOpenDisposition disposition);
+  // views::ButtonListener:
+
+  // Called when tab switch button pressed, due to being a listener.
+  void ButtonPressed(views::Button* sender, const ui::Event& event) override;
 
   // views::View:
+  void Layout() override;
   bool OnMousePressed(const ui::MouseEvent& event) override;
   bool OnMouseDragged(const ui::MouseEvent& event) override;
   void OnMouseReleased(const ui::MouseEvent& event) override;
@@ -96,33 +82,21 @@ class OmniboxResultView : public views::View,
   void OnNativeThemeChanged(const ui::NativeTheme* theme) override;
 
  private:
-  // Create instance and add it as a child.
-  views::ImageView* AddImageView();
-  OmniboxTextView* AddOmniboxTextView(const gfx::FontList& font_list);
-
   // Returns the height of the text portion of the result view.
   int GetTextHeight() const;
 
   gfx::Image GetIcon() const;
 
-  SkColor GetVectorIconColor() const;
-
-  // Whether to render only the keyword match.  Returns true if |match_| has an
-  // associated keyword match that has been animated so close to the start that
-  // the keyword match will hide even the icon of the regular match.
-  bool ShowOnlyKeywordMatch() const;
-
-  // Returns the height of the the description section of answer suggestions.
-  int GetAnswerHeight() const;
-
-  // Returns the margin that should appear at the top and bottom of the result.
-  int GetVerticalMargin() const;
-
   // Sets the hovered state of this result.
   void SetHovered(bool hovered);
 
+  // Whether |this| matches the model's selected index.
+  bool IsSelected() const;
+
+  // Call model's OpenMatch() with the selected index and provided disposition.
+  void OpenMatch(WindowOpenDisposition disposition);
+
   // views::View:
-  void Layout() override;
   const char* GetClassName() const override;
   void OnBoundsChanged(const gfx::Rect& previous_bounds) override;
 
@@ -136,9 +110,6 @@ class OmniboxResultView : public views::View,
   // Whether this view is in the hovered state.
   bool is_hovered_;
 
-  // Cache the font height as a minor optimization.
-  int font_height_;
-
   // The data this class is built to display (the "Omnibox Result").
   AutocompleteMatch match_;
 
@@ -146,15 +117,9 @@ class OmniboxResultView : public views::View,
   std::unique_ptr<gfx::SlideAnimation> animation_;
 
   // Weak pointers for easy reference.
-  views::ImageView* icon_view_;          // Small icon. e.g. favicon.
-  views::ImageView* image_view_;         // Larger image for rich suggestions.
-  views::ImageView* keyword_icon_view_;  // An icon resembling a '>'.
-  std::unique_ptr<OmniboxTabSwitchButton> tab_switch_button_;
-  OmniboxTextView* content_view_;
-  OmniboxTextView* description_view_;
-  OmniboxTextView* keyword_content_view_;
-  OmniboxTextView* keyword_description_view_;
-  OmniboxTextView* separator_view_;  // e.g. A hyphen.
+  OmniboxMatchCellView* suggestion_view_;  // The leading (or left) view.
+  OmniboxMatchCellView* keyword_view_;     // The trailing (or right) view.
+  std::unique_ptr<OmniboxTabSwitchButton> suggestion_tab_switch_button_;
 
   DISALLOW_COPY_AND_ASSIGN(OmniboxResultView);
 };

@@ -8,17 +8,20 @@
 #include "ash/system/brightness/tray_brightness.h"
 #include "ash/system/brightness/unified_brightness_view.h"
 #include "ash/system/brightness_control_delegate.h"
+#include "ash/system/unified/unified_system_tray_model.h"
 
 namespace ash {
 
-UnifiedBrightnessSliderController::UnifiedBrightnessSliderController() =
-    default;
+UnifiedBrightnessSliderController::UnifiedBrightnessSliderController(
+    UnifiedSystemTrayModel* model)
+    : model_(model) {}
+
 UnifiedBrightnessSliderController::~UnifiedBrightnessSliderController() =
     default;
 
 views::View* UnifiedBrightnessSliderController::CreateView() {
   DCHECK(!slider_);
-  slider_ = new UnifiedBrightnessView(this);
+  slider_ = new UnifiedBrightnessView(this, model_);
   return slider_;
 }
 
@@ -34,13 +37,17 @@ void UnifiedBrightnessSliderController::SliderValueChanged(
     views::SliderChangeReason reason) {
   if (reason != views::VALUE_CHANGED_BY_USER)
     return;
+
   BrightnessControlDelegate* brightness_control_delegate =
       Shell::Get()->brightness_control_delegate();
-  if (brightness_control_delegate) {
-    double percent =
-        std::max<float>(value * 100.f, tray::kMinBrightnessPercent);
-    brightness_control_delegate->SetBrightnessPercent(percent, true);
-  }
+  if (!brightness_control_delegate)
+    return;
+
+  double percent = value * 100.;
+  if (percent < tray::kMinBrightnessPercent)
+    return;
+
+  brightness_control_delegate->SetBrightnessPercent(percent, true);
 }
 
 }  // namespace ash

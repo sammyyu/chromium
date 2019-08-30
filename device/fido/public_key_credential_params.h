@@ -12,6 +12,7 @@
 #include "base/component_export.h"
 #include "base/macros.h"
 #include "base/numerics/safe_conversions.h"
+#include "base/optional.h"
 #include "components/cbor/cbor_values.h"
 #include "device/fido/fido_constants.h"
 
@@ -23,13 +24,18 @@ namespace device {
 class COMPONENT_EXPORT(DEVICE_FIDO) PublicKeyCredentialParams {
  public:
   struct CredentialInfo {
-    std::string type;
+    CredentialType type = CredentialType::kPublicKey;
     int algorithm = base::strict_cast<int>(CoseAlgorithmIdentifier::kCoseEs256);
   };
 
+  static base::Optional<PublicKeyCredentialParams> CreateFromCBORValue(
+      const cbor::CBORValue& cbor_value);
+
   explicit PublicKeyCredentialParams(
       std::vector<CredentialInfo> credential_params);
+  PublicKeyCredentialParams(const PublicKeyCredentialParams& other);
   PublicKeyCredentialParams(PublicKeyCredentialParams&& other);
+  PublicKeyCredentialParams& operator=(const PublicKeyCredentialParams& other);
   PublicKeyCredentialParams& operator=(PublicKeyCredentialParams&& other);
   ~PublicKeyCredentialParams();
 
@@ -40,8 +46,6 @@ class COMPONENT_EXPORT(DEVICE_FIDO) PublicKeyCredentialParams {
 
  private:
   std::vector<CredentialInfo> public_key_credential_params_;
-
-  DISALLOW_COPY_AND_ASSIGN(PublicKeyCredentialParams);
 };
 
 }  // namespace device

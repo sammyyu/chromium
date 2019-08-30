@@ -21,7 +21,7 @@ WebViewAutofillClientIOS::WebViewAutofillClientIOS(
     PrefService* pref_service,
     PersonalDataManager* personal_data_manager,
     web::WebState* web_state,
-    id<AutofillClientIOSBridge> bridge,
+    id<CWVAutofillClientIOSBridge> bridge,
     identity::IdentityManager* identity_manager,
     scoped_refptr<AutofillWebDataService> autofill_web_data_service)
     : pref_service_(pref_service),
@@ -53,16 +53,24 @@ identity::IdentityManager* WebViewAutofillClientIOS::GetIdentityManager() {
 }
 
 ukm::UkmRecorder* WebViewAutofillClientIOS::GetUkmRecorder() {
+  // UKM recording is not supported for WebViews.
   return nullptr;
+}
+
+ukm::SourceId WebViewAutofillClientIOS::GetUkmSourceId() {
+  // UKM recording is not supported for WebViews.
+  return 0;
 }
 
 AddressNormalizer* WebViewAutofillClientIOS::GetAddressNormalizer() {
   return nullptr;
 }
 
-SaveCardBubbleController*
-WebViewAutofillClientIOS::GetSaveCardBubbleController() {
-  return nullptr;
+security_state::SecurityLevel
+WebViewAutofillClientIOS::GetSecurityLevelForUmaHistograms() {
+  // The metrics are not recorded for iOS webview, so return the count value
+  // which will not be recorded.
+  return security_state::SecurityLevel::SECURITY_LEVEL_COUNT;
 }
 
 void WebViewAutofillClientIOS::ShowAutofillSettings() {
@@ -72,20 +80,39 @@ void WebViewAutofillClientIOS::ShowAutofillSettings() {
 void WebViewAutofillClientIOS::ShowUnmaskPrompt(
     const CreditCard& card,
     UnmaskCardReason reason,
-    base::WeakPtr<CardUnmaskDelegate> delegate) {}
+    base::WeakPtr<CardUnmaskDelegate> delegate) {
+  [bridge_ showUnmaskPromptForCard:card reason:reason delegate:delegate];
+}
 
 void WebViewAutofillClientIOS::OnUnmaskVerificationResult(
-    PaymentsRpcResult result) {}
+    PaymentsRpcResult result) {
+  [bridge_ didReceiveUnmaskVerificationResult:result];
+}
+
+void WebViewAutofillClientIOS::ShowLocalCardMigrationPrompt(
+    base::OnceClosure closure) {
+  NOTREACHED();
+}
+
+void WebViewAutofillClientIOS::ConfirmSaveAutofillProfile(
+    const AutofillProfile& profile,
+    base::OnceClosure callback) {
+  // Since there is no confirmation needed to save an Autofill Profile,
+  // running |callback| will proceed with saving |profile|.
+  std::move(callback).Run();
+}
 
 void WebViewAutofillClientIOS::ConfirmSaveCreditCardLocally(
     const CreditCard& card,
-    const base::Closure& callback) {}
+    const base::RepeatingClosure& callback) {
+  [bridge_ confirmSaveCreditCardLocally:card callback:callback];
+}
 
 void WebViewAutofillClientIOS::ConfirmSaveCreditCardToCloud(
     const CreditCard& card,
     std::unique_ptr<base::DictionaryValue> legal_message,
-    bool should_cvc_be_requested,
-    const base::Closure& callback) {}
+    bool should_request_name_from_user,
+    base::OnceCallback<void(const base::string16&)> callback) {}
 
 void WebViewAutofillClientIOS::ConfirmCreditCardFillAssist(
     const CreditCard& card,
@@ -107,6 +134,7 @@ void WebViewAutofillClientIOS::ShowAutofillPopup(
     const gfx::RectF& element_bounds,
     base::i18n::TextDirection text_direction,
     const std::vector<Suggestion>& suggestions,
+    bool /*unused_autoselect_first_suggestion*/,
     base::WeakPtr<AutofillPopupDelegate> delegate) {
   [bridge_ showAutofillPopup:suggestions popupDelegate:delegate];
 }
@@ -153,6 +181,10 @@ void WebViewAutofillClientIOS::ExecuteCommand(int id) {
 }
 
 bool WebViewAutofillClientIOS::IsAutofillSupported() {
+  return true;
+}
+
+bool WebViewAutofillClientIOS::AreServerCardsSupported() {
   return true;
 }
 

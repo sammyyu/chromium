@@ -58,9 +58,9 @@ class BackgroundLoaderOffliner
 
   // Offliner implementation.
   bool LoadAndSave(const SavePageRequest& request,
-                   const CompletionCallback& completion_callback,
+                   CompletionCallback completion_callback,
                    const ProgressCallback& progress_callback) override;
-  bool Cancel(const CancelCallback& callback) override;
+  bool Cancel(CancelCallback callback) override;
   void TerminateLoadIfInProgress() override;
   bool HandleTimeout(int64_t request_id) override;
 
@@ -99,7 +99,12 @@ class BackgroundLoaderOffliner
   friend class BackgroundLoaderOfflinerTest;
 
   enum SaveState { NONE, SAVING, DELETE_AFTER_SAVE };
-  enum PageLoadState { SUCCESS, RETRIABLE, NONRETRIABLE };
+  enum PageLoadState {
+    SUCCESS,
+    RETRIABLE_NET_ERROR,
+    RETRIABLE_HTTP_ERROR,
+    NONRETRIABLE
+  };
 
   // Called when the page has been saved.
   void OnPageSaved(SavePageResult save_result, int64_t offline_id);

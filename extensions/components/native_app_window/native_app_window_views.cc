@@ -128,6 +128,10 @@ void NativeAppWindowViews::Hide() {
   widget_->Hide();
 }
 
+bool NativeAppWindowViews::IsVisible() const {
+  return widget_->IsVisible();
+}
+
 void NativeAppWindowViews::Close() {
   widget_->Close();
 }
@@ -214,7 +218,7 @@ bool NativeAppWindowViews::CanResize() const {
 
 bool NativeAppWindowViews::CanMaximize() const {
   return resizable_ && !size_constraints_.HasMaximumSize() &&
-         !app_window_->window_type_is_panel() && !WidgetHasHitTestMask();
+         !WidgetHasHitTestMask();
 }
 
 bool NativeAppWindowViews::CanMinimize() const {

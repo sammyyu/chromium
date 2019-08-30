@@ -15,6 +15,7 @@
 #include "base/threading/thread.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
+#include "components/metrics/call_stack_profile_builder.h"
 #include "components/metrics/call_stack_profile_params.h"
 
 namespace service_manager {
@@ -58,8 +59,7 @@ class ThreadProfiler {
   // process. The returned profiler must be destroyed prior to thread exit to
   // stop the profiling. SetMainThreadTaskRunner() should be called after the
   // message loop has been started on the thread.
-  static std::unique_ptr<ThreadProfiler> CreateAndStartOnMainThread(
-      metrics::CallStackProfileParams::Thread thread);
+  static std::unique_ptr<ThreadProfiler> CreateAndStartOnMainThread();
 
   // Sets the task runner when profiling on the main thread. This occurs in a
   // separate call from CreateAndStartOnMainThread so that startup profiling can
@@ -74,7 +74,7 @@ class ThreadProfiler {
       metrics::CallStackProfileParams::Thread thread);
 
   // This function must be called within child processes to supply the Service
-  // Manager's connector, to bind the interface through which profiles are sent
+  // Manager's connector, to bind the interface through which a profile is sent
   // back to the browser process.
   //
   // Note that the metrics::CallStackProfileCollector interface also must be
@@ -92,25 +92,26 @@ class ThreadProfiler {
       scoped_refptr<base::SingleThreadTaskRunner> owning_thread_task_runner =
           scoped_refptr<base::SingleThreadTaskRunner>());
 
-  // Gets the completed callback for the ultimate receiver of the profiles.
-  base::StackSamplingProfiler::CompletedCallback GetReceiverCallback(
-      metrics::CallStackProfileParams* profile_params);
+  // Gets the completed callback for the ultimate receiver of the profile.
+  metrics::CallStackProfileBuilder::CompletedCallback GetReceiverCallback(
+      const metrics::CallStackProfileParams& profile_params);
 
-  // Receives |profiles| from the StackSamplingProfiler and forwards them on to
-  // the original |receiver_callback|.  Note that we must obtain and bind the
-  // original receiver callback prior to the start of collection because the
-  // collection start time is currently recorded when obtaining the callback in
-  // some collection scenarios. The implementation contains a TODO to fix this.
-  static base::Optional<base::StackSamplingProfiler::SamplingParams>
-  ReceiveStartupProfiles(
-      const base::StackSamplingProfiler::CompletedCallback& receiver_callback,
-      base::StackSamplingProfiler::CallStackProfiles profiles);
-  static base::Optional<base::StackSamplingProfiler::SamplingParams>
-  ReceivePeriodicProfiles(
-      const base::StackSamplingProfiler::CompletedCallback& receiver_callback,
+  // Receives |profile| from the metrics::CallStackProfileBuilder and forwards
+  // it on to the original |receiver_callback|.  Note that we must obtain and
+  // bind the original receiver callback prior to the start of collection
+  // because the collection start time is currently recorded when obtaining the
+  // callback in some collection scenarios. The implementation contains a TODO
+  // to fix this.
+  static void ReceiveStartupProfile(
+      const metrics::CallStackProfileBuilder::CompletedCallback&
+          receiver_callback,
+      base::StackSamplingProfiler::CallStackProfile profile);
+  static void ReceivePeriodicProfile(
+      const metrics::CallStackProfileBuilder::CompletedCallback&
+          receiver_callback,
       scoped_refptr<base::SingleThreadTaskRunner> owning_thread_task_runner,
       base::WeakPtr<ThreadProfiler> thread_profiler,
-      base::StackSamplingProfiler::CallStackProfiles profiles);
+      base::StackSamplingProfiler::CallStackProfile profile);
 
   // Posts a delayed task to start the next periodic sampling collection.
   void ScheduleNextPeriodicCollection();
@@ -122,7 +123,6 @@ class ThreadProfiler {
 
   // TODO(wittman): Make const after cleaning up the existing continuous
   // collection support.
-  metrics::CallStackProfileParams startup_profile_params_;
   metrics::CallStackProfileParams periodic_profile_params_;
 
   std::unique_ptr<base::StackSamplingProfiler> startup_profiler_;

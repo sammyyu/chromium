@@ -7,8 +7,9 @@ module content.mojom;
 import "content/common/input/synchronous_compositor.mojom";
 import "content/common/native_types.mojom";
 import "mojo/public/mojom/base/string16.mojom";
+import "mojo/public/mojom/base/time.mojom";
 import "services/ui/public/interfaces/ime/ime.mojom";
-import "third_party/WebKit/public/web/selection_menu_behavior.mojom";
+import "third_party/blink/public/web/selection_menu_behavior.mojom";
 import "ui/events/mojo/event.mojom";
 import "ui/events/mojo/event_constants.mojom";
 import "ui/gfx/geometry/mojo/geometry.mojom";
@@ -89,7 +90,6 @@ struct ScrollData {
 };
 
 struct PinchData {
-  bool zoom_disabled;
   float scale;
 };
 
@@ -139,7 +139,7 @@ struct TouchData {
 struct Event {
   EventType type;
   int32 modifiers;
-  double timestamp_seconds;
+  mojo_base.mojom.TimeTicks timestamp;
   ui.mojom.LatencyInfo latency;
   KeyData? key_data;
   PointerData? pointer_data;
@@ -177,6 +177,9 @@ interface WidgetInputHandlerHost {
   // Sent by the compositor when a fling animation is stopped.
   DidStopFlinging();
 
+  // Sent by the compositor when a GSB has started scrolling the viewport.
+  DidStartScrollingViewport();
+
   // Required for cancelling an ongoing input method composition.
   ImeCancelComposition();
 
@@ -184,6 +187,13 @@ interface WidgetInputHandlerHost {
   // to always have correct bound info.
   ImeCompositionRangeChanged(gfx.mojom.Range range,
                              array<gfx.mojom.Rect> bounds);
+
+  // Updates the mouse capture state of this widget. While capture is enabled,
+  // all mouse events, including those that don't hittest to this widget, will
+  // be targeted to this widget. This enables Blink to behave correctly when
+  // a scrollbar is being dragged, or text is being drag-highlighted, even
+  // when the mouse passes across different RenderWidget areas.
+  SetMouseCapture(bool capture);
 };
 
 // Interface exposed by the renderer to the browser. This class represents
@@ -231,7 +241,7 @@ interface WidgetInputHandler {
   RequestTextInputStateUpdate();
 
   // Request from browser to update the cursor and composition information which
-  // will be sent through InputHostMsg_ImeCompositionRangeChanged. Setting
+  // will be sent through ImeCompositionRangeChanged. Setting
   // |immediate_request| to true  will lead to an immediate update. If
   // |monitor_updates| is set to true then changes to text selection or regular
   // updates in each compositor frame (when there is a change in composition

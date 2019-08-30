@@ -9,7 +9,6 @@
 #include "base/auto_reset.h"
 #include "base/bind.h"
 #include "base/debug/crash_logging.h"
-#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "build/build_config.h"
 #include "chrome/app/vector_icons/vector_icons.h"
@@ -226,7 +225,8 @@ void PluginObserver::BlockedComponentUpdatedPlugin(
   component_observers_[component_observer.get()] =
       std::move(component_observer);
   g_browser_process->component_updater()->GetOnDemandUpdater().OnDemandUpdate(
-      identifier, component_updater::Callback());
+      identifier, component_updater::OnDemandUpdater::Priority::FOREGROUND,
+      component_updater::Callback());
 }
 
 void PluginObserver::RemoveComponentObserver(

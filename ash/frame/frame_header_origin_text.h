@@ -22,9 +22,7 @@ class ASH_EXPORT FrameHeaderOriginText : public views::View {
  public:
   FrameHeaderOriginText(const base::string16& origin,
                         SkColor active_color,
-                        SkColor inactive_color,
-                        SkColor active_background_color,
-                        SkColor inactive_background_color);
+                        SkColor inactive_color);
   ~FrameHeaderOriginText() override;
 
   // Sets whether to paint the text with the active/inactive color.
@@ -36,14 +34,15 @@ class ASH_EXPORT FrameHeaderOriginText : public views::View {
   // How long the slide in+out animation takes.
   static base::TimeDelta AnimationDuration();
 
+  // views::View:
+  void GetAccessibleNodeData(ui::AXNodeData* node_data) override;
+
  private:
   // Owned by the views hierarchy.
   views::Label* label_ = nullptr;
 
   const SkColor active_color_;
   const SkColor inactive_color_;
-  const SkColor active_background_color_;
-  const SkColor inactive_background_color_;
 
   DISALLOW_COPY_AND_ASSIGN(FrameHeaderOriginText);
 };

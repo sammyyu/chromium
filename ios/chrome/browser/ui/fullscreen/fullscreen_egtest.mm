@@ -4,13 +4,15 @@
 
 #import <EarlGrey/EarlGrey.h>
 #import <UIKit/UIKit.h>
+#import <WebKit/WebKit.h>
 #import <XCTest/XCTest.h>
 
+#include "base/bind.h"
 #include "base/ios/ios_util.h"
-#include "base/mac/bind_objc_block.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/sys_string_conversions.h"
 #include "base/strings/utf_string_conversions.h"
+#import "base/test/ios/wait_util.h"
 #include "ios/chrome/browser/ui/ui_util.h"
 #import "ios/chrome/test/app/chrome_test_util.h"
 #import "ios/chrome/test/app/settings_test_util.h"
@@ -19,7 +21,6 @@
 #import "ios/chrome/test/earl_grey/chrome_earl_grey_ui.h"
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
-#import "ios/testing/wait_util.h"
 #import "ios/web/public/test/earl_grey/web_view_matchers.h"
 #import "ios/web/public/test/http_server/error_page_response_provider.h"
 #import "ios/web/public/test/http_server/http_server.h"
@@ -61,7 +62,8 @@ void AssertURLIs(const GURL& expectedURL) {
                     error:&error];
     return (error == nil);
   };
-  GREYAssert(testing::WaitUntilConditionOrTimeout(1.0, condition), description);
+  GREYAssert(base::test::ios::WaitUntilConditionOrTimeout(1.0, condition),
+             description);
 }
 
 }  // namespace
@@ -87,11 +89,24 @@ void AssertURLIs(const GURL& expectedURL) {
   [ChromeEarlGrey loadURL:URL];
 
   [ChromeEarlGreyUI waitForToolbarVisible:YES];
-  // Initial y scroll position is -56 on iPhone and -95 on iPad, to make room
-  // for the toolbar.
+  // Initial y scroll positions are set to make room for the toolbar.
   // TODO(crbug.com/618887) Replace use of specific values when API which
   // generates these values is exposed.
-  CGFloat yOffset = IsIPadIdiom() ? -95.0 : -56.0;
+  CGFloat yOffset = 0;
+  if (IsUIRefreshPhase1Enabled()) {
+    if (IsIPadIdiom()) {
+      yOffset = -89.0;
+    } else {
+      yOffset = -48.0;
+    }
+  } else {
+    if (IsIPadIdiom()) {
+      yOffset = -95.0;
+    } else {
+      yOffset = -56.0;
+    }
+  }
+  DCHECK_LT(yOffset, 0);
   [[EarlGrey
       selectElementWithMatcher:web::WebViewScrollView(
                                    chrome_test_util::GetCurrentWebState())]
@@ -106,6 +121,14 @@ void AssertURLIs(const GURL& expectedURL) {
       "http://ios/testing/data/http_server_files/single_page_wide.pdf");
   [ChromeEarlGrey loadURL:URL];
 
+  // TODO(crbug.com/852393): Investigate why synchronization isn't working.  Is
+  // an animation going on forever?
+  if (@available(iOS 12, *)) {
+    [[GREYConfiguration sharedInstance]
+            setValue:@NO
+        forConfigKey:kGREYConfigKeySynchronizationEnabled];
+  }
+
   // Test that the toolbar is still visible after a user swipes down.
   [[EarlGrey
       selectElementWithMatcher:WebViewScrollView(
@@ -113,9 +136,23 @@ void AssertURLIs(const GURL& expectedURL) {
       performAction:grey_swipeFastInDirection(kGREYDirectionDown)];
   [ChromeEarlGreyUI waitForToolbarVisible:YES];
 
-  // Test that the toolbar is no longer visible after a user swipes up.
-  HideToolbarUsingUI();
-  [ChromeEarlGreyUI waitForToolbarVisible:NO];
+  if (base::ios::IsRunningOnIOS12OrLater()) {
+    // Test that the toolbar is still visible even after attempting to hide it
+    // on swipe up.
+    HideToolbarUsingUI();
+    [ChromeEarlGreyUI waitForToolbarVisible:YES];
+  } else {
+    // Test that the toolbar is no longer visible after a user swipes up.
+    HideToolbarUsingUI();
+    [ChromeEarlGreyUI waitForToolbarVisible:NO];
+  }
+
+  // Reenable synchronization.
+  if (@available(iOS 12, *)) {
+    [[GREYConfiguration sharedInstance]
+            setValue:@YES
+        forConfigKey:kGREYConfigKeySynchronizationEnabled];
+  }
 }
 
 // Verifies that the toolbar properly appears/disappears when scrolling up/down
@@ -170,14 +207,14 @@ void AssertURLIs(const GURL& expectedURL) {
 
   __block bool finished = false;
   chrome_test_util::GetCurrentWebState()->ExecuteJavaScript(
-      base::UTF8ToUTF16(script), base::BindBlockArc(^(const base::Value*) {
+      base::UTF8ToUTF16(script), base::BindOnce(^(const base::Value*) {
         finished = true;
       }));
 
-  GREYAssert(testing::WaitUntilConditionOrTimeout(1.0,
-                                                  ^{
-                                                    return finished;
-                                                  }),
+  GREYAssert(base::test::ios::WaitUntilConditionOrTimeout(1.0,
+                                                          ^{
+                                                            return finished;
+                                                          }),
              @"JavaScript to hide the toolbar did not complete");
 
   // Scroll up to be sure the toolbar can be dismissed by scrolling down.
@@ -247,11 +284,6 @@ void AssertURLIs(const GURL& expectedURL) {
 // Test to make sure the header is shown when a Tab opened by the current Tab is
 // closed even if the toolbar was not present previously.
 - (void)testShowHeaderWhenChildTabCloses {
-// TODO(crbug.com/812664): Re-enable this test on devices.
-#if !TARGET_IPHONE_SIMULATOR
-  EARL_GREY_TEST_DISABLED(@"Test disabled on device.");
-#endif
-
   std::map<GURL, std::string> responses;
   const GURL URL = web::test::HttpServer::MakeUrl("http://origin");
   const GURL destinationURL =
@@ -297,22 +329,18 @@ void AssertURLIs(const GURL& expectedURL) {
   HideToolbarUsingUI();
   [ChromeEarlGreyUI waitForToolbarVisible:NO];
 
-  // Close the tab.
+  // Close the tab by tapping link2.
   NSError* error = nil;
-  bool success = chrome_test_util::TapWebViewElementWithId("link2", &error);
-
-  if (!web::GetWebClient()->IsSlimNavigationManagerEnabled()) {
-    // The effect of clicking the link, closes the tab and invalidates the web
-    // view. This results in |TapWebViewElementWithId| returning false. This
-    // error is represented by code 3. WKBasedNavigationManager does not trigger
-    // any error.
-    GREYAssertFalse(success, @"Failed to tap \"link2\"");
-    GREYAssert(error.code == 3,
+  if (!chrome_test_util::TapWebViewElementWithId("link2", &error)) {
+    // Sometimes, the tap will be unsuccessful due to the window.close()
+    // operation invalidating the WKWebView.  If this occurs, verify the error.
+    // This results in |TapWebViewElementWithId| returning false.
+    // TODO(crbug.com/824879): Remove conditional once flake is eliminated from
+    // TapWebViewElementWithId() for window.close() links.
+    GREYAssert(error.code == WKErrorWebViewInvalidated,
                @"Failed to receive WKErrorWebViewInvalidated error");
-    GREYAssert([error.domain isEqualToString:@"WKErrorDomain"],
+    GREYAssert([error.domain isEqualToString:WKErrorDomain],
                @"Failed to receive WKErrorDomain error");
-  } else {
-    GREYAssert(success, @"Failed to tap \"link2\"");
   }
 
   [ChromeEarlGrey waitForWebViewContainingText:"link1"];

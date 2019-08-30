@@ -2,6 +2,7 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include "base/base_switches.h"
 #include "base/macros.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -39,35 +40,36 @@ class MockAutofillProvider : public TestAutofillProvider {
   ~MockAutofillProvider() override {}
 
   MOCK_METHOD5(OnFormSubmitted,
-               bool(AutofillHandlerProxy* handler,
+               void(AutofillHandlerProxy* handler,
                     const FormData& form,
                     bool,
                     SubmissionSource,
                     base::TimeTicks));
 
-  MOCK_METHOD5(OnQueryFormFieldAutofill,
+  MOCK_METHOD6(OnQueryFormFieldAutofill,
                void(AutofillHandlerProxy* handler,
                     int32_t id,
                     const FormData& form,
                     const FormFieldData& field,
-                    const gfx::RectF& bounding_box));
+                    const gfx::RectF& bounding_box,
+                    bool autoselect_first_suggestion));
 
   void OnQueryFormFieldAutofillImpl(AutofillHandlerProxy* handler,
                                     int32_t id,
                                     const FormData& form,
                                     const FormFieldData& field,
-                                    const gfx::RectF& bounding_box) {
+                                    const gfx::RectF& bounding_box,
+                                    bool autoselect_first_suggestion) {
     queried_form_ = form;
     is_queried_ = true;
   }
 
-  bool OnFormSubmittedImpl(AutofillHandlerProxy*,
+  void OnFormSubmittedImpl(AutofillHandlerProxy*,
                            const FormData& form,
                            bool success,
                            SubmissionSource source,
                            base::TimeTicks timestamp) {
     submitted_form_ = form;
-    return false;
   }
 
   const FormData& queried_form() { return queried_form_; }
@@ -88,6 +90,11 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
  public:
   AutofillProviderBrowserTest() {}
   ~AutofillProviderBrowserTest() override {}
+
+  void SetUp() override {
+    scoped_feature_list_.InitAndDisableFeature(features::kSingleClickAutofill);
+    InProcessBrowserTest::SetUp();
+  }
 
   void SetUpOnMainThread() override {
     autofill_provider_ = std::make_unique<MockAutofillProvider>();
@@ -126,8 +133,8 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
     testing::Mock::VerifyAndClearExpectations(autofill_provider_.get());
   }
 
-  content::RenderViewHost* RenderViewHost() {
-    return WebContents()->GetRenderViewHost();
+  content::RenderFrameHost* GetMainFrame() {
+    return WebContents()->GetMainFrame();
   }
 
   content::WebContents* WebContents() {
@@ -157,7 +164,8 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
   void SetLabelChangeExpectationAndTriggerQuery() {
     ReplaceAutofillDriver();
 
-    EXPECT_CALL(*autofill_provider_, OnQueryFormFieldAutofill(_, _, _, _, _))
+    // If AutofillSingleClick is enabled, there may be multiple queries.
+    EXPECT_CALL(*autofill_provider_, OnQueryFormFieldAutofill(_, _, _, _, _, _))
         .WillOnce(Invoke(autofill_provider_.get(),
                          &MockAutofillProvider::OnQueryFormFieldAutofillImpl));
 
@@ -169,7 +177,7 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
                                                 "/autofill/label_change.html"));
 
     std::string focus("document.getElementById('address').focus();");
-    ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), focus));
+    ASSERT_TRUE(content::ExecuteScript(GetMainFrame(), focus));
 
     SimulateUserTypingInFocuedField();
     while (!autofill_provider_->is_queried()) {
@@ -185,7 +193,7 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
         "document.getElementById('submit_button').click();";
 
     ASSERT_TRUE(
-        content::ExecuteScript(RenderViewHost(), change_label_and_submit));
+        content::ExecuteScript(GetMainFrame(), change_label_and_submit));
     // Need to pay attention for a message that XHR has finished since there
     // is no navigation to wait for.
     content::DOMMessageQueue message_queue;
@@ -205,9 +213,9 @@ class AutofillProviderBrowserTest : public InProcessBrowserTest {
 
  protected:
   std::unique_ptr<MockAutofillProvider> autofill_provider_;
-  base::test::ScopedFeatureList scoped_feature_list_;
 
  private:
+  base::test::ScopedFeatureList scoped_feature_list_;
   TestAutofillClient autofill_client_;
 };
 
@@ -229,7 +237,7 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
       "var iframe = document.getElementById('address_iframe');"
       "var frame_doc = iframe.contentDocument;"
       "frame_doc.getElementById('address_field').focus();");
-  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), focus));
+  ASSERT_TRUE(content::ExecuteScript(GetMainFrame(), focus));
 
   SimulateUserTypingInFocuedField();
   std::string fill_and_submit =
@@ -237,7 +245,7 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
       "var frame_doc = iframe.contentDocument;"
       "frame_doc.getElementById('submit_button').click();";
 
-  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), fill_and_submit));
+  ASSERT_TRUE(content::ExecuteScript(GetMainFrame(), fill_and_submit));
   std::string message;
   while (message_queue.WaitForMessage(&message)) {
     if (message == "\"SUBMISSION_FINISHED\"")
@@ -264,7 +272,7 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
       "var iframe = document.getElementById('address_iframe');"
       "var frame_doc = iframe.contentDocument;"
       "frame_doc.getElementById('address_field').focus();");
-  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), focus));
+  ASSERT_TRUE(content::ExecuteScript(GetMainFrame(), focus));
 
   SimulateUserTypingInFocuedField();
   std::string fill_and_submit =
@@ -272,7 +280,7 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
       "var frame_doc = iframe.contentDocument;"
       "frame_doc.getElementById('submit_button').click();";
 
-  ASSERT_TRUE(content::ExecuteScript(RenderViewHost(), fill_and_submit));
+  ASSERT_TRUE(content::ExecuteScript(GetMainFrame(), fill_and_submit));
   std::string message;
   while (message_queue.WaitForMessage(&message)) {
     if (message == "\"SUBMISSION_FINISHED\"")
@@ -283,7 +291,8 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
                        LabelTagChangeImpactFormComparingWithFlagOn) {
-  scoped_feature_list_.InitAndEnableFeature(
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
       features::kAutofillSkipComparingInferredLabels);
   SetLabelChangeExpectationAndTriggerQuery();
   ChangeLabelAndCheckResult("label_id", false /*expect_forms_same*/);
@@ -291,7 +300,8 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
                        InferredLabelChangeNotImpactFormComparingWithFlagOn) {
-  scoped_feature_list_.InitAndEnableFeature(
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndEnableFeature(
       features::kAutofillSkipComparingInferredLabels);
   SetLabelChangeExpectationAndTriggerQuery();
   ChangeLabelAndCheckResult("p_id", true /*expect_forms_same*/);
@@ -299,7 +309,8 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
                        LabelTagChangeImpactFormComparingWithFlagOff) {
-  scoped_feature_list_.InitAndDisableFeature(
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
       features::kAutofillSkipComparingInferredLabels);
   SetLabelChangeExpectationAndTriggerQuery();
   ChangeLabelAndCheckResult("label_id", false /*expect_forms_same*/);
@@ -307,7 +318,8 @@ IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(AutofillProviderBrowserTest,
                        InferredLabelChangeImpactFormComparingWithFlagOff) {
-  scoped_feature_list_.InitAndDisableFeature(
+  base::test::ScopedFeatureList scoped_feature_list;
+  scoped_feature_list.InitAndDisableFeature(
       features::kAutofillSkipComparingInferredLabels);
   SetLabelChangeExpectationAndTriggerQuery();
   ChangeLabelAndCheckResult("p_id", false /*expect_forms_same*/);

@@ -15,7 +15,6 @@
 namespace web {
 
 struct FaviconURL;
-struct FormActivityParams;
 class NavigationContext;
 struct LoadCommittedDetails;
 class WebState;
@@ -124,6 +123,9 @@ class WebStateObserver {
   // loaded).
   virtual void LoadProgressChanged(WebState* web_state, double progress) {}
 
+  // Called when the canGoBack / canGoForward state of the window was changed.
+  virtual void DidChangeBackForwardState(WebState* web_state) {}
+
   // Called when the title of the WebState is set.
   virtual void TitleWasSet(WebState* web_state) {}
 
@@ -134,20 +136,6 @@ class WebStateObserver {
   // NOTE: Called only if WebState::SetShouldSuppressDialogs() was called with
   // false.
   virtual void DidSuppressDialog(WebState* web_state) {}
-
-  // Called on form submission in the main frame or in a same-origin iframe.
-  // |user_initiated| is true if the user interacted with the page.
-  // |is_main_frame| is true if the submitted form is in the main frame.
-  virtual void DocumentSubmitted(WebState* web_state,
-                                 const std::string& form_name,
-                                 bool user_initiated,
-                                 bool is_main_frame) {}
-
-  // Called when the user is typing on a form field in the main frame or in a
-  // same-origin iframe. |params.input_missing| is indicating if there is any
-  // error when parsing the form field information.
-  virtual void FormActivityRegistered(WebState* web_state,
-                                      const FormActivityParams& params) {}
 
   // Invoked when new favicon URL candidates are received.
   virtual void FaviconUrlUpdated(WebState* web_state,

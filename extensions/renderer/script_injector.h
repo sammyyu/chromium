@@ -8,10 +8,10 @@
 #include <memory>
 #include <vector>
 
-#include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/constants.h"
+#include "extensions/common/permissions/permissions_data.h"
 #include "extensions/common/user_script.h"
-#include "third_party/WebKit/public/web/WebScriptSource.h"
+#include "third_party/blink/public/web/web_script_source.h"
 
 class InjectionHost;
 
@@ -66,7 +66,7 @@ class ScriptInjector {
       const std::set<std::string>& injected_stylesheets) const = 0;
 
   // Returns true if the script should execute on the given |frame|.
-  virtual PermissionsData::AccessType CanExecuteOnFrame(
+  virtual PermissionsData::PageAccess CanExecuteOnFrame(
       const InjectionHost* injection_host,
       blink::WebLocalFrame* web_frame,
       int tab_id) = 0;

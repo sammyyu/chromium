@@ -72,6 +72,13 @@ public class CastWebContentsIntentUtils {
     static final String ACTION_REQUEST_MOVE_OUT =
             "com.google.android.apps.castshell.intent.action.REQUEST_MOVE_OUT";
 
+    /**
+     * Action type of intent from CastWebContentsComponent to notify CastWebContentsActivity that
+     * touch should be enabled.
+     */
+    public static final String ACTION_ENABLE_TOUCH_INPUT =
+            "com.google.android.apps.castshell.intent.action.ENABLE_TOUCH_INPUT";
+
     /** Key of extra value in an intent, the value is a URI of cast://webcontents/<instanceId> */
     static final String INTENT_EXTRA_URI = "content_uri";
 
@@ -119,6 +126,12 @@ public class CastWebContentsIntentUtils {
     private static final String INTENT_EXTRA_GESTURE_CONSUMED =
             "com.google.android.apps.castshell.intent.extra.GESTURE_CONSUMED";
 
+    // Matches to chromecast::shell::VisibilityPriority
+    static final int VISIBITY_TYPE_UNKNOWN = 0;
+    static final int VISIBITY_TYPE_FULL_SCREEN = 1;
+    static final int VISIBITY_TYPE_PARTIAL_OUT = 2;
+    static final int VISIBITY_TYPE_HIDDEN = 3;
+
     // CastWebContentsSurfaceHelper -> CastWebContentsComponent.Receiver
     // -> CastContentWindowAndroid
     public static Intent onActivityStopped(String instanceId) {
@@ -126,12 +139,21 @@ public class CastWebContentsIntentUtils {
         return intent;
     }
 
-    // Host acitivity of CastWebContentsFragment -> CastWebContentsComponent.Receiver
+    // Host activity of CastWebContentsFragment -> CastWebContentsComponent.Receiver
     // -> CastContentWindowAndroid
     public static Intent onGesture(String instanceId, int gestureType) {
-        if (DEBUG) Log.d(TAG, "onGesture");
+        return onGesture(getInstanceUri(instanceId), gestureType);
+    }
 
-        Intent intent = new Intent(ACTION_ON_GESTURE, getInstanceUri(instanceId));
+    // Host activity of CastWebContentsFragment -> CastWebContentsComponent.Receiver
+    // -> CastContentWindowAndroid
+    public static Intent onGestureWithUriString(String uri, int gestureType) {
+        return onGesture(Uri.parse(uri), gestureType);
+    }
+
+    private static Intent onGesture(Uri uri, int gestureType) {
+        if (DEBUG) Log.d(TAG, "onGesture with uri:" + uri + " type:" + gestureType);
+        Intent intent = new Intent(ACTION_ON_GESTURE, uri);
         intent.putExtra(INTENT_EXTRA_GESTURE_TYPE, gestureType);
         return intent;
     }
@@ -144,22 +166,34 @@ public class CastWebContentsIntentUtils {
         return intent;
     }
 
-    // Host acitivity of CastWebContentsFragment -> CastWebContentsComponent.Receiver
+    // Host activity of CastWebContentsFragment -> CastWebContentsComponent.Receiver
     // -> CastContentWindowAndroid
-    public static Intent onVisiblityChange(String instanceId, int visibilityType) {
-        Intent intent = new Intent(ACTION_ON_VISIBILITY_CHANGE, getInstanceUri(instanceId));
+    public static Intent onVisibilityChange(String instanceId, int visibilityType) {
+        return onVisibilityChange(getInstanceUri(instanceId), visibilityType);
+    }
+
+    // Host activity of CastWebContentsFragment -> CastWebContentsComponent.Receiver
+    // -> CastContentWindowAndroid
+    public static Intent onVisibilityChangeWithUriString(String uri, int visibilityType) {
+        return onVisibilityChange(Uri.parse(uri), visibilityType);
+    }
+
+    private static Intent onVisibilityChange(Uri uri, int visibilityType) {
+        if (DEBUG) Log.d(TAG, "onVisibilityChange with uri:" + uri + " type:" + visibilityType);
+
+        Intent intent = new Intent(ACTION_ON_VISIBILITY_CHANGE, uri);
         intent.putExtra(INTENT_EXTRA_VISIBILITY_TYPE, visibilityType);
         return intent;
     }
 
-    // CastContentWindowAndroid -> Host acitivity of CastWebContentsFragment
+    // CastContentWindowAndroid -> Host activity of CastWebContentsFragment
     public static Intent requestMoveOut(String instanceId) {
         Intent intent = new Intent(ACTION_REQUEST_MOVE_OUT);
         intent.putExtra(INTENT_EXTRA_URI, getInstanceUri(instanceId).toString());
         return intent;
     }
 
-    // CastContentWindowAndroid -> Host acitivity of CastWebContentsFragment
+    // CastContentWindowAndroid -> Host activity of CastWebContentsFragment
     public static Intent requestVisibilityPriority(String instanceId, int visibilityPriority) {
         Intent intent = new Intent(ACTION_REQUEST_VISIBILITY_PRIORITY);
         intent.putExtra(INTENT_EXTRA_URI, getInstanceUri(instanceId).toString());
@@ -167,9 +201,8 @@ public class CastWebContentsIntentUtils {
         return intent;
     }
 
-    // CastWebContentsComponent.Receiver -> Host acitivity of CastWebContentsFragment
-    public static Intent gestureConsumed(
-            String instanceId, int gestureType, boolean consumed) {
+    // CastWebContentsComponent.Receiver -> Host activity of CastWebContentsFragment
+    public static Intent gestureConsumed(String instanceId, int gestureType, boolean consumed) {
         Intent intent = new Intent(ACTION_GESTURE_CONSUMED);
         intent.putExtra(INTENT_EXTRA_URI, getInstanceUri(instanceId).toString());
         intent.putExtra(INTENT_EXTRA_GESTURE_TYPE, gestureType);
@@ -224,7 +257,7 @@ public class CastWebContentsIntentUtils {
         return in.getAction().equals(ACTION_KEY_EVENT);
     }
 
-    public static boolean isIntentOfVisiblityChange(Intent in) {
+    public static boolean isIntentOfVisibilityChange(Intent in) {
         return in.getAction().equals(ACTION_ON_VISIBILITY_CHANGE);
     }
 
@@ -244,7 +277,8 @@ public class CastWebContentsIntentUtils {
         intent.putExtra(INTENT_EXTRA_URI, getInstanceUri(instanceId).toString());
         intent.putExtra(INTENT_EXTRA_WEB_CONTENTS, webContents);
         intent.putExtra(INTENT_EXTRA_TOUCH_INPUT_ENABLED, enableTouch);
-        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP);
+        intent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK | Intent.FLAG_ACTIVITY_SINGLE_TOP
+                | Intent.FLAG_ACTIVITY_NO_ANIMATION);
         return intent;
     }
 
@@ -315,6 +349,15 @@ public class CastWebContentsIntentUtils {
     // Used by ACTION_VIEW, ACTION_SHOW_WEB_CONTENT
     public static boolean isTouchable(Intent in) {
         return isTouchable(in.getExtras());
+    }
+
+    // CastWebContentsComponent -> CastWebContentsSurfaceHelper and host activity of
+    // CastWebContentsFragment
+    public static Intent enableTouchInput(String instanceId, boolean enabled) {
+        Intent intent = new Intent(ACTION_ENABLE_TOUCH_INPUT);
+        intent.putExtra(INTENT_EXTRA_URI, getInstanceUri(instanceId).toString());
+        intent.putExtra(INTENT_EXTRA_TOUCH_INPUT_ENABLED, enabled);
+        return intent;
     }
 
     // CastWebContentsSurfaceHelper -> CastWebContentsActivity or host activity

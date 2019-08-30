@@ -64,7 +64,7 @@ namespace url {
 // * Origins are generally constructed from an already-canonicalized GURL:
 //
 //     GURL url("https://example.com/");
-//     url::Origin origin(url);
+//     url::Origin origin = Origin::Create(url);
 //     origin.scheme(); // "https"
 //     origin.host(); // "example.com"
 //     origin.port(); // 443
@@ -172,7 +172,7 @@ URL_EXPORT bool IsSameOriginWith(const GURL& a, const GURL& b);
 // stack-allocated variable named |<var_name>|.  This helps ensure that the
 // value of |origin| gets preserved in crash dumps.
 #define DEBUG_ALIAS_FOR_ORIGIN(var_name, origin) \
-  DEBUG_ALIAS_FOR_CSTR(var_name, origin.Serialize().c_str(), 128)
+  DEBUG_ALIAS_FOR_CSTR(var_name, (origin).Serialize().c_str(), 128)
 
 }  // namespace url
 

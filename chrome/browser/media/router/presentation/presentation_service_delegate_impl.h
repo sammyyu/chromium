@@ -21,7 +21,6 @@
 #include "chrome/browser/media/router/presentation/presentation_service_delegate_observers.h"
 #include "chrome/browser/media/router/presentation/render_frame_host_id.h"
 #include "chrome/common/media_router/media_source.h"
-#include "content/public/browser/media_controller.h"
 #include "content/public/browser/presentation_request.h"
 #include "content/public/browser/presentation_service_delegate.h"
 #include "content/public/browser/web_contents_observer.h"
@@ -30,7 +29,6 @@
 namespace content {
 class PresentationScreenAvailabilityListener;
 class WebContents;
-struct PresentationInfo;
 }  // namespace content
 
 namespace url {
@@ -111,20 +109,20 @@ class PresentationServiceDelegateImpl
   void Terminate(int render_process_id,
                  int render_frame_id,
                  const std::string& presentation_id) override;
-  std::unique_ptr<content::MediaController> GetMediaController(
+  std::unique_ptr<media::FlingingController> GetFlingingController(
       int render_process_id,
       int render_frame_id,
       const std::string& presentation_id) override;
   void ListenForConnectionStateChange(
       int render_process_id,
       int render_frame_id,
-      const content::PresentationInfo& connection,
+      const blink::mojom::PresentationInfo& connection,
       const content::PresentationConnectionStateChangedCallback&
           state_changed_cb) override;
   void ConnectToPresentation(
       int render_process_id,
       int render_frame_id,
-      const content::PresentationInfo& presentation_info,
+      const blink::mojom::PresentationInfo& presentation_info,
       content::PresentationConnectionPtr controller_connection_ptr,
       content::PresentationConnectionRequest receiver_connection_request)
       override;
@@ -194,7 +192,7 @@ class PresentationServiceDelegateImpl
   void OnStartPresentationSucceeded(
       const RenderFrameHostId& render_frame_host_id,
       content::PresentationConnectionCallback success_cb,
-      const content::PresentationInfo& new_presentation_info,
+      const blink::mojom::PresentationInfo& new_presentation_info,
       const MediaRoute& route);
 
   // Notifies the PresentationFrame of |render_frame_host_id| that a
@@ -202,7 +200,7 @@ class PresentationServiceDelegateImpl
   // The PresentationFrame will be created if it does not already exist.
   // This must be called before |ConnectToPresentation()|.
   void AddPresentation(const RenderFrameHostId& render_frame_host_id,
-                       const content::PresentationInfo& presentation_info,
+                       const blink::mojom::PresentationInfo& presentation_info,
                        const MediaRoute& route);
 
   // Notifies the PresentationFrame of |render_frame_host_id| that a

@@ -14,8 +14,11 @@
 #include "base/path_service.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
+#include "base/test/test_reg_util_win.h"
 #include "base/win/pe_image.h"
+#include "chrome/install_static/install_util.h"
 #include "chrome/install_static/user_data_dir.h"
+#include "chrome_elf/nt_registry/nt_registry.h"
 #include "chrome_elf/sha1/sha1.h"
 #include "chrome_elf/third_party_dlls/packed_list_format.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -25,6 +28,38 @@ namespace {
 
 constexpr wchar_t kTestBlFileName[] = L"blfile";
 constexpr DWORD kPageSize = 4096;
+
+void RegRedirect(nt::ROOT_KEY key,
+                 registry_util::RegistryOverrideManager* rom) {
+  ASSERT_NE(key, nt::AUTO);
+  HKEY root = (key == nt::HKCU ? HKEY_CURRENT_USER : HKEY_LOCAL_MACHINE);
+  base::string16 temp;
+
+  ASSERT_NO_FATAL_FAILURE(rom->OverrideRegistry(root, &temp));
+  ASSERT_TRUE(nt::SetTestingOverride(key, temp));
+}
+
+void CancelRegRedirect(nt::ROOT_KEY key) {
+  ASSERT_NE(key, nt::AUTO);
+  ASSERT_TRUE(nt::SetTestingOverride(key, base::string16()));
+}
+
+bool CreateRegistryKeyValue(const base::string16& full_file_path) {
+  base::win::RegKey key;
+  if (key.Create(HKEY_CURRENT_USER,
+                 install_static::GetRegistryPath()
+                     .append(kThirdPartyRegKeyName)
+                     .c_str(),
+                 KEY_WRITE) != ERROR_SUCCESS ||
+      !key.Valid()) {
+    return false;
+  }
+  if (key.WriteValue(kBlFilePathRegValue, full_file_path.c_str()) !=
+      ERROR_SUCCESS)
+    return false;
+
+  return true;
+}
 
 struct TestModule {
   std::string basename;
@@ -109,7 +144,7 @@ class ThirdPartyFileTest : public testing::Test {
     OverrideFilePathForTesting(bl_test_file_path_);
   }
 
-  void TearDown() override { DeinitFromFileForTesting(); }
+  void TearDown() override { DeinitFromFile(); }
 
   void CreateTestFile() {
     base::File file(base::FilePath(bl_test_file_path_),
@@ -158,29 +193,43 @@ class ThirdPartyFileTest : public testing::Test {
 // Test successful initialization and module lookup.
 TEST_F(ThirdPartyFileTest, Success) {
   // Create blacklist data file.
-  CreateTestFile();
+  ASSERT_NO_FATAL_FAILURE(CreateTestFile());
 
   // Init.
-  ASSERT_EQ(InitFromFile(), FileStatus::kSuccess);
+  ASSERT_EQ(InitFromFile(), ThirdPartyStatus::kSuccess);
+
+  std::string fingerprint_hash;
+  std::string name_hash;
 
   // Test matching.
   for (const auto& test_module : GetTestArray()) {
-    EXPECT_TRUE(IsModuleListed(test_module.basename, test_module.imagesize,
-                               test_module.timedatestamp));
+    fingerprint_hash =
+        GetFingerprintString(test_module.timedatestamp, test_module.imagesize);
+    fingerprint_hash = elf_sha1::SHA1HashString(fingerprint_hash);
+    name_hash = elf_sha1::SHA1HashString(test_module.basename);
+    EXPECT_TRUE(IsModuleListed(name_hash, fingerprint_hash));
   }
 
   // Test a failure to match.
-  EXPECT_FALSE(IsModuleListed("booya.dll", 1337, 0x12345678));
+  fingerprint_hash = GetFingerprintString(0x12345678, 1337);
+  fingerprint_hash = elf_sha1::SHA1HashString(fingerprint_hash);
+  name_hash = elf_sha1::SHA1HashString("booya.dll");
+  EXPECT_FALSE(IsModuleListed(name_hash, fingerprint_hash));
 }
 
 // Test successful initialization with no packed files.
 TEST_F(ThirdPartyFileTest, NoFiles) {
-  ASSERT_EQ(InitFromFile(), FileStatus::kSuccess);
-  EXPECT_FALSE(IsModuleListed("booya.dll", 1337, 0x12345678));
+  // kFileNotFound is a non-fatal status code.
+  ASSERT_EQ(InitFromFile(), ThirdPartyStatus::kFileNotFound);
+
+  std::string fingerprint_hash = GetFingerprintString(0x12345678, 1337);
+  fingerprint_hash = elf_sha1::SHA1HashString(fingerprint_hash);
+  std::string name_hash = elf_sha1::SHA1HashString("booya.dll");
+  EXPECT_FALSE(IsModuleListed(name_hash, fingerprint_hash));
 }
 
 TEST_F(ThirdPartyFileTest, CorruptFile) {
-  CreateTestFile();
+  ASSERT_NO_FATAL_FAILURE(CreateTestFile());
 
   base::File* file = GetBlFile();
   ASSERT_TRUE(file->IsValid());
@@ -189,13 +238,13 @@ TEST_F(ThirdPartyFileTest, CorruptFile) {
   PackedListMetadata meta = {kCurrent, static_cast<uint32_t>(50)};
   ASSERT_EQ(file->Write(0, reinterpret_cast<const char*>(&meta), sizeof(meta)),
             static_cast<int>(sizeof(meta)));
-  EXPECT_EQ(InitFromFile(), FileStatus::kArrayReadFail);
+  EXPECT_EQ(InitFromFile(), ThirdPartyStatus::kFileArrayReadFailure);
 
   // 2) Corrupt data or just unsupported metadata version.
   meta = {kUnsupported, static_cast<uint32_t>(50)};
   ASSERT_EQ(file->Write(0, reinterpret_cast<const char*>(&meta), sizeof(meta)),
             static_cast<int>(sizeof(meta)));
-  EXPECT_EQ(InitFromFile(), FileStatus::kInvalidFormatVersion);
+  EXPECT_EQ(InitFromFile(), ThirdPartyStatus::kFileInvalidFormatVersion);
 
   // 3) Not enough data for metadata.
   meta = {kCurrent, static_cast<uint32_t>(10)};
@@ -203,7 +252,30 @@ TEST_F(ThirdPartyFileTest, CorruptFile) {
       file->Write(0, reinterpret_cast<const char*>(&meta), sizeof(meta) / 2),
       static_cast<int>(sizeof(meta) / 2));
   ASSERT_TRUE(file->SetLength(sizeof(meta) / 2));
-  EXPECT_EQ(InitFromFile(), FileStatus::kMetadataReadFail);
+  EXPECT_EQ(InitFromFile(), ThirdPartyStatus::kFileMetadataReadFailure);
+}
+
+// Test successful initialization, getting the file path from registry.
+TEST_F(ThirdPartyFileTest, SuccessFromRegistry) {
+  // 1. Enable reg override for test net.
+  registry_util::RegistryOverrideManager override_manager;
+  ASSERT_NO_FATAL_FAILURE(RegRedirect(nt::HKCU, &override_manager));
+
+  // 2. Add a sample ThirdParty subkey and value, which would be created by
+  //    chrome.dll.
+  ASSERT_TRUE(CreateRegistryKeyValue(GetBlTestFilePath()));
+
+  // 3. Drop a blacklist to the expected path.
+  ASSERT_NO_FATAL_FAILURE(CreateTestFile());
+
+  // Clear override file path so that initialization goes to registry.
+  OverrideFilePathForTesting(std::wstring());
+
+  // 4. Run the test.
+  EXPECT_EQ(InitFromFile(), ThirdPartyStatus::kSuccess);
+
+  // 5. Disable reg override.
+  ASSERT_NO_FATAL_FAILURE(CancelRegRedirect(nt::HKCU));
 }
 
 }  // namespace

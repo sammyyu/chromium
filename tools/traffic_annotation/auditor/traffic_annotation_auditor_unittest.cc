@@ -55,7 +55,7 @@ using namespace testing;
 class TrafficAnnotationAuditorTest : public ::testing::Test {
  public:
   void SetUp() override {
-    if (!PathService::Get(base::DIR_SOURCE_ROOT, &source_path_)) {
+    if (!base::PathService::Get(base::DIR_SOURCE_ROOT, &source_path_)) {
       LOG(ERROR) << "Could not get current directory to find source path.";
       return;
     }
@@ -272,6 +272,18 @@ TEST_F(TrafficAnnotationAuditorTest, IsSafeListed) {
                                      AuditorException::ExceptionType::MISSING));
   EXPECT_TRUE(auditor().IsSafeListed("net/url_request/url_request_context.cc",
                                      AuditorException::ExceptionType::MISSING));
+
+  // Files having the word test in their full path can have annotation for
+  // tests.
+  EXPECT_FALSE(
+      auditor().IsSafeListed("net/url_request/url_fetcher.cc",
+                             AuditorException::ExceptionType::TEST_ANNOTATION));
+  EXPECT_TRUE(
+      auditor().IsSafeListed("chrome/browser/test_something.cc",
+                             AuditorException::ExceptionType::TEST_ANNOTATION));
+  EXPECT_TRUE(
+      auditor().IsSafeListed("test/send_something.cc",
+                             AuditorException::ExceptionType::TEST_ANNOTATION));
 }
 
 // Tests if annotation instances are corrrectly deserialized.
@@ -292,7 +304,7 @@ TEST_F(TrafficAnnotationAuditorTest, AnnotationDeserialization) {
        AnnotationInstance::Type::ANNOTATION_COMPLETING},
       {"good_partial_annotation.txt", AuditorResult::Type::RESULT_OK,
        AnnotationInstance::Type::ANNOTATION_PARTIAL},
-      {"good_test_annotation.txt", AuditorResult::Type::RESULT_IGNORE},
+      {"good_test_annotation.txt", AuditorResult::Type::ERROR_TEST_ANNOTATION},
       {"missing_annotation.txt", AuditorResult::Type::ERROR_MISSING_TAG_USED},
       {"no_annotation.txt", AuditorResult::Type::ERROR_NO_ANNOTATION},
       {"fatal_annotation1.txt", AuditorResult::Type::ERROR_FATAL},
@@ -309,7 +321,7 @@ TEST_F(TrafficAnnotationAuditorTest, AnnotationDeserialization) {
     AnnotationInstance annotation;
     AuditorResult::Type result_type =
         Deserialize(test_case.file_name, &annotation);
-    EXPECT_EQ(result_type, test_case.result_type);
+    EXPECT_EQ(result_type, test_case.result_type) << test_case.file_name;
 
     if (result_type == AuditorResult::Type::RESULT_OK)
       EXPECT_EQ(annotation.type, test_case.type);
@@ -392,8 +404,7 @@ TEST_F(TrafficAnnotationAuditorTest, GetReservedIDsCoverage) {
       PARTIAL_TRAFFIC_ANNOTATION_FOR_TESTS.unique_id_hash_code,
       NO_TRAFFIC_ANNOTATION_YET.unique_id_hash_code,
       NO_PARTIAL_TRAFFIC_ANNOTATION_YET.unique_id_hash_code,
-      MISSING_TRAFFIC_ANNOTATION.unique_id_hash_code,
-      NO_TRAFFIC_ANNOTATION_BUG_656607.unique_id_hash_code};
+      MISSING_TRAFFIC_ANNOTATION.unique_id_hash_code};
 
   std::map<int, std::string> reserved_words =
       TrafficAnnotationAuditor::GetReservedIDsMap();
@@ -630,52 +641,40 @@ TEST_F(TrafficAnnotationAuditorTest, CheckAllRequiredFunctionsAreAnnotated) {
                               "net/url_request/url_request_context.cc",
                               "net/url_request/other_file.cc",
                               "somewhere_else.cc", "something_unittest.cc"};
-  std::string function_names[] = {"net::URLFetcher::Create",
-                                  "net::URLRequestContext::CreateRequest",
-                                  "SSLClientSocket", "Something else", ""};
-
   std::vector<CallInstance> calls(1);
   CallInstance& call = calls[0];
 
   for (const std::string& file_path : file_paths) {
-    for (const std::string& function_name : function_names) {
-      for (int annotated = 0; annotated < 2; annotated++) {
-        for (int dependent = 0; dependent < 2; dependent++) {
-          SCOPED_TRACE(
-              base::StringPrintf("Testing (%s, %s, %i, %i).", file_path.c_str(),
-                                 function_name.c_str(), annotated, dependent));
-          call.file_path = file_path;
-          call.function_name = function_name;
-          call.is_annotated = annotated;
-          auditor().SetGnFileForTesting(tests_folder().Append(
-              dependent ? FILE_PATH_LITERAL("gn_list_positive.txt")
-                        : FILE_PATH_LITERAL("gn_list_negative.txt")));
+    for (int annotated = 0; annotated < 2; annotated++) {
+      for (int dependent = 0; dependent < 2; dependent++) {
+        SCOPED_TRACE(base::StringPrintf(
+            "Testing (%s, %i, %i).", file_path.c_str(), annotated, dependent));
+        call.file_path = file_path;
+        call.function_name = "net::URLFetcher::Create";
+        call.is_annotated = annotated;
+        auditor().SetGnFileForTesting(tests_folder().Append(
+            dependent ? FILE_PATH_LITERAL("gn_list_positive.txt")
+                      : FILE_PATH_LITERAL("gn_list_negative.txt")));
 
-          auditor().ClearErrorsForTesting();
-          auditor().SetExtractedCallsForTesting(calls);
-          auditor().ClearCheckedDependenciesForTesting();
-          auditor().CheckAllRequiredFunctionsAreAnnotated();
-          // Error should be issued if all the following is met:
-          //   1- Function is not annotated.
-          //   2- It's a unittest or chrome::chrome depends on it.
-          //   3- The filepath is not safelisted.
-          //   4- Function name is either of the two specified ones.
-          bool is_unittest = file_path.find("unittest") != std::string::npos;
-          bool is_safelist =
-              file_path == "net/url_request/url_fetcher.cc" ||
-              file_path == "net/url_request/url_request_context.cc";
-          bool monitored_function =
-              function_name == "net::URLFetcher::Create" ||
-              function_name == "net::URLRequestContext::CreateRequest";
-          EXPECT_EQ(auditor().errors().size() == 1,
-                    !annotated && (dependent || is_unittest) && !is_safelist &&
-                        monitored_function)
-              << base::StringPrintf(
-                     "Annotated:%i, Depending:%i, IsUnitTest:%i, "
-                     "IsSafeListed:%i, MonitoredFunction:%i",
-                     annotated, dependent, is_unittest, is_safelist,
-                     monitored_function);
-        }
+        auditor().ClearErrorsForTesting();
+        auditor().SetExtractedCallsForTesting(calls);
+        auditor().ClearCheckedDependenciesForTesting();
+        auditor().CheckAllRequiredFunctionsAreAnnotated();
+        // Error should be issued if all the following is met:
+        //   1- Function is not annotated.
+        //   2- chrome::chrome depends on it.
+        //   3- The filepath is not safelisted.
+        bool is_unittest = file_path.find("unittest") != std::string::npos;
+        bool is_safelist =
+            file_path == "net/url_request/url_fetcher.cc" ||
+            file_path == "net/url_request/url_request_context.cc" ||
+            is_unittest;
+        EXPECT_EQ(auditor().errors().size() == 1,
+                  !annotated && dependent && !is_safelist)
+            << base::StringPrintf(
+                   "Annotated:%i, Depending:%i, IsUnitTest:%i, "
+                   "IsSafeListed:%i",
+                   annotated, dependent, is_unittest, is_safelist);
       }
     }
   }

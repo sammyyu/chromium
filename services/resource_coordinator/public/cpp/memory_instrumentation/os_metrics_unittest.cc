@@ -251,8 +251,9 @@ TEST(OSMetricsTest, TestWinModuleReading) {
 #endif  // defined(OS_WIN)
 
 #if defined(OS_MACOSX)
-TEST(OSMetricsTest, TestMachOReading) {
-  auto maps = OSMetrics::GetProcessMemoryMaps(base::kNullProcessId);
+namespace {
+
+void CheckMachORegions(const std::vector<mojom::VmRegionPtr>& maps) {
   uint32_t size = 100;
   char full_path[size];
   int result = _NSGetExecutablePath(full_path, &size);
@@ -279,6 +280,16 @@ TEST(OSMetricsTest, TestMachOReading) {
   }
   EXPECT_TRUE(found_components_unittests);
   EXPECT_TRUE(found_appkit);
+}
+
+}  // namespace
+
+// Test failing on Mac ASan 64: https://crbug.com/852690
+TEST(OSMetricsTest, DISABLED_TestMachOReading) {
+  auto maps = OSMetrics::GetProcessMemoryMaps(base::kNullProcessId);
+  CheckMachORegions(maps);
+  maps = OSMetrics::GetProcessModules(base::kNullProcessId);
+  CheckMachORegions(maps);
 }
 #endif  // defined(OS_MACOSX)
 

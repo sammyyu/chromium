@@ -110,6 +110,10 @@ base::string16 GetSubjectNameInFile(const base::FilePath& filename) {
     return base::string16();
   }
 
+  // The subject name is normalized because it can contain trailing null
+  // characters.
+  internal::NormalizeCertificateSubject(&subject_name);
+
   return subject_name;
 }
 
@@ -248,6 +252,11 @@ void GetCertificateInfo(const base::FilePath& filename,
   certificate_info->subject = subject;
 }
 
+bool IsMicrosoftModule(base::StringPiece16 subject) {
+  static constexpr wchar_t kMicrosoft[] = L"Microsoft ";
+  return subject.starts_with(kMicrosoft);
+}
+
 StringMapping GetEnvironmentVariablesMapping(
     const std::vector<base::string16>& environment_variables) {
   std::unique_ptr<base::Environment> environment(base::Environment::Create());
@@ -322,3 +331,13 @@ bool GetModuleImageSizeAndTimeDateStamp(const base::FilePath& path,
 
   return true;
 }
+
+namespace internal {
+
+void NormalizeCertificateSubject(base::string16* subject) {
+  size_t first_null = subject->find(L'\0');
+  if (first_null != base::string16::npos)
+    subject->resize(first_null);
+}
+
+}  // namespace internal

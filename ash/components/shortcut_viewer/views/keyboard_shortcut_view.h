@@ -14,6 +14,10 @@
 #include "ui/chromeos/search_box/search_box_view_delegate.h"
 #include "ui/views/widget/widget_delegate.h"
 
+namespace base {
+class TimeTicks;
+}
+
 namespace views {
 class TabbedPane;
 class Widget;
@@ -31,11 +35,19 @@ class KeyboardShortcutView : public views::WidgetDelegateView,
  public:
   ~KeyboardShortcutView() override;
 
-  // Shows the Keyboard Shortcut Viewer window, or re-activates an existing one.
-  static views::Widget* Show(gfx::NativeWindow context);
+  // Toggle the Keyboard Shortcut Viewer window.
+  // 1. Show the window if it is not open.
+  // 2. Activate the window if it is open but not active.
+  // 3. Close the window if it is open and active.
+  // |start_time| is the time of the user gesture that caused the window to
+  // show. Used for metrics.
+  static views::Widget* Toggle(base::TimeTicks start_time);
 
   // views::View:
+  const char* GetClassName() const override;
+  bool AcceleratorPressed(const ui::Accelerator& accelerator) override;
   void Layout() override;
+  gfx::Size CalculatePreferredSize() const override;
 
   // search_box::SearchBoxViewDelegate:
   void QueryChanged(search_box::SearchBoxViewBase* sender) override;
@@ -53,10 +65,6 @@ class KeyboardShortcutView : public views::WidgetDelegateView,
   // |shortcut_views_|, called on construction and when exiting search mode.
   void InitCategoriesTabbedPane();
 
-  // Put focus on the active tab. Used when the first time to show the widget or
-  // after exiting search mode.
-  void RequestFocusForActiveTab();
-
   // Update views' layout based on search box status.
   void UpdateViewsLayout(bool is_search_box_active);
 
@@ -67,12 +75,14 @@ class KeyboardShortcutView : public views::WidgetDelegateView,
   bool CanMaximize() const override;
   bool CanMinimize() const override;
   bool CanResize() const override;
+  bool ShouldShowWindowTitle() const override;
   views::ClientView* CreateClientView(views::Widget* widget) override;
 
   static KeyboardShortcutView* GetInstanceForTesting();
   int GetTabCountForTesting() const;
   const std::vector<std::unique_ptr<KeyboardShortcutItemView>>&
   GetShortcutViewsForTesting() const;
+  KSVSearchBoxView* GetSearchBoxViewForTesting();
 
   // Owned by views hierarchy.
   // The container for category tabs and lists of KeyboardShortcutItemViews.

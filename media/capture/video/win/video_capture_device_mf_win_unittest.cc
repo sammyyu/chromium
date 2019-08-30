@@ -34,9 +34,15 @@ class MockClient : public VideoCaptureDevice::Client {
                               base::TimeDelta timestamp,
                               int frame_feedback_id = 0) override {}
 
-  MOCK_METHOD4(
-      ReserveOutputBuffer,
-      Buffer(const gfx::Size&, VideoPixelFormat, VideoPixelStorage, int));
+  void OnIncomingCapturedGfxBuffer(gfx::GpuMemoryBuffer* buffer,
+                                   const VideoCaptureFormat& frame_format,
+                                   int clockwise_rotation,
+                                   base::TimeTicks reference_time,
+                                   base::TimeDelta timestamp,
+                                   int frame_feedback_id = 0) override {}
+
+  MOCK_METHOD3(ReserveOutputBuffer,
+               Buffer(const gfx::Size&, VideoPixelFormat, int));
 
   void OnIncomingCapturedBuffer(Buffer buffer,
                                 const VideoCaptureFormat& format,
@@ -51,9 +57,8 @@ class MockClient : public VideoCaptureDevice::Client {
       gfx::Rect visible_rect,
       const VideoFrameMetadata& additional_metadata) override {}
 
-  MOCK_METHOD4(
-      ResurrectLastOutputBuffer,
-      Buffer(const gfx::Size&, VideoPixelFormat, VideoPixelStorage, int));
+  MOCK_METHOD3(ResurrectLastOutputBuffer,
+               Buffer(const gfx::Size&, VideoPixelFormat, int));
 
   MOCK_METHOD2(OnError, void(const base::Location&, const std::string&));
 
@@ -809,11 +814,13 @@ const int kArbitraryValidPhotoHeight = 2448;
 class VideoCaptureDeviceMFWinTest : public ::testing::Test {
  protected:
   VideoCaptureDeviceMFWinTest()
-      : media_source_(new MockMFMediaSource()),
+      : descriptor_(VideoCaptureDeviceDescriptor()),
+        media_source_(new MockMFMediaSource()),
         engine_(new MockMFCaptureEngine()),
         client_(new MockClient()),
         image_capture_client_(new MockImageCaptureClient()),
-        device_(new VideoCaptureDeviceMFWin(media_source_, engine_)),
+        device_(
+            new VideoCaptureDeviceMFWin(descriptor_, media_source_, engine_)),
         capture_source_(new MockMFCaptureSource()),
         capture_preview_sink_(new MockCapturePreviewSink()),
         media_foundation_supported_(
@@ -1022,6 +1029,7 @@ class VideoCaptureDeviceMFWinTest : public ::testing::Test {
         .WillRepeatedly(Invoke(get_device_media_type));
   }
 
+  VideoCaptureDeviceDescriptor descriptor_;
   Microsoft::WRL::ComPtr<MockMFMediaSource> media_source_;
   Microsoft::WRL::ComPtr<MockMFCaptureEngine> engine_;
   std::unique_ptr<MockClient> client_;

@@ -59,6 +59,7 @@ class HostContentSettingsMap : public content_settings::Observer,
     SUPERVISED_PROVIDER,
     CUSTOM_EXTENSION_PROVIDER,
     NOTIFICATION_ANDROID_PROVIDER,
+    EPHEMERAL_PROVIDER,
     PREF_PROVIDER,
     DEFAULT_PROVIDER,
 
@@ -260,10 +261,11 @@ class HostContentSettingsMap : public content_settings::Observer,
 
   // If |pattern_predicate| is null, this method is equivalent to the above.
   // Otherwise, it only deletes exceptions matched by |pattern_predicate| that
-  // were modified at or after |begin_time|.
+  // were modified at or after |begin_time| and before |end_time|.
   void ClearSettingsForOneTypeWithPredicate(
       ContentSettingsType content_type,
       base::Time begin_time,
+      base::Time end_time,
       const PatternSourcePredicate& pattern_predicate);
 
   // RefcountedKeyedService implementation.
@@ -273,7 +275,7 @@ class HostContentSettingsMap : public content_settings::Observer,
   void OnContentSettingChanged(const ContentSettingsPattern& primary_pattern,
                                const ContentSettingsPattern& secondary_pattern,
                                ContentSettingsType content_type,
-                               std::string resource_identifier) override;
+                               const std::string& resource_identifier) override;
 
   // Returns the ProviderType associated with the given source string.
   // TODO(estade): I regret adding this. At the moment there are no legitimate

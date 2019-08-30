@@ -34,9 +34,10 @@ namespace syncer {
 class DeviceInfoSyncBridge : public ModelTypeSyncBridge,
                              public DeviceInfoTracker {
  public:
-  DeviceInfoSyncBridge(LocalDeviceInfoProvider* local_device_info_provider,
-                       OnceModelTypeStoreFactory store_factory,
-                       const ChangeProcessorFactory& change_processor_factory);
+  DeviceInfoSyncBridge(
+      LocalDeviceInfoProvider* local_device_info_provider,
+      OnceModelTypeStoreFactory store_factory,
+      std::unique_ptr<ModelTypeChangeProcessor> change_processor);
   ~DeviceInfoSyncBridge() override;
 
   // ModelTypeSyncBridge implementation.
@@ -48,10 +49,10 @@ class DeviceInfoSyncBridge : public ModelTypeSyncBridge,
       std::unique_ptr<MetadataChangeList> metadata_change_list,
       EntityChangeList entity_changes) override;
   void GetData(StorageKeyList storage_keys, DataCallback callback) override;
-  void GetAllData(DataCallback callback) override;
+  void GetAllDataForDebugging(DataCallback callback) override;
   std::string GetClientTag(const EntityData& entity_data) override;
   std::string GetStorageKey(const EntityData& entity_data) override;
-  void ApplyDisableSyncChanges(
+  StopSyncResponse ApplyStopSyncChanges(
       std::unique_ptr<MetadataChangeList> delete_metadata_change_list) override;
 
   // DeviceInfoTracker implementation.
@@ -143,6 +144,8 @@ class DeviceInfoSyncBridge : public ModelTypeSyncBridge,
 
   // Used to update our local device info once every pulse interval.
   base::OneShotTimer pulse_timer_;
+
+  base::WeakPtrFactory<DeviceInfoSyncBridge> weak_ptr_factory_;
 
   DISALLOW_COPY_AND_ASSIGN(DeviceInfoSyncBridge);
 };

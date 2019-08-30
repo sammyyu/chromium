@@ -40,8 +40,9 @@
 #include "components/url_formatter/url_formatter.h"
 #include "components/variations/net/variations_http_headers.h"
 #include "net/base/escape.h"
-#include "net/url_request/url_fetcher.h"
-#include "net/url_request/url_request_status.h"
+#include "services/network/public/cpp/resource_response.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
+#include "services/network/public/cpp/simple_url_loader.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 #include "third_party/metrics_proto/omnibox_input_type.pb.h"
 #include "url/gurl.h"
@@ -128,12 +129,12 @@ void ZeroSuggestProvider::Start(const AutocompleteInput& input,
                                 bool minimal_changes) {
   TRACE_EVENT0("omnibox", "ZeroSuggestProvider::Start");
   matches_.clear();
+  Stop(true, false);
   if (!input.from_omnibox_focus() || client()->IsOffTheRecord() ||
       input.type() == metrics::OmniboxInputType::INVALID)
     return;
 
-  Stop(true, false);
-  result_type_running_ = ResultType::NONE;
+  result_type_running_ = NONE;
   set_field_trial_triggered(false);
   set_field_trial_triggered_in_session(false);
   permanent_text_ = input.text();
@@ -148,60 +149,63 @@ void ZeroSuggestProvider::Start(const AutocompleteInput& input,
     return;
 
   result_type_running_ = TypeOfResultToRun(input.current_url(), suggest_url);
-  if (result_type_running_ == ZeroSuggestProvider::NONE)
+  if (result_type_running_ == NONE)
     return;
 
   done_ = false;
 
-  // TODO(jered): Consider adding locally-sourced zero-suggestions here too.
-  // These may be useful on the NTP or more relevant to the user than server
-  // suggestions, if based on local browsing history.
   MaybeUseCachedSuggestions();
 
-  if (result_type_running_ == ZeroSuggestProvider::MOST_VISITED) {
+  if (result_type_running_ == MOST_VISITED) {
     most_visited_urls_.clear();
     scoped_refptr<history::TopSites> ts = client()->GetTopSites();
     if (!ts) {
       done_ = true;
-      result_type_running_ = ResultType::NONE;
+      result_type_running_ = NONE;
       return;
     }
 
     ts->GetMostVisitedURLs(
         base::Bind(&ZeroSuggestProvider::OnMostVisitedUrlsAvailable,
-                   weak_ptr_factory_.GetWeakPtr()),
+                   weak_ptr_factory_.GetWeakPtr(), most_visited_request_num_),
         false);
     return;
   }
 
-  const std::string current_url =
-      result_type_running_ == ZeroSuggestProvider::DEFAULT_SERP_FOR_URL
-          ? current_query_
-          : std::string();
-  // Create a request for suggestions with |this| as the fetcher delegate.
+  const std::string current_url = result_type_running_ == DEFAULT_SERP_FOR_URL
+                                      ? current_query_
+                                      : std::string();
+  // Create a request for suggestions, routing completion to
+  // OnContextualSuggestionsLoaderAvailable.
   client()
       ->GetContextualSuggestionsService(/*create_if_necessary=*/true)
       ->CreateContextualSuggestionsRequest(
           current_url, client()->GetCurrentVisitTimestamp(),
           client()->GetTemplateURLService(),
-          /*fetcher_delegate=*/this,
           base::BindOnce(
-              &ZeroSuggestProvider::OnContextualSuggestionsFetcherAvailable,
-              weak_ptr_factory_.GetWeakPtr()));
+              &ZeroSuggestProvider::OnContextualSuggestionsLoaderAvailable,
+              weak_ptr_factory_.GetWeakPtr()),
+          base::BindOnce(
+              &ZeroSuggestProvider::OnURLLoadComplete,
+              base::Unretained(this) /* this owns SimpleURLLoader */));
 }
 
 void ZeroSuggestProvider::Stop(bool clear_cached_results,
                                bool due_to_user_inactivity) {
-  if (fetcher_)
+  if (loader_)
     LogOmniboxZeroSuggestRequest(ZERO_SUGGEST_REQUEST_INVALIDATED);
-  fetcher_.reset();
+  loader_.reset();
   auto* contextual_suggestions_service =
       client()->GetContextualSuggestionsService(/*create_if_necessary=*/false);
   // contextual_suggestions_service can be null if in incognito mode.
   if (contextual_suggestions_service != nullptr) {
     contextual_suggestions_service->StopCreatingContextualSuggestionsRequest();
   }
+  // TODO(krb): It would allow us to remove some guards if we could also cancel
+  // the TopSites::GetMostVisitedURLs request.
   done_ = true;
+  result_type_running_ = NONE;
+  ++most_visited_request_num_;
 
   if (clear_cached_results) {
     // We do not call Clear() on |results_| to retain |verbatim_relevance|
@@ -214,8 +218,6 @@ void ZeroSuggestProvider::Stop(bool clear_cached_results,
     current_title_.clear();
     most_visited_urls_.clear();
   }
-
-  result_type_running_ = ZeroSuggestProvider::NONE;
 }
 
 void ZeroSuggestProvider::DeleteMatch(const AutocompleteMatch& match) {
@@ -250,7 +252,7 @@ ZeroSuggestProvider::ZeroSuggestProvider(
     : BaseSearchProvider(AutocompleteProvider::TYPE_ZERO_SUGGEST, client),
       history_url_provider_(history_url_provider),
       listener_(listener),
-      result_type_running_(ResultType::NONE),
+      result_type_running_(NONE),
       weak_ptr_factory_(this) {
   // Record whether contextual zero suggest is possible for this user / profile.
   const TemplateURLService* template_url_service =
@@ -309,18 +311,24 @@ void ZeroSuggestProvider::RecordDeletionResult(bool success) {
   }
 }
 
-void ZeroSuggestProvider::OnURLFetchComplete(const net::URLFetcher* source) {
+void ZeroSuggestProvider::OnURLLoadComplete(
+    const network::SimpleURLLoader* source,
+    std::unique_ptr<std::string> response_body) {
   DCHECK(!done_);
-  DCHECK_EQ(fetcher_.get(), source);
+  DCHECK_EQ(loader_.get(), source);
 
   LogOmniboxZeroSuggestRequest(ZERO_SUGGEST_REPLY_RECEIVED);
 
   const bool results_updated =
-      source->GetStatus().is_success() && source->GetResponseCode() == 200 &&
-      UpdateResults(SearchSuggestionParser::ExtractJsonData(source));
-  fetcher_.reset();
+      response_body && source->NetError() == net::OK &&
+      (source->ResponseInfo() && source->ResponseInfo()->headers &&
+       source->ResponseInfo()->headers->response_code() == 200) &&
+      UpdateResults(SearchSuggestionParser::ExtractJsonData(
+          source, std::move(response_body)));
+  loader_.reset();
   done_ = true;
-  result_type_running_ = ZeroSuggestProvider::NONE;
+  result_type_running_ = NONE;
+  ++most_visited_request_num_;
   listener_->OnProviderUpdate(results_updated);
 }
 
@@ -332,7 +340,7 @@ bool ZeroSuggestProvider::UpdateResults(const std::string& json_data) {
 
   // When running the personalized service, we want to store suggestion
   // responses if non-empty.
-  if (result_type_running_ == ResultType::DEFAULT_SERP && !json_data.empty()) {
+  if (result_type_running_ == DEFAULT_SERP && !json_data.empty()) {
     client()->GetPrefs()->SetString(omnibox::kZeroSuggestCachedResults,
                                     json_data);
 
@@ -391,20 +399,26 @@ AutocompleteMatch ZeroSuggestProvider::NavigationToMatch(
 }
 
 void ZeroSuggestProvider::OnMostVisitedUrlsAvailable(
+    size_t orig_request_num,
     const history::MostVisitedURLList& urls) {
-  if (result_type_running_ != ResultType::MOST_VISITED)
+  if (result_type_running_ != MOST_VISITED ||
+      orig_request_num != most_visited_request_num_) {
     return;
+  }
   most_visited_urls_ = urls;
   done_ = true;
   ConvertResultsToAutocompleteMatches();
-  result_type_running_ = ResultType::NONE;
+  result_type_running_ = NONE;
+  ++most_visited_request_num_;
   listener_->OnProviderUpdate(true);
 }
 
-void ZeroSuggestProvider::OnContextualSuggestionsFetcherAvailable(
-    std::unique_ptr<net::URLFetcher> fetcher) {
-  fetcher_ = std::move(fetcher);
-  fetcher_->Start();
+void ZeroSuggestProvider::OnContextualSuggestionsLoaderAvailable(
+    std::unique_ptr<network::SimpleURLLoader> loader) {
+  // ContextualSuggestionsService has already started |loader|, so here it's
+  // only neccessary to grab its ownership until results come in to
+  // OnURLLoadComplete().
+  loader_ = std::move(loader);
   LogOmniboxZeroSuggestRequest(ZERO_SUGGEST_REQUEST_SENT);
 }
 
@@ -432,7 +446,7 @@ void ZeroSuggestProvider::ConvertResultsToAutocompleteMatches() {
   UMA_HISTOGRAM_COUNTS("ZeroSuggest.AllResults", num_results);
 
   // Show Most Visited results after ZeroSuggest response is received.
-  if (result_type_running_ == ResultType::MOST_VISITED) {
+  if (result_type_running_ == MOST_VISITED) {
     if (!current_url_match_.destination_url.is_valid())
       return;
     matches_.push_back(current_url_match_);
@@ -515,7 +529,7 @@ bool ZeroSuggestProvider::AllowZeroSuggestSuggestions(
 }
 
 void ZeroSuggestProvider::MaybeUseCachedSuggestions() {
-  if (result_type_running_ != ZeroSuggestProvider::DEFAULT_SERP)
+  if (result_type_running_ != DEFAULT_SERP)
     return;
 
   std::string json_data =
@@ -532,10 +546,6 @@ void ZeroSuggestProvider::MaybeUseCachedSuggestions() {
 ZeroSuggestProvider::ResultType ZeroSuggestProvider::TypeOfResultToRun(
     const GURL& current_url,
     const GURL& suggest_url) {
-  // TODO(jered): Consider adding locally-sourced zero-suggestions here too.
-  // These may be useful on the NTP or more relevant to the user than server
-  // suggestions, if based on local browsing history.
-
   // Check if the URL can be sent in any suggest request.
   const TemplateURLService* template_url_service =
       client()->GetTemplateURLService();
@@ -564,24 +574,23 @@ ZeroSuggestProvider::ResultType ZeroSuggestProvider::TypeOfResultToRun(
 
   // Check if zero suggestions are allowed in the current context.
   if (!AllowZeroSuggestSuggestions(current_url))
-    return ResultType::NONE;
+    return NONE;
 
   if (OmniboxFieldTrial::InZeroSuggestPersonalizedFieldTrial())
     return PersonalizedServiceShouldFallBackToMostVisited(
                client()->GetPrefs(), client()->IsAuthenticated(),
                template_url_service)
-               ? ResultType::MOST_VISITED
-               : ResultType::DEFAULT_SERP;
+               ? MOST_VISITED
+               : DEFAULT_SERP;
 
   if (OmniboxFieldTrial::InZeroSuggestMostVisitedWithoutSerpFieldTrial() &&
       client()
           ->GetTemplateURLService()
           ->IsSearchResultsPageFromDefaultSearchProvider(current_url))
-    return ResultType::NONE;
+    return NONE;
 
   if (OmniboxFieldTrial::InZeroSuggestMostVisitedFieldTrial())
-    return ResultType::MOST_VISITED;
+    return MOST_VISITED;
 
-  return can_send_current_url ? ResultType::DEFAULT_SERP_FOR_URL
-                              : ResultType::NONE;
+  return can_send_current_url ? DEFAULT_SERP_FOR_URL : NONE;
 }

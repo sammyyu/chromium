@@ -10,13 +10,10 @@
 
 #include "base/bind.h"
 #include "base/containers/hash_tables.h"
-#include "base/memory/ptr_util.h"
 #include "base/task_scheduler/post_task.h"
 #include "base/values.h"
 #include "build/build_config.h"
 #include "content/public/browser/browser_context.h"
-#include "content/public/browser/browser_thread.h"
-#include "content/public/browser/resource_context.h"
 #include "content/public/browser/storage_partition.h"
 #include "extensions/browser/api/dns/host_resolver_wrapper.h"
 #include "extensions/browser/api/socket/socket.h"
@@ -182,9 +179,7 @@ void SocketAsyncApiFunction::OnFirewallHoleOpened(
 
 #endif  // OS_CHROMEOS
 
-SocketExtensionWithDnsLookupFunction::SocketExtensionWithDnsLookupFunction()
-    : resource_context_(NULL) {
-}
+SocketExtensionWithDnsLookupFunction::SocketExtensionWithDnsLookupFunction() {}
 
 SocketExtensionWithDnsLookupFunction::~SocketExtensionWithDnsLookupFunction() {
 }
@@ -192,14 +187,17 @@ SocketExtensionWithDnsLookupFunction::~SocketExtensionWithDnsLookupFunction() {
 bool SocketExtensionWithDnsLookupFunction::PrePrepare() {
   if (!SocketAsyncApiFunction::PrePrepare())
     return false;
-  resource_context_ = browser_context()->GetResourceContext();
-  return resource_context_ != NULL;
+  url_request_context_getter_ =
+      content::BrowserContext::GetDefaultStoragePartition(browser_context())
+          ->GetURLRequestContext();
+  return true;
 }
 
 void SocketExtensionWithDnsLookupFunction::StartDnsLookup(
     const net::HostPortPair& host_port_pair) {
   net::HostResolver* host_resolver =
-      HostResolverWrapper::GetInstance()->GetHostResolver(resource_context_);
+      HostResolverWrapper::GetInstance()->GetHostResolver(
+          url_request_context_getter_.get());
   DCHECK(host_resolver);
 
   net::HostResolver::RequestInfo request_info(host_port_pair);
@@ -566,8 +564,8 @@ bool SocketWriteFunction::Prepare() {
 
   socket_id_ = socket_id_value.GetInt();
   io_buffer_size_ = data_value.GetBlob().size();
-  io_buffer_ =
-      base::MakeRefCounted<net::WrappedIOBuffer>(data_value.GetBlob().data());
+  io_buffer_ = base::MakeRefCounted<net::WrappedIOBuffer>(
+      reinterpret_cast<const char*>(data_value.GetBlob().data()));
   return true;
 }
 
@@ -664,8 +662,8 @@ bool SocketSendToFunction::Prepare() {
   hostname_ = hostname_value.GetString();
 
   io_buffer_size_ = data_value.GetBlob().size();
-  io_buffer_ =
-      base::MakeRefCounted<net::WrappedIOBuffer>(data_value.GetBlob().data());
+  io_buffer_ = base::MakeRefCounted<net::WrappedIOBuffer>(
+      reinterpret_cast<const char*>(data_value.GetBlob().data()));
   return true;
 }
 
@@ -814,14 +812,14 @@ void SocketGetInfoFunction::Work() {
   SetResult(info.ToValue());
 }
 
-bool SocketGetNetworkListFunction::RunAsync() {
+ExtensionFunction::ResponseAction SocketGetNetworkListFunction::Run() {
   base::PostTaskWithTraits(
       FROM_HERE,
       {base::MayBlock(), base::TaskPriority::USER_VISIBLE,
        base::TaskShutdownBehavior::CONTINUE_ON_SHUTDOWN},
       base::Bind(&SocketGetNetworkListFunction::GetNetworkListOnFileThread,
                  this));
-  return true;
+  return RespondLater();
 }
 
 void SocketGetNetworkListFunction::GetNetworkListOnFileThread() {
@@ -843,8 +841,7 @@ void SocketGetNetworkListFunction::GetNetworkListOnFileThread() {
 
 void SocketGetNetworkListFunction::HandleGetNetworkListError() {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
-  error_ = kNetworkListError;
-  SendResponse(false);
+  Respond(Error(kNetworkListError));
 }
 
 void SocketGetNetworkListFunction::SendResponseOnUIThread(
@@ -861,8 +858,8 @@ void SocketGetNetworkListFunction::SendResponseOnUIThread(
     create_arg.push_back(std::move(info));
   }
 
-  results_ = api::socket::GetNetworkList::Results::Create(create_arg);
-  SendResponse(true);
+  Respond(
+      ArgumentList(api::socket::GetNetworkList::Results::Create(create_arg)));
 }
 
 SocketJoinGroupFunction::SocketJoinGroupFunction() {}

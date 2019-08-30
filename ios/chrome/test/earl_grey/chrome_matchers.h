@@ -19,6 +19,12 @@ id<GREYMatcher> ButtonWithAccessibilityLabelId(int message_id);
 // accessibility trait UIAccessibilityTraitButton.
 id<GREYMatcher> ButtonWithAccessibilityLabel(NSString* label);
 
+// Matcher for element with an image corresponding to |image_id|.
+id<GREYMatcher> ImageViewWithImage(int image_id);
+
+// Matcher for element with an image defined by its name in the main bundle.
+id<GREYMatcher> ImageViewWithImageNamed(NSString* imageName);
+
 // Matcher for element with an image corresponding to |image_id| and
 // accessibility trait UIAccessibilityTraitButton.
 id<GREYMatcher> ButtonWithImage(int image_id);
@@ -52,8 +58,13 @@ id<GREYMatcher> StopButton();
 // Returns a matcher for the omnibox.
 id<GREYMatcher> Omnibox();
 
+// Returns a matcher for the location view.
+id<GREYMatcher> DefocusedLocationView();
+
 // Returns a matcher for the page security info button.
 id<GREYMatcher> PageSecurityInfoButton();
+// Returns a matcher for the page security info indicator.
+id<GREYMatcher> PageSecurityInfoIndicator();
 
 // Returns matcher for omnibox containing |text|. Performs an exact match of the
 // omnibox contents.
@@ -61,6 +72,10 @@ id<GREYMatcher> OmniboxText(std::string text);
 
 // Returns matcher for |text| being a substring of the text in the omnibox.
 id<GREYMatcher> OmniboxContainingText(std::string text);
+
+// Returns matcher for |text| being a substring of the text in the location
+// view.
+id<GREYMatcher> LocationViewContainingText(std::string text);
 
 // Matcher for Tools menu button.
 id<GREYMatcher> ToolsMenuButton();
@@ -71,14 +86,14 @@ id<GREYMatcher> ShareButton();
 // Matcher for show tabs button.
 id<GREYMatcher> ShowTabsButton();
 
-// Matcher for CollectionViewSwitchCell.
-id<GREYMatcher> CollectionViewSwitchCell(NSString* accessibilityIdentifier,
-                                         BOOL isToggledOn);
+// Matcher for SettingsSwitchCell.
+id<GREYMatcher> SettingsSwitchCell(NSString* accessibilityIdentifier,
+                                   BOOL isToggledOn);
 
-// Matcher for CollectionViewSwitchCell.
-id<GREYMatcher> CollectionViewSwitchCell(NSString* accessibilityIdentifier,
-                                         BOOL isToggledOn,
-                                         BOOL isEnabled);
+// Matcher for SettingsSwitchCell.
+id<GREYMatcher> SettingsSwitchCell(NSString* accessibilityIdentifier,
+                                   BOOL isToggledOn,
+                                   BOOL isEnabled);
 
 // Matcher for SyncSwitchCell.
 id<GREYMatcher> SyncSwitchCell(NSString* accessibilityLabel, BOOL isToggledOn);
@@ -89,6 +104,9 @@ id<GREYMatcher> OpenLinkInNewTabButton();
 
 // Matcher for the done button on the navigation bar.
 id<GREYMatcher> NavigationBarDoneButton();
+
+// Matcher for the done button on the Bookmarks navigation bar.
+id<GREYMatcher> BookmarksNavigationBarDoneButton();
 
 // Returns matcher for the account consistency setup signin button.
 id<GREYMatcher> AccountConsistencySetupSigninButton();
@@ -105,8 +123,14 @@ id<GREYMatcher> SignOutAccountsButton();
 // Returns matcher for the clear browsing data collection view.
 id<GREYMatcher> ClearBrowsingDataCollectionView();
 
+// Matcher for the clear browsing data action sheet item.
+id<GREYMatcher> ConfirmClearBrowsingDataButton();
+
 // Returns matcher for the settings button in the tools menu.
 id<GREYMatcher> SettingsMenuButton();
+
+// Returns matcher for the "Done" button in the settings' navigation bar.
+id<GREYMatcher> SettingsDoneButton();
 
 // Returns matcher for the tools menu table view.
 id<GREYMatcher> ToolsMenuView();
@@ -144,6 +168,10 @@ id<GREYMatcher> AccountsSyncButton();
 
 // Returns matcher for the Content Settings button on the main Settings screen.
 id<GREYMatcher> ContentSettingsButton();
+
+// Returns matcher for the Google Services Settings button on the main Settings
+// screen.
+id<GREYMatcher> GoogleServicesSettingsButton();
 
 // Returns matcher for the back button on a settings menu.
 id<GREYMatcher> SettingsMenuBackButton();
@@ -197,6 +225,15 @@ id<GREYMatcher> BookmarksMenuButton();
 
 // Returns matcher for the recent tabs button on the Tools menu.
 id<GREYMatcher> RecentTabsMenuButton();
+
+// Returns matcher for the system selection callout.
+id<GREYMatcher> SystemSelectionCallout();
+
+// Returns matcher for the copy button on the system selection callout.
+id<GREYMatcher> SystemSelectionCalloutCopyButton();
+
+// Returns matcher for the Copy item on the context menu.
+id<GREYMatcher> ContextMenuCopyButton();
 
 }  // namespace chrome_test_util
 

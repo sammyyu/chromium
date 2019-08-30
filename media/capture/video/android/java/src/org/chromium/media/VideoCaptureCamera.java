@@ -146,8 +146,7 @@ public class VideoCaptureCamera
 
             synchronized (mPhotoTakenCallbackLock) {
                 if (mPhotoTakenCallbackId == 0) return;
-                nativeOnPhotoTaken(
-                        mNativeVideoCaptureDeviceAndroid, mPhotoTakenCallbackId, new byte[0]);
+                notifyTakePhotoError(mPhotoTakenCallbackId);
                 mPhotoTakenCallbackId = 0;
             }
         }
@@ -186,6 +185,22 @@ public class VideoCaptureCamera
             return VideoCaptureApi.UNKNOWN;
         }
         return VideoCaptureApi.ANDROID_API1;
+    }
+
+    static int getFacingMode(int id) {
+        android.hardware.Camera.CameraInfo cameraInfo = VideoCaptureCamera.getCameraInfo(id);
+        if (cameraInfo == null) {
+            return VideoFacingMode.MEDIA_VIDEO_FACING_NONE;
+        }
+
+        switch (cameraInfo.facing) {
+            case android.hardware.Camera.CameraInfo.CAMERA_FACING_FRONT:
+                return VideoFacingMode.MEDIA_VIDEO_FACING_USER;
+            case android.hardware.Camera.CameraInfo.CAMERA_FACING_BACK:
+                return VideoFacingMode.MEDIA_VIDEO_FACING_ENVIRONMENT;
+            default:
+                return VideoFacingMode.MEDIA_VIDEO_FACING_NONE;
+        }
     }
 
     static String getName(int id) {
@@ -409,9 +424,9 @@ public class VideoCaptureCamera
     }
 
     @Override
-    public boolean startCapture() {
+    public boolean startCaptureMaybeAsync() {
         if (mCamera == null) {
-            Log.e(TAG, "startCapture: mCamera is null");
+            Log.e(TAG, "startCaptureAsync: mCamera is null");
             return false;
         }
 
@@ -428,7 +443,7 @@ public class VideoCaptureCamera
         try {
             mCamera.startPreview();
         } catch (RuntimeException ex) {
-            Log.e(TAG, "startCapture: Camera.startPreview: " + ex);
+            Log.e(TAG, "startCaptureAsync: Camera.startPreview: " + ex);
             return false;
         }
 
@@ -443,9 +458,9 @@ public class VideoCaptureCamera
     }
 
     @Override
-    public boolean stopCapture() {
+    public boolean stopCaptureAndBlockUntilStopped() {
         if (mCamera == null) {
-            Log.e(TAG, "stopCapture: mCamera is null");
+            Log.e(TAG, "stopCaptureAndBlockUntilStopped: mCamera is null");
             return true;
         }
 
@@ -465,7 +480,7 @@ public class VideoCaptureCamera
     }
 
     @Override
-    public PhotoCapabilities getPhotoCapabilities() {
+    public void getPhotoCapabilitiesAsync(long callbackId) {
         final android.hardware.Camera.Parameters parameters = getCameraParameters(mCamera);
         PhotoCapabilities.Builder builder = new PhotoCapabilities.Builder();
         Log.i(TAG, " CAM params: %s", parameters.flatten());
@@ -618,7 +633,8 @@ public class VideoCaptureCamera
             builder.setFillLightModes(integerArrayListToArray(modes));
         }
 
-        return builder.build();
+        nativeOnGetPhotoCapabilitiesReply(
+                mNativeVideoCaptureDeviceAndroid, callbackId, builder.build());
     }
 
     @Override
@@ -760,15 +776,19 @@ public class VideoCaptureCamera
     }
 
     @Override
-    public boolean takePhoto(final long callbackId) {
+    public void takePhotoAsync(final long callbackId) {
         if (mCamera == null || !mIsRunning) {
-            Log.e(TAG, "takePhoto: mCamera is null or is not running");
-            return false;
+            Log.e(TAG, "takePhotoAsync: mCamera is null or is not running");
+            notifyTakePhotoError(callbackId);
+            return;
         }
 
         // Only one picture can be taken at once.
         synchronized (mPhotoTakenCallbackLock) {
-            if (mPhotoTakenCallbackId != 0) return false;
+            if (mPhotoTakenCallbackId != 0) {
+                notifyTakePhotoError(callbackId);
+                return;
+            }
             mPhotoTakenCallbackId = callbackId;
         }
         mPreviewParameters = getCameraParameters(mCamera);
@@ -801,18 +821,18 @@ public class VideoCaptureCamera
             mCamera.setParameters(photoParameters);
         } catch (RuntimeException ex) {
             Log.e(TAG, "setParameters " + ex);
-            return false;
+            notifyTakePhotoError(callbackId);
+            return;
         }
 
         mCamera.takePicture(null, null, null, new CrPictureCallback());
-        return true;
     }
 
     @Override
     public void deallocate() {
         if (mCamera == null) return;
 
-        stopCapture();
+        stopCaptureAndBlockUntilStopped();
         try {
             mCamera.setPreviewTexture(null);
             if (mGlTextures != null) GLES20.glDeleteTextures(1, mGlTextures, 0);

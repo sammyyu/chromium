@@ -8,8 +8,6 @@
 #include "chrome/browser/extensions/extension_apitest.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
-#include "chrome/common/chrome_switches.h"
-#include "chrome/test/base/test_switches.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/navigation_handle.h"
 #include "content/public/browser/notification_service.h"
@@ -17,21 +15,14 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/test/browser_test_utils.h"
-#include "extensions/common/switches.h"
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "url/gurl.h"
 
-class ExtensionResourceRequestPolicyTest : public ExtensionApiTest {
+class ExtensionResourceRequestPolicyTest : public extensions::ExtensionApiTest {
  protected:
-  void SetUpCommandLine(base::CommandLine* command_line) override {
-    ExtensionApiTest::SetUpCommandLine(command_line);
-    command_line->AppendSwitch(
-        extensions::switches::kAllowLegacyExtensionManifests);
-  }
-
   void SetUpOnMainThread() override {
-    ExtensionApiTest::SetUpOnMainThread();
+    extensions::ExtensionApiTest::SetUpOnMainThread();
     host_resolver()->AddRule("*", "127.0.0.1");
     ASSERT_TRUE(embedded_test_server()->Start());
   }
@@ -41,11 +32,9 @@ class ExtensionResourceRequestPolicyTest : public ExtensionApiTest {
 // extension_resource_request_policy.*, but we have it as a browser test so that
 // can make sure it works end-to-end.
 IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest, OriginPrivileges) {
-  ASSERT_TRUE(LoadExtensionWithFlags(test_data_dir_
-      .AppendASCII("extension_resource_request_policy")
-      .AppendASCII("extension"),
-      // Tests manifest_version 1 behavior, so warnings are expected.
-      ExtensionBrowserTest::kFlagIgnoreManifestWarnings));
+  ASSERT_TRUE(LoadExtension(
+      test_data_dir_.AppendASCII("extension_resource_request_policy")
+          .AppendASCII("extension")));
 
   GURL web_resource(embedded_test_server()->GetURL(
       "/extensions/api_test/extension_resource_request_policy/"
@@ -98,11 +87,9 @@ IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest, OriginPrivileges) {
 
   // A different extension. Legacy (manifest_version 1) extensions should always
   // be able to load each other's resources.
-  ASSERT_TRUE(LoadExtensionWithFlags(test_data_dir_
-      .AppendASCII("extension_resource_request_policy")
-      .AppendASCII("extension2"),
-      // Tests manifest_version 1 behavior, so warnings are expected.
-      ExtensionBrowserTest::kFlagIgnoreManifestWarnings));
+  ASSERT_TRUE(LoadExtension(
+      test_data_dir_.AppendASCII("extension_resource_request_policy")
+          .AppendASCII("extension2")));
   ui_test_utils::NavigateToURL(
       browser(),
       GURL("chrome-extension://pbkkcbgdkliohhfaeefcijaghglkahja/index.html"));
@@ -115,25 +102,20 @@ IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest, OriginPrivileges) {
 
 IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest,
                        ExtensionCanLoadHostedAppIcons) {
-  ASSERT_TRUE(LoadExtensionWithFlags(test_data_dir_
-      .AppendASCII("extension_resource_request_policy")
-      .AppendASCII("extension"),
-      // Tests manifest_version 1 behavior, so warnings are expected.
-      ExtensionBrowserTest::kFlagIgnoreManifestWarnings));
+  ASSERT_TRUE(LoadExtension(
+      test_data_dir_.AppendASCII("extension_resource_request_policy")
+          .AppendASCII("hosted_app")));
 
-  ASSERT_TRUE(RunExtensionSubtest(
-      "extension_resource_request_policy/extension2/",
-      "can_load_icons_from_hosted_apps.html",
-      // Tests manifest_version 1 behavior, so warnings are expected.
-      ExtensionApiTest::kFlagIgnoreManifestWarnings)) << message_;
+  ASSERT_TRUE(
+      RunExtensionSubtest("extension_resource_request_policy/extension2/",
+                          "can_load_icons_from_hosted_apps.html"))
+      << message_;
 }
 
 IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest, Audio) {
   EXPECT_TRUE(RunExtensionSubtest(
-      "extension_resource_request_policy/extension2",
-      "audio.html",
-      // Tests manifest_version 1 behavior, so warnings are expected.
-      ExtensionApiTest::kFlagIgnoreManifestWarnings)) << message_;
+      "extension_resource_request_policy/extension2", "audio.html"))
+      << message_;
 }
 
 #if defined(OS_MACOSX) || defined(OS_WIN)
@@ -145,10 +127,8 @@ IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest, Audio) {
 
 IN_PROC_BROWSER_TEST_F(ExtensionResourceRequestPolicyTest, MAYBE_Video) {
   EXPECT_TRUE(RunExtensionSubtest(
-      "extension_resource_request_policy/extension2",
-      "video.html",
-      // Tests manifest_version 1 behavior, so warnings are expected.
-      ExtensionApiTest::kFlagIgnoreManifestWarnings)) << message_;
+      "extension_resource_request_policy/extension2", "video.html"))
+      << message_;
 }
 
 // This test times out regularly on win_rel trybots. See http://crbug.com/122154

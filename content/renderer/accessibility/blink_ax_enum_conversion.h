@@ -7,7 +7,7 @@
 
 #include <stdint.h>
 
-#include "third_party/WebKit/public/web/WebAXObject.h"
+#include "third_party/blink/public/web/web_ax_object.h"
 #include "ui/accessibility/ax_enums.mojom.h"
 #include "ui/accessibility/ax_node_data.h"
 
@@ -34,10 +34,15 @@ ax::mojom::MarkerType AXMarkerTypeFromBlink(blink::WebAXMarkerType marker_type);
 ax::mojom::TextDirection AXTextDirectionFromBlink(
     blink::WebAXTextDirection text_direction);
 
+ax::mojom::TextPosition AXTextPositionFromBlink(
+    blink::WebAXTextPosition text_position);
+
 ax::mojom::TextStyle AXTextStyleFromBlink(blink::WebAXTextStyle text_style);
 
 ax::mojom::AriaCurrentState AXAriaCurrentStateFromBlink(
     blink::WebAXAriaCurrentState aria_current_state);
+
+ax::mojom::HasPopup AXHasPopupFromBlink(blink::WebAXHasPopup has_popup);
 
 ax::mojom::InvalidState AXInvalidStateFromBlink(
     blink::WebAXInvalidState invalid_state);

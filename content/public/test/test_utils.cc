@@ -12,6 +12,7 @@
 #include "base/location.h"
 #include "base/macros.h"
 #include "base/message_loop/message_loop.h"
+#include "base/message_loop/message_loop_current.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/utf_string_conversions.h"
@@ -28,6 +29,7 @@
 #include "content/public/browser/notification_service.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
+#include "content/public/browser/site_isolation_policy.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/common/process_type.h"
@@ -122,8 +124,7 @@ void RunMessageLoop() {
 }
 
 void RunThisRunLoop(base::RunLoop* run_loop) {
-  base::MessageLoop::ScopedNestableTaskAllower allow(
-      base::MessageLoop::current());
+  base::MessageLoopCurrent::ScopedNestableTaskAllower allow;
   run_loop->Run();
 }
 
@@ -162,14 +163,14 @@ void RunAllTasksUntilIdle() {
     // current loop iteration and loop in case the MessageLoop posts tasks to
     // the Task Scheduler after the initial flush.
     TaskObserver task_observer;
-    base::MessageLoop::current()->AddTaskObserver(&task_observer);
+    base::MessageLoopCurrent::Get()->AddTaskObserver(&task_observer);
 
     base::RunLoop run_loop;
     base::TaskScheduler::GetInstance()->FlushAsyncForTesting(
         run_loop.QuitWhenIdleClosure());
     run_loop.Run();
 
-    base::MessageLoop::current()->RemoveTaskObserver(&task_observer);
+    base::MessageLoopCurrent::Get()->RemoveTaskObserver(&task_observer);
 
     if (!task_observer.processed())
       break;
@@ -194,8 +195,7 @@ std::unique_ptr<base::Value> ExecuteScriptAndGetValue(
 }
 
 bool AreAllSitesIsolatedForTesting() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      switches::kSitePerProcess);
+  return SiteIsolationPolicy::UseDedicatedProcessesForAllSites();
 }
 
 void IsolateAllSitesForTesting(base::CommandLine* command_line) {
@@ -233,15 +233,10 @@ namespace {
 // supplying a BrowserPluginGuestDelegate; however, the oopif architecture
 // doesn't really require it. Refactor this so that we can create an inner
 // contents without any of the guest machinery.
-class InnerWebContentsHelper : public WebContentsObserver,
-                               public BrowserPluginGuestDelegate {
+class InnerWebContentsHelper : public WebContentsObserver {
  public:
-  explicit InnerWebContentsHelper(WebContents* outer_contents)
-      : WebContentsObserver(), outer_contents_(outer_contents) {}
+  explicit InnerWebContentsHelper() : WebContentsObserver() {}
   ~InnerWebContentsHelper() override = default;
-
-  // BrowserPluginGuestDelegate:
-  WebContents* GetOwnerWebContents() const override { return outer_contents_; }
 
   // WebContentsObserver:
   void WebContentsDestroyed() override { delete this; }
@@ -251,7 +246,6 @@ class InnerWebContentsHelper : public WebContentsObserver,
   }
 
  private:
-  WebContents* outer_contents_;
   DISALLOW_COPY_AND_ASSIGN(InnerWebContentsHelper);
 };
 
@@ -263,12 +257,13 @@ WebContents* CreateAndAttachInnerContents(RenderFrameHost* rfh) {
   if (!outer_contents)
     return nullptr;
 
-  auto guest_delegate =
-      std::make_unique<InnerWebContentsHelper>(outer_contents);
+  auto guest_delegate = std::make_unique<InnerWebContentsHelper>();
 
   WebContents::CreateParams inner_params(outer_contents->GetBrowserContext());
-  inner_params.guest_delegate = guest_delegate.get();
-  WebContents* inner_contents = WebContents::Create(inner_params);
+
+  // TODO(erikchen): Fix ownership semantics for guest views.
+  // https://crbug.com/832879.
+  WebContents* inner_contents = WebContents::Create(inner_params).release();
 
   // Attach. |inner_contents| becomes owned by |outer_contents|.
   inner_contents->AttachToOuterWebContentsFrame(outer_contents, rfh);
@@ -393,8 +388,8 @@ InProcessUtilityThreadHelper::InProcessUtilityThreadHelper()
 
 InProcessUtilityThreadHelper::~InProcessUtilityThreadHelper() {
   if (child_thread_count_) {
-    DCHECK(BrowserThread::IsMessageLoopValid(BrowserThread::UI));
-    DCHECK(BrowserThread::IsMessageLoopValid(BrowserThread::IO));
+    DCHECK(BrowserThread::IsThreadInitialized(BrowserThread::UI));
+    DCHECK(BrowserThread::IsThreadInitialized(BrowserThread::IO));
     run_loop_.reset(new base::RunLoop);
     run_loop_->Run();
   }
@@ -463,6 +458,28 @@ void WebContentsDestroyedWatcher::Wait() {
 
 void WebContentsDestroyedWatcher::WebContentsDestroyed() {
   run_loop_.Quit();
+}
+
+TestPageScaleObserver::TestPageScaleObserver(WebContents* web_contents)
+    : WebContentsObserver(web_contents) {}
+
+TestPageScaleObserver::~TestPageScaleObserver() {}
+
+void TestPageScaleObserver::OnPageScaleFactorChanged(float page_scale_factor) {
+  last_scale_ = page_scale_factor;
+  seen_page_scale_change_ = true;
+  if (done_callback_)
+    std::move(done_callback_).Run();
+}
+
+float TestPageScaleObserver::WaitForPageScaleUpdate() {
+  if (!seen_page_scale_change_) {
+    base::RunLoop run_loop;
+    done_callback_ = run_loop.QuitClosure();
+    run_loop.Run();
+  }
+  seen_page_scale_change_ = false;
+  return last_scale_;
 }
 
 GURL EffectiveURLContentBrowserClient::GetEffectiveURL(

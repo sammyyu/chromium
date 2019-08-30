@@ -4,7 +4,6 @@
 
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate_factory.h"
 
-#include "base/memory/ptr_util.h"
 #include "base/memory/singleton.h"
 #include "chrome/browser/autofill/personal_data_manager_factory.h"
 #include "chrome/browser/browsing_data/chrome_browsing_data_remover_delegate.h"
@@ -95,8 +94,5 @@ ChromeBrowsingDataRemoverDelegateFactory::GetBrowserContextToUse(
 
 KeyedService* ChromeBrowsingDataRemoverDelegateFactory::BuildServiceInstanceFor(
     content::BrowserContext* context) const {
-  Profile* profile = Profile::FromBrowserContext(context);
-  auto* history_service = HistoryServiceFactory::GetForProfile(
-      profile, ServiceAccessType::EXPLICIT_ACCESS);
-  return new ChromeBrowsingDataRemoverDelegate(context, history_service);
+  return new ChromeBrowsingDataRemoverDelegate(context);
 }

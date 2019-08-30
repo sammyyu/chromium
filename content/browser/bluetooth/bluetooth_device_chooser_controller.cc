@@ -10,7 +10,6 @@
 
 #include "base/bind.h"
 #include "base/bind_helpers.h"
-#include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
@@ -282,8 +281,7 @@ BluetoothDeviceChooserController::BluetoothDeviceChooserController(
           base::Bind(&BluetoothDeviceChooserController::StopDeviceDiscovery,
                      // base::Timer guarantees it won't call back after its
                      // destructor starts.
-                     base::Unretained(this)),
-          /*is_repeating=*/false),
+                     base::Unretained(this))),
       weak_ptr_factory_(this) {
   CHECK(adapter_);
 }
@@ -391,7 +389,7 @@ void BluetoothDeviceChooserController::GetDevice(
 
   if (WebContentsDelegate* delegate = web_contents_->GetDelegate()) {
     chooser_ = delegate->RunBluetoothChooser(render_frame_host_,
-                                             chooser_event_handler);
+                                             std::move(chooser_event_handler));
   }
 
   if (!chooser_.get()) {

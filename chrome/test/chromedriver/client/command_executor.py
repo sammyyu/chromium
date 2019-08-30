@@ -4,9 +4,6 @@
 
 import httplib
 import json
-import socket
-import subprocess
-import sys
 
 
 class _Method(object):
@@ -62,6 +59,8 @@ class Command(object):
   HOVER_OVER_ELEMENT = (_Method.POST, '/session/:sessionId/element/:id/hover')
   GET_ELEMENT_LOCATION = (
       _Method.GET, '/session/:sessionId/element/:id/location')
+  GET_ELEMENT_RECT = (
+      _Method.GET, '/session/:sessionId/element/:id/rect')
   GET_ELEMENT_LOCATION_ONCE_SCROLLED_INTO_VIEW = (
       _Method.GET, '/session/:sessionId/element/:id/location_in_view')
   GET_ELEMENT_SIZE = (_Method.GET, '/session/:sessionId/element/:id/size')
@@ -90,6 +89,8 @@ class Command(object):
       _Method.POST, '/session/:sessionId/window/rect')
   MAXIMIZE_WINDOW = (
       _Method.POST, '/session/:sessionId/window/:windowHandle/maximize')
+  MINIMIZE_WINDOW = (
+      _Method.POST, '/session/:sessionId/window/:windowHandle/minimize')
   FULLSCREEN_WINDOW = (
       _Method.POST, '/session/:sessionId/window/fullscreen')
   CLOSE = (_Method.DELETE, '/session/:sessionId/window')
@@ -192,13 +193,8 @@ class CommandExecutor(object):
     body = None
     if command[0] == _Method.POST:
       body = json.dumps(params)
-    try:
-      self._http_client.request(command[0], '/'.join(substituted_parts), body)
-      response = self._http_client.getresponse()
-    except socket.timeout:
-      if sys.platform == 'linux2' or sys.platform == 'darwin':
-        subprocess.call(['ps', 'alx'])
-      raise
+    self._http_client.request(command[0], '/'.join(substituted_parts), body)
+    response = self._http_client.getresponse()
 
     if response.status == 303:
       self._http_client.request(_Method.GET, response.getheader('location'))

@@ -18,6 +18,7 @@
 #include "chrome/browser/browser_process.h"
 #include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/defaults.h"
+#include "chrome/browser/devtools/devtools_window.h"
 #include "chrome/browser/extensions/extension_service.h"
 #include "chrome/browser/extensions/extension_util.h"
 #include "chrome/browser/lifetime/application_lifetime.h"
@@ -34,6 +35,7 @@
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/browser_window.h"
 #include "chrome/browser/ui/chrome_pages.h"
+#include "chrome/browser/ui/extensions/application_launch.h"
 #include "chrome/browser/ui/extensions/hosted_app_browser_controller.h"
 #include "chrome/browser/ui/page_info/page_info_dialog.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -57,7 +59,7 @@
 #include "content/public/common/service_manager_connection.h"
 #include "content/public/common/url_constants.h"
 #include "extensions/browser/extension_system.h"
-#include "printing/features/features.h"
+#include "printing/buildflags/buildflags.h"
 #include "ui/events/keycodes/keyboard_codes.h"
 
 #if defined(OS_MACOSX)
@@ -111,7 +113,7 @@ BrowserCommandController::BrowserCommandController(Browser* browser)
 
   profile_pref_registrar_.Init(profile()->GetPrefs());
   profile_pref_registrar_.Add(
-      prefs::kDevToolsDisabled,
+      prefs::kDevToolsAvailability,
       base::Bind(&BrowserCommandController::UpdateCommandsForDevTools,
                  base::Unretained(this)));
   profile_pref_registrar_.Add(
@@ -401,6 +403,10 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_FULLSCREEN:
       chrome::ToggleFullscreenMode(browser_);
       break;
+    case IDC_OPEN_IN_PWA_WINDOW:
+      base::RecordAction(base::UserMetricsAction("OpenActiveTabInPwaWindow"));
+      ReparentSecureActiveTabIntoPwaWindow(browser_);
+      break;
 
 #if defined(OS_CHROMEOS)
     case IDC_VISIT_DESKTOP_OF_LRU_USER_2:
@@ -475,15 +481,18 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
       Print(browser_);
       break;
 
-#if BUILDFLAG(ENABLE_BASIC_PRINTING)
+#if BUILDFLAG(ENABLE_PRINTING)
     case IDC_BASIC_PRINT:
       base::RecordAction(base::UserMetricsAction("Accel_Advanced_Print"));
       BasicPrint(browser_);
       break;
-#endif  // ENABLE_BASIC_PRINTING
+#endif  // ENABLE_PRINTING
 
     case IDC_SAVE_CREDIT_CARD_FOR_PAGE:
       SaveCreditCard(browser_);
+      break;
+    case IDC_MIGRATE_LOCAL_CREDIT_CARD_FOR_PAGE:
+      MigrateLocalCards(browser_);
       break;
     case IDC_TRANSLATE_PAGE:
       Translate(browser_);
@@ -636,9 +645,6 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
     case IDC_UPGRADE_DIALOG:
       OpenUpdateChromeDialog(browser_);
       break;
-    case IDC_VIEW_INCOMPATIBILITIES:
-      ShowConflicts(browser_);
-      break;
     case IDC_HELP_PAGE_VIA_KEYBOARD:
       ShowHelp(browser_, HELP_SOURCE_KEYBOARD);
       break;
@@ -681,6 +687,11 @@ bool BrowserCommandController::ExecuteCommandWithDisposition(
       ShowPageInfoDialog(browser_->tab_strip_model()->GetActiveWebContents(),
                          bubble_anchor_util::kAppMenuButton);
       break;
+#if defined(OS_WIN) || (defined(OS_LINUX) && !defined(OS_CHROMEOS))
+    case IDC_TOGGLE_CONFIRM_TO_QUIT_OPTION:
+      ToggleConfirmToQuitOption(browser_);
+      break;
+#endif
 
     default:
       LOG(WARNING) << "Received Unimplemented Command: " << id;
@@ -731,7 +742,9 @@ void BrowserCommandController::TabInsertedAt(TabStripModel* tab_strip_model,
   AddInterstitialObservers(contents);
 }
 
-void BrowserCommandController::TabDetachedAt(WebContents* contents, int index) {
+void BrowserCommandController::TabDetachedAt(WebContents* contents,
+                                             int index,
+                                             bool was_active) {
   RemoveInterstitialObservers(contents);
 }
 
@@ -833,6 +846,7 @@ void BrowserCommandController::InitCommandState() {
   command_updater_.UpdateCommandEnabled(IDC_RESTORE_WINDOW, true);
   command_updater_.UpdateCommandEnabled(IDC_USE_SYSTEM_TITLE_BAR, true);
 #endif
+  command_updater_.UpdateCommandEnabled(IDC_OPEN_IN_PWA_WINDOW, true);
 
   // Page-related commands
   command_updater_.UpdateCommandEnabled(IDC_EMAIL_PAGE_LOCATION, true);
@@ -865,6 +879,8 @@ void BrowserCommandController::InitCommandState() {
                                         !profile()->IsOffTheRecord());
   command_updater_.UpdateCommandEnabled(IDC_CLEAR_BROWSING_DATA,
                                         !guest_session);
+  command_updater_.UpdateCommandEnabled(IDC_TOGGLE_CONFIRM_TO_QUIT_OPTION,
+                                        true);
 #if defined(OS_CHROMEOS)
   command_updater_.UpdateCommandEnabled(IDC_TAKE_SCREENSHOT, true);
 #else
@@ -913,7 +929,6 @@ void BrowserCommandController::InitCommandState() {
 
   // These are always enabled; the menu determines their menu item visibility.
   command_updater_.UpdateCommandEnabled(IDC_UPGRADE_DIALOG, true);
-  command_updater_.UpdateCommandEnabled(IDC_VIEW_INCOMPATIBILITIES, true);
 
   // Distill current page.
   command_updater_.UpdateCommandEnabled(
@@ -951,7 +966,7 @@ void BrowserCommandController::UpdateSharedCommandsForIncognitoAvailability(
   command_updater->UpdateCommandEnabled(
       IDC_SHOW_BOOKMARK_MANAGER,
       browser_defaults::bookmarks_enabled && !forced_incognito);
-  ExtensionService* extension_service =
+  extensions::ExtensionService* extension_service =
       extensions::ExtensionSystem::Get(profile)->extension_service();
   const bool enable_extensions =
       extension_service && extension_service->extensions_enabled();
@@ -1018,6 +1033,8 @@ void BrowserCommandController::UpdateCommandsForTabState() {
 
   command_updater_.UpdateCommandEnabled(IDC_CREATE_HOSTED_APP,
                                         CanCreateBookmarkApp(browser_));
+  command_updater_.UpdateCommandEnabled(IDC_OPEN_IN_PWA_WINDOW,
+                                        CanCreateBookmarkApp(browser_));
 
   command_updater_.UpdateCommandEnabled(
       IDC_TOGGLE_REQUEST_TABLET_SITE,
@@ -1061,8 +1078,8 @@ void BrowserCommandController::UpdateCommandsForDevTools() {
   if (is_locked_fullscreen_)
     return;
 
-  bool dev_tools_enabled =
-      !profile()->GetPrefs()->GetBoolean(prefs::kDevToolsDisabled);
+  bool dev_tools_enabled = DevToolsWindow::AllowDevToolsFor(
+      profile(), browser_->tab_strip_model()->GetActiveWebContents());
   command_updater_.UpdateCommandEnabled(IDC_DEV_TOOLS,
                                         dev_tools_enabled);
   command_updater_.UpdateCommandEnabled(IDC_DEV_TOOLS_CONSOLE,
@@ -1173,6 +1190,20 @@ void BrowserCommandController::UpdateCommandsForFullscreenMode() {
 
   UpdateCommandsForBookmarkBar();
   UpdateCommandsForIncognitoAvailability();
+  UpdateCommandsForHostedAppAvailability();
+}
+
+void BrowserCommandController::UpdateCommandsForHostedAppAvailability() {
+  bool has_toolbar =
+      browser_->is_type_tabbed() ||
+      extensions::HostedAppBrowserController::IsForExperimentalHostedAppBrowser(
+          browser_);
+  if (window() && window()->ShouldHideUIForFullscreen())
+    has_toolbar = false;
+  command_updater_.UpdateCommandEnabled(IDC_FOCUS_TOOLBAR, has_toolbar);
+  command_updater_.UpdateCommandEnabled(IDC_FOCUS_NEXT_PANE, has_toolbar);
+  command_updater_.UpdateCommandEnabled(IDC_FOCUS_PREVIOUS_PANE, has_toolbar);
+  command_updater_.UpdateCommandEnabled(IDC_SHOW_APP_MENU, has_toolbar);
 }
 
 #if defined(OS_CHROMEOS)
@@ -1237,10 +1268,10 @@ void BrowserCommandController::UpdatePrintingState() {
 
   bool print_enabled = CanPrint(browser_);
   command_updater_.UpdateCommandEnabled(IDC_PRINT, print_enabled);
-#if BUILDFLAG(ENABLE_BASIC_PRINTING)
+#if BUILDFLAG(ENABLE_PRINTING)
   command_updater_.UpdateCommandEnabled(IDC_BASIC_PRINT,
                                         CanBasicPrint(browser_));
-#endif  // ENABLE_BASIC_PRINTING
+#endif
 }
 
 void BrowserCommandController::UpdateSaveAsState() {

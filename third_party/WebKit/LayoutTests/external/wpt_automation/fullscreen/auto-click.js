@@ -30,7 +30,8 @@ const observer = new MutationObserver(mutations => {
       if (node.localName == 'button')
         click(node);
       else if (node.localName == 'iframe')
-        observe(node.contentDocument);
+        if (node.contentDocument)
+          observe(node.contentDocument);
     }
   }
 });
@@ -39,25 +40,26 @@ function observe(target) {
   observer.observe(target, { childList: true, subtree: true });
 }
 
-// Handle what's already in the document.
+// Handle what's already in the document and subframes.
 for (const button of document.getElementsByTagName('button')) {
   click(button);
 }
 for (const iframe of document.getElementsByTagName('iframe')) {
-  try {
-    observe(iframe.contentDocument);
-    iframe.addEventListener('load', () => {
-      observe(iframe.contentDocument);
-    });
-  } catch (e) {
-    // Skip cross-origin iframes, but report other errors
-    if (e.name != "SecurityError") {
-        throw e;
-    }
-  }
+  if (!iframe.contentDocument)
+    continue;
+  for (const button of iframe.contentDocument.getElementsByTagName('button'))
+    click(button);
 }
 
-// Observe future changes.
+// Observe future changes in the document and subframes.
 observe(document);
+for (const iframe of document.getElementsByTagName('iframe')) {
+  if (iframe.contentDocument)
+    observe(iframe.contentDocument);
+  iframe.addEventListener('load', () => {
+    if (iframe.contentDocument)
+      observe(iframe.contentDocument);
+  });
+}
 
 })();

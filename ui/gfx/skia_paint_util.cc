@@ -4,7 +4,6 @@
 
 #include "ui/gfx/skia_paint_util.h"
 
-#include "base/memory/ptr_util.h"
 #include "cc/paint/paint_image_builder.h"
 #include "third_party/skia/include/core/SkColorFilter.h"
 #include "third_party/skia/include/core/SkMaskFilter.h"
@@ -38,13 +37,8 @@ sk_sp<cc::PaintShader> CreateImageRepShaderForScale(
   shader_scale.setScaleX(local_matrix.getScaleX() / scale);
   shader_scale.setScaleY(local_matrix.getScaleY() / scale);
 
-  return cc::PaintShader::MakeImage(
-      cc::PaintImageBuilder::WithDefault()
-          .set_id(cc::PaintImage::GetNextId())
-          .set_image(SkImage::MakeFromBitmap(image_rep.sk_bitmap()),
-                     cc::PaintImage::GetNextContentId())
-          .TakePaintImage(),
-      tile_mode, tile_mode, &shader_scale);
+  return cc::PaintShader::MakeImage(image_rep.paint_image(), tile_mode,
+                                    tile_mode, &shader_scale);
 }
 
 sk_sp<cc::PaintShader> CreateGradientShader(int start_point,

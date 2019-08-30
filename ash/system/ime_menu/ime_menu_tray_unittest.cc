@@ -7,6 +7,7 @@
 #include "ash/accelerators/accelerator_controller.h"
 #include "ash/accessibility/accessibility_controller.h"
 #include "ash/ime/ime_controller.h"
+#include "ash/ime/test_ime_controller_client.h"
 #include "ash/public/interfaces/ime_info.mojom.h"
 #include "ash/shell.h"
 #include "ash/system/ime_menu/ime_list_view.h"
@@ -16,16 +17,12 @@
 #include "base/run_loop.h"
 #include "base/strings/utf_string_conversions.h"
 #include "ui/accessibility/ax_node_data.h"
-#include "ui/base/ime/chromeos/input_method_manager.h"
-#include "ui/base/ime/chromeos/mock_input_method_manager.h"
 #include "ui/base/ime/ime_bridge.h"
 #include "ui/base/ime/text_input_flags.h"
 #include "ui/events/event.h"
 #include "ui/views/controls/label.h"
 
 using base::UTF8ToUTF16;
-using chromeos::input_method::InputMethodManager;
-using chromeos::input_method::MockInputMethodManager;
 
 namespace ash {
 namespace {
@@ -52,18 +49,6 @@ class ImeMenuTrayTest : public AshTestBase {
  public:
   ImeMenuTrayTest() = default;
   ~ImeMenuTrayTest() override = default;
-
-  void SetUp() override {
-    AshTestBase::SetUp();
-    // MockInputMethodManager enables emoji, handwriting and voice input by
-    // default.
-    InputMethodManager::Initialize(new MockInputMethodManager);
-  }
-
-  void TearDown() override {
-    InputMethodManager::Shutdown();
-    AshTestBase::TearDown();
-  }
 
  protected:
   // Returns true if the IME menu tray is visible.
@@ -120,7 +105,9 @@ class ImeMenuTrayTest : public AshTestBase {
   // Focuses in the given type of input context.
   void FocusInInputContext(ui::TextInputType input_type) {
     ui::IMEEngineHandlerInterface::InputContext input_context(
-        input_type, ui::TEXT_INPUT_MODE_DEFAULT, ui::TEXT_INPUT_FLAG_NONE);
+        input_type, ui::TEXT_INPUT_MODE_DEFAULT, ui::TEXT_INPUT_FLAG_NONE,
+        ui::TextInputClient::FOCUS_REASON_OTHER,
+        false /* should_do_learning */);
     ui::IMEBridge::Get()->SetCurrentInputContext(input_context);
   }
 
@@ -283,7 +270,7 @@ TEST_F(ImeMenuTrayTest, TestAccelerator) {
   EXPECT_FALSE(IsBubbleShown());
 }
 
-TEST_F(ImeMenuTrayTest, ShowEmojiKeyset) {
+TEST_F(ImeMenuTrayTest, ShowingEmojiKeysetHidesBubble) {
   Shell::Get()->ime_controller()->ShowImeMenuOnShelf(true);
   ASSERT_TRUE(IsVisible());
   ASSERT_FALSE(IsTrayBackgroundActive());
@@ -294,39 +281,13 @@ TEST_F(ImeMenuTrayTest, ShowEmojiKeyset) {
   EXPECT_TRUE(IsTrayBackgroundActive());
   EXPECT_TRUE(IsBubbleShown());
 
-  AccessibilityController* accessibility_controller =
-      Shell::Get()->accessibility_controller();
+  TestImeControllerClient client;
+  Shell::Get()->ime_controller()->SetClient(client.CreateInterfacePtr());
+  GetTray()->ShowKeyboardWithKeyset(
+      chromeos::input_method::mojom::ImeKeyset::kEmoji);
 
-  accessibility_controller->SetVirtualKeyboardEnabled(true);
-  EXPECT_TRUE(accessibility_controller->IsVirtualKeyboardEnabled());
-
-  GetTray()->ShowKeyboardWithKeyset("emoji");
   // The menu should be hidden.
   EXPECT_FALSE(IsBubbleShown());
-  // The virtual keyboard should be enabled.
-  EXPECT_TRUE(accessibility_controller->IsVirtualKeyboardEnabled());
-
-  // Hides the keyboard.
-  GetTray()->OnKeyboardHidden();
-  // The keyboard should still be enabled.
-  EXPECT_TRUE(accessibility_controller->IsVirtualKeyboardEnabled());
-}
-
-TEST_F(ImeMenuTrayTest, ForceToShowEmojiKeyset) {
-  AccessibilityController* accessibility_controller =
-      Shell::Get()->accessibility_controller();
-  accessibility_controller->SetVirtualKeyboardEnabled(false);
-  ASSERT_FALSE(accessibility_controller->IsVirtualKeyboardEnabled());
-
-  GetTray()->ShowKeyboardWithKeyset("emoji");
-  // The virtual keyboard should be enabled.
-  EXPECT_TRUE(accessibility_controller->IsVirtualKeyboardEnabled());
-
-  // Hides the keyboard.
-  GetTray()->OnKeyboardHidden();
-  // The keyboard should still be disabled, which is a posted task.
-  base::RunLoop().RunUntilIdle();
-  EXPECT_FALSE(accessibility_controller->IsVirtualKeyboardEnabled());
 }
 
 // Tests that tapping the emoji button does not crash. http://crbug.com/739630

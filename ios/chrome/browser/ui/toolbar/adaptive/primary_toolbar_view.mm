@@ -4,6 +4,7 @@
 
 #import "ios/chrome/browser/ui/toolbar/adaptive/primary_toolbar_view.h"
 
+#import "base/ios/ios_util.h"
 #include "base/logging.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_button.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_button_factory.h"
@@ -11,7 +12,9 @@
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_constants.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_tab_grid_button.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_tools_menu_button.h"
-#import "ios/chrome/browser/ui/util/constraints_ui_util.h"
+#import "ios/chrome/browser/ui/toolbar/public/features.h"
+#import "ios/chrome/browser/ui/uikit_ui_util.h"
+#import "ios/chrome/common/ui_util/constraints_ui_util.h"
 #import "ios/third_party/material_components_ios/src/components/ProgressView/src/MaterialProgressView.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
@@ -26,7 +29,7 @@
 @property(nonatomic, strong) UIView* contentView;
 
 // The blur visual effect view, redefined as readwrite.
-@property(nonatomic, strong, readwrite) UIVisualEffectView* blur;
+@property(nonatomic, strong, readwrite) UIView* blur;
 
 // Container for the location bar, redefined as readwrite.
 @property(nonatomic, strong, readwrite) UIView* locationBarContainer;
@@ -83,6 +86,7 @@
 @implementation PrimaryToolbarView
 
 @synthesize locationBarView = _locationBarView;
+@synthesize fakeOmniboxTarget = _fakeOmniboxTarget;
 @synthesize locationBarBottomConstraint = _locationBarBottomConstraint;
 @synthesize locationBarHeight = _locationBarHeight;
 @synthesize buttonFactory = _buttonFactory;
@@ -137,10 +141,34 @@
   [self setUpConstraints];
 }
 
+- (void)addFakeOmniboxTarget {
+  self.fakeOmniboxTarget = [[UIView alloc] init];
+  self.fakeOmniboxTarget.translatesAutoresizingMaskIntoConstraints = NO;
+  [self addSubview:self.fakeOmniboxTarget];
+  AddSameConstraints(self.locationBarContainer, self.fakeOmniboxTarget);
+}
+
+- (void)removeFakeOmniboxTarget {
+  [self.fakeOmniboxTarget removeFromSuperview];
+  self.fakeOmniboxTarget = nil;
+}
+
 #pragma mark - UIView
 
 - (CGSize)intrinsicContentSize {
   return CGSizeMake(UIViewNoIntrinsicMetric, kAdaptiveToolbarHeight);
+}
+
+- (void)traitCollectionDidChange:(UITraitCollection*)previousTraitCollection {
+  [super traitCollectionDidChange:previousTraitCollection];
+  if (IsRegularXRegularSizeClass(self)) {
+    self.backgroundColor =
+        self.buttonFactory.toolbarConfiguration.backgroundColor;
+    self.blur.alpha = 0;
+  } else {
+    self.backgroundColor = [UIColor clearColor];
+    self.blur.alpha = 1;
+  }
 }
 
 #pragma mark - Setup
@@ -148,7 +176,13 @@
 // Sets the blur effect on the toolbar background.
 - (void)setUpBlurredBackground {
   UIBlurEffect* blurEffect = self.buttonFactory.toolbarConfiguration.blurEffect;
-  self.blur = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
+  if (blurEffect) {
+    self.blur = [[UIVisualEffectView alloc] initWithEffect:blurEffect];
+  } else {
+    self.blur = [[UIView alloc] init];
+  }
+  self.blur.backgroundColor =
+      self.buttonFactory.toolbarConfiguration.blurBackgroundColor;
   [self addSubview:self.blur];
 
   self.contentView = self;
@@ -162,7 +196,6 @@
     vibrancyView.translatesAutoresizingMaskIntoConstraints = NO;
     AddSameConstraints(self, vibrancyView);
   }
-
 
   self.blur.translatesAutoresizingMaskIntoConstraints = NO;
   AddSameConstraints(self.blur, self);
@@ -200,14 +233,12 @@
 - (void)setUpLeadingStackView {
   self.backButton = [self.buttonFactory backButton];
   self.forwardButton = [self.buttonFactory forwardButton];
-  self.tabGridButton = [self.buttonFactory tabGridButton];
   self.stopButton = [self.buttonFactory stopButton];
   self.stopButton.hiddenInCurrentState = YES;
   self.reloadButton = [self.buttonFactory reloadButton];
 
   self.leadingStackViewButtons = @[
-    self.backButton, self.forwardButton, self.tabGridButton, self.stopButton,
-    self.reloadButton
+    self.backButton, self.forwardButton, self.stopButton, self.reloadButton
   ];
   self.leadingStackView = [[UIStackView alloc]
       initWithArrangedSubviews:self.leadingStackViewButtons];
@@ -224,10 +255,13 @@
 - (void)setUpTrailingStackView {
   self.shareButton = [self.buttonFactory shareButton];
   self.bookmarkButton = [self.buttonFactory bookmarkButton];
+  self.tabGridButton = [self.buttonFactory tabGridButton];
   self.toolsMenuButton = [self.buttonFactory toolsMenuButton];
 
-  self.trailingStackViewButtons =
-      @[ self.shareButton, self.bookmarkButton, self.toolsMenuButton ];
+  self.trailingStackViewButtons = @[
+    self.bookmarkButton, self.shareButton, self.tabGridButton,
+    self.toolsMenuButton
+  ];
   self.trailingStackView = [[UIStackView alloc]
       initWithArrangedSubviews:self.trailingStackViewButtons];
   self.trailingStackView.translatesAutoresizingMaskIntoConstraints = NO;
@@ -266,6 +300,18 @@
         constraintEqualToConstant:kAdaptiveToolbarButtonHeight],
   ]];
 
+  // When switching between incognito and non-incognito BVCs, it is possible for
+  // all of the toolbar's buttons to be temporarily hidden, which results in the
+  // stack view having zero width.  This seems to permanently break autolayout
+  // on iOS 10.  Adding an optional width constraint seems to work around this
+  // issue.  See https://crbug.com/851954.
+  if (!base::ios::IsRunningOnIOS11OrLater()) {
+    NSLayoutConstraint* minWidthConstraint =
+        [self.leadingStackView.widthAnchor constraintEqualToConstant:1.0];
+    minWidthConstraint.priority = UILayoutPriorityDefaultLow;
+    minWidthConstraint.active = YES;
+  }
+
   // LocationBar constraints.
   self.locationBarHeight = [self.locationBarContainer.heightAnchor
       constraintEqualToConstant:kAdaptiveToolbarHeight -
@@ -285,6 +331,8 @@
         constraintEqualToAnchor:self.leadingStackView.trailingAnchor
                        constant:kContractedLocationBarHorizontalMargin],
   ]];
+
+  // Constraints for contractedNoMarginConstraints.
   [self.contractedNoMarginConstraints addObjectsFromArray:@[
     [self.locationBarContainer.leadingAnchor
         constraintEqualToAnchor:safeArea.leadingAnchor
@@ -293,6 +341,7 @@
         constraintEqualToAnchor:safeArea.trailingAnchor
                        constant:-kExpandedLocationBarHorizontalMargin]
   ]];
+
   [self.expandedConstraints addObjectsFromArray:@[
     [self.locationBarContainer.trailingAnchor
         constraintEqualToAnchor:self.cancelButton.leadingAnchor],
@@ -315,13 +364,7 @@
 
   // locationBarView constraints, if present.
   if (self.locationBarView) {
-    AddSameConstraintsToSides(
-        self.locationBarView, self.locationBarContainer,
-        LayoutSides::kTop | LayoutSides::kBottom | LayoutSides::kLeading);
-    [self.locationBarContainer.trailingAnchor
-        constraintGreaterThanOrEqualToAnchor:self.locationBarView
-                                                 .trailingAnchor]
-        .active = YES;
+    AddSameConstraints(self.locationBarView, self.locationBarContainer);
   }
 
   // Cancel button constraints.
@@ -368,9 +411,7 @@
     return;
 
   [self.locationBarContainer addSubview:locationBarView];
-  AddSameConstraintsToSides(
-      self.locationBarView, self.locationBarContainer,
-      LayoutSides::kTop | LayoutSides::kBottom | LayoutSides::kLeading);
+  AddSameConstraints(self.locationBarView, self.locationBarContainer);
   [self.locationBarContainer.trailingAnchor
       constraintGreaterThanOrEqualToAnchor:self.locationBarView.trailingAnchor]
       .active = YES;

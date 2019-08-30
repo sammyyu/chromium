@@ -2,10 +2,11 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
-#include "services/ui/ws/test_change_tracker.h"
+#include "services/ui/ws2/test_change_tracker.h"
 
 #include <stddef.h>
 
+#include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/stringprintf.h"
 #include "mojo/public/cpp/bindings/map.h"
@@ -14,12 +15,13 @@
 #include "ui/gfx/geometry/point_conversions.h"
 
 namespace ui {
-
-namespace ws {
+namespace ws2 {
 
 std::string WindowIdToString(Id id) {
   return (id == 0) ? "null"
-                   : base::StringPrintf("%d,%d", HiWord(id), LoWord(id));
+                   : base::StringPrintf("%" PRIu32 ",%" PRIu32,
+                                        ClientIdFromTransportId(id),
+                                        ClientWindowIdFromTransportId(id));
 }
 
 namespace {
@@ -28,12 +30,7 @@ std::string DirectionToString(mojom::OrderDirection direction) {
   return direction == mojom::OrderDirection::ABOVE ? "above" : "below";
 }
 
-enum class ChangeDescriptionType {
-  ONE,
-  TWO,
-  // Includes display id and location of events.
-  THREE,
-};
+enum class ChangeDescriptionType { ONE, TWO };
 
 std::string ChangeToDescription(const Change& change,
                                 ChangeDescriptionType type) {
@@ -43,6 +40,9 @@ std::string ChangeToDescription(const Change& change,
         return "OnEmbed";
       return base::StringPrintf("OnEmbed drawn=%s",
                                 change.bool_value ? "true" : "false");
+
+    case CHANGE_TYPE_EMBED_FROM_TOKEN:
+      return base::StringPrintf("OnEmbedFromToken");
 
     case CHANGE_TYPE_EMBEDDED_APP_DISCONNECTED:
       return base::StringPrintf("OnEmbeddedAppDisconnected window=%s",
@@ -138,7 +138,7 @@ std::string ChangeToDescription(const Change& change,
                                 WindowIdToString(change.window_id).c_str(),
                                 static_cast<int>(change.cursor_type));
     case CHANGE_TYPE_ON_CHANGE_COMPLETED:
-      return base::StringPrintf("ChangeCompleted id=%d sucess=%s",
+      return base::StringPrintf("ChangeCompleted id=%d success=%s",
                                 change.change_id,
                                 change.bool_value ? "true" : "false");
 
@@ -151,6 +151,8 @@ std::string ChangeToDescription(const Change& change,
       return base::StringPrintf("OpacityChanged window_id=%s opacity=%.2f",
                                 WindowIdToString(change.window_id).c_str(),
                                 change.float_value);
+    case CHANGE_TYPE_REQUEST_CLOSE:
+      return "RequestClose";
     case CHANGE_TYPE_SURFACE_CHANGED:
       return base::StringPrintf("SurfaceCreated window_id=%s surface_id=%s",
                                 WindowIdToString(change.window_id).c_str(),
@@ -158,6 +160,27 @@ std::string ChangeToDescription(const Change& change,
     case CHANGE_TYPE_TRANSFORM_CHANGED:
       return base::StringPrintf("TransformChanged window_id=%s",
                                 WindowIdToString(change.window_id).c_str());
+    case CHANGE_TYPE_DRAG_DROP_START:
+      return "DragDropStart";
+    case CHANGE_TYPE_DRAG_ENTER:
+      return base::StringPrintf("DragEnter window_id=%s",
+                                WindowIdToString(change.window_id).c_str());
+    case CHANGE_TYPE_DRAG_OVER:
+      return base::StringPrintf("DragOver window_id=%s",
+                                WindowIdToString(change.window_id).c_str());
+    case CHANGE_TYPE_DRAG_LEAVE:
+      return base::StringPrintf("DragLeave window_id=%s",
+                                WindowIdToString(change.window_id).c_str());
+    case CHANGE_TYPE_COMPLETE_DROP:
+      return base::StringPrintf("CompleteDrop window_id=%s",
+                                WindowIdToString(change.window_id).c_str());
+    case CHANGE_TYPE_DRAG_DROP_DONE:
+      return "DragDropDone";
+    case CHANGE_TYPE_ON_PERFORM_DRAG_DROP_COMPLETED:
+      return base::StringPrintf(
+          "OnPerformDragDropCompleted id=%d success=%s action=%d",
+          change.change_id, change.bool_value ? "true" : "false",
+          change.drag_drop_action);
   }
   return std::string();
 }
@@ -174,6 +197,10 @@ std::string SingleChangeToDescriptionImpl(const std::vector<Change>& changes,
 }
 
 }  // namespace
+
+std::string ChangeToDescription(const Change& change) {
+  return ChangeToDescription(change, ChangeDescriptionType::ONE);
+}
 
 std::vector<std::string> ChangesToDescription1(
     const std::vector<Change>& changes) {
@@ -214,7 +241,8 @@ TestWindow WindowDataToTestWindow(const mojom::WindowDataPtr& data) {
   window.parent_id = data->parent_id;
   window.window_id = data->window_id;
   window.visible = data->visible;
-  window.properties = mojo::UnorderedMapToMap(data->properties);
+  window.properties = mojo::FlatMapToMap(data->properties);
+  window.bounds = data->bounds;
   return window;
 }
 
@@ -222,6 +250,15 @@ void WindowDatasToTestWindows(const std::vector<mojom::WindowDataPtr>& data,
                               std::vector<TestWindow>* test_windows) {
   for (size_t i = 0; i < data.size(); ++i)
     test_windows->push_back(WindowDataToTestWindow(data[i]));
+}
+
+bool ContainsChange(const std::vector<Change>& changes,
+                    const std::string& change_description) {
+  for (auto& change : changes) {
+    if (change_description == ChangeToDescription(change))
+      return true;
+  }
+  return false;
 }
 
 Change::Change()
@@ -250,6 +287,17 @@ void TestChangeTracker::OnEmbed(mojom::WindowDataPtr root, bool drawn) {
   Change change;
   change.type = CHANGE_TYPE_EMBED;
   change.bool_value = drawn;
+  change.windows.push_back(WindowDataToTestWindow(root));
+  AddChange(change);
+}
+
+void TestChangeTracker::OnEmbedFromToken(
+    mojom::WindowDataPtr root,
+    int64_t display_id,
+    const base::Optional<viz::LocalSurfaceId>& local_surface_id) {
+  Change change;
+  change.type = CHANGE_TYPE_EMBED_FROM_TOKEN;
+  change.display_id = display_id;
   change.windows.push_back(WindowDataToTestWindow(root));
   AddChange(change);
 }
@@ -404,7 +452,7 @@ void TestChangeTracker::OnWindowInputEvent(
 }
 
 void TestChangeTracker::OnPointerEventObserved(const ui::Event& event,
-                                               uint32_t window_id) {
+                                               Id window_id) {
   Change change;
   change.type = CHANGE_TYPE_POINTER_WATCHER_EVENT;
   change.event_action = static_cast<int32_t>(event.type());
@@ -423,7 +471,7 @@ void TestChangeTracker::OnWindowSharedPropertyChanged(
   if (!data)
     change.property_value = "NULL";
   else
-    change.property_value.assign(data->begin(), data->end());
+    change.property_value = base::HexEncode(data->data(), data->size());
   AddChange(change);
 }
 
@@ -474,6 +522,66 @@ void TestChangeTracker::OnWindowSurfaceChanged(
   AddChange(change);
 }
 
+void TestChangeTracker::OnDragDropStart(
+    const base::flat_map<std::string, std::vector<uint8_t>>& drag_data) {
+  Change change;
+  change.type = CHANGE_TYPE_DRAG_DROP_START;
+  change.drag_data = drag_data;
+  AddChange(change);
+}
+
+void TestChangeTracker::OnDragEnter(Id window_id) {
+  Change change;
+  change.type = CHANGE_TYPE_DRAG_ENTER;
+  change.window_id = window_id;
+  AddChange(change);
+}
+
+void TestChangeTracker::OnDragOver(Id window_id) {
+  Change change;
+  change.type = CHANGE_TYPE_DRAG_OVER;
+  change.window_id = window_id;
+  AddChange(change);
+}
+
+void TestChangeTracker::OnDragLeave(Id window_id) {
+  Change change;
+  change.type = CHANGE_TYPE_DRAG_LEAVE;
+  change.window_id = window_id;
+  AddChange(change);
+}
+
+void TestChangeTracker::OnCompleteDrop(Id window_id) {
+  Change change;
+  change.type = CHANGE_TYPE_COMPLETE_DROP;
+  change.window_id = window_id;
+  AddChange(change);
+}
+
+void TestChangeTracker::OnDragDropDone() {
+  Change change;
+  change.type = CHANGE_TYPE_DRAG_DROP_DONE;
+  AddChange(change);
+}
+
+void TestChangeTracker::OnPerformDragDropCompleted(uint32_t change_id,
+                                                   bool success,
+                                                   uint32_t action_taken) {
+  Change change;
+  change.type = CHANGE_TYPE_ON_PERFORM_DRAG_DROP_COMPLETED;
+  change.change_id = change_id;
+  change.bool_value = success;
+  change.drag_drop_action = action_taken;
+  AddChange(change);
+}
+
+void TestChangeTracker::RequestClose(Id window_id) {
+  Change change;
+  change.type = CHANGE_TYPE_REQUEST_CLOSE;
+  change.window_id = window_id;
+  AddChange(change);
+}
+
 void TestChangeTracker::AddChange(const Change& change) {
   changes_.push_back(change);
   if (delegate_)
@@ -498,6 +606,5 @@ std::string TestWindow::ToString2() const {
       WindowIdToString(parent_id).c_str(), visible ? "true" : "false");
 }
 
-}  // namespace ws
-
+}  // namespace ws2
 }  // namespace ui

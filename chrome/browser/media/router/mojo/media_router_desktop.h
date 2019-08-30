@@ -10,6 +10,7 @@
 #include "chrome/browser/media/router/mojo/media_router_mojo_impl.h"
 #include "chrome/browser/media/router/mojo/media_sink_service_status.h"
 #include "chrome/browser/media/router/providers/cast/dual_media_sink_service.h"
+#include "chrome/browser/media/router/providers/dial/dial_media_route_provider.h"
 #include "chrome/browser/media/router/providers/extension/extension_media_route_provider_proxy.h"
 
 namespace content {
@@ -30,6 +31,11 @@ class WiredDisplayMediaRouteProvider;
 class MediaRouterDesktop : public MediaRouterMojoImpl {
  public:
   ~MediaRouterDesktop() override;
+
+  // Max number of Mojo connection error counts on a MediaRouteProvider message
+  // pipe before MediaRouterDesktop treats it as a permanent error. Used for
+  // ExtensionMediaRouteProviderProxy only.
+  static constexpr int kMaxMediaRouteProviderErrorCount = 10;
 
   // Sets up the MediaRouter instance owned by |context| to handle
   // MediaRouterObserver requests from the component extension given by
@@ -59,7 +65,8 @@ class MediaRouterDesktop : public MediaRouterMojoImpl {
   friend class MediaRouterDesktopTestBase;
   friend class MediaRouterFactory;
   FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest, ProvideSinks);
-
+  FRIEND_TEST_ALL_PREFIXES(MediaRouterDesktopTest,
+                           ExtensionMrpRecoversFromConnectionError);
   // This constructor performs a firewall check on Windows and is not suitable
   // for use in unit tests; instead use the constructor below.
   explicit MediaRouterDesktop(content::BrowserContext* context);
@@ -111,6 +118,11 @@ class MediaRouterDesktop : public MediaRouterMojoImpl {
   void InitializeExtensionMediaRouteProviderProxy();
   void InitializeWiredDisplayMediaRouteProvider();
   void InitializeCastMediaRouteProvider();
+  void InitializeDialMediaRouteProvider();
+
+  // Invoked when a Mojo connection error is encountered with the message pipe
+  // to |extension_provider_proxy_|.
+  void OnExtensionProviderError();
 
 #if defined(OS_WIN)
   // Ensures that mDNS discovery is enabled in the MRPM extension. This can be
@@ -135,6 +147,10 @@ class MediaRouterDesktop : public MediaRouterMojoImpl {
   std::unique_ptr<CastMediaRouteProvider, base::OnTaskRunnerDeleter>
       cast_provider_;
 
+  // MediaRouteProvider for DIAL.
+  std::unique_ptr<DialMediaRouteProvider, base::OnTaskRunnerDeleter>
+      dial_provider_;
+
   DualMediaSinkService* media_sink_service_;
   DualMediaSinkService::Subscription media_sink_service_subscription_;
 
@@ -153,6 +169,10 @@ class MediaRouterDesktop : public MediaRouterMojoImpl {
   // |false| to |true|.
   bool should_enable_mdns_discovery_ = false;
 #endif
+
+  // The number of times a Mojo connection error is encountered with the
+  // message pipe to |extension_provider_proxy_|.
+  int extension_provider_error_count_ = 0;
 
   base::WeakPtrFactory<MediaRouterDesktop> weak_factory_;
 

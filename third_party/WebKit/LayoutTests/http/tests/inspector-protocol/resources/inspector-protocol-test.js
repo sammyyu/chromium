@@ -3,9 +3,10 @@
 // found in the LICENSE file.
 
 var TestRunner = class {
-  constructor(baseURL, log, completeTest, fetch) {
+  constructor(testBaseURL, targetBaseURL, log, completeTest, fetch) {
     this._dumpInspectorProtocolMessages = false;
-    this._baseURL = baseURL;
+    this._testBaseURL = testBaseURL;
+    this._targetBaseURL = targetBaseURL;
     this._log = log;
     this._completeTest = completeTest;
     this._fetch = fetch;
@@ -25,7 +26,7 @@ var TestRunner = class {
     this._log.call(null, item);
   }
 
-  _logObject(object, title, stabilizeNames = ['id', 'nodeId', 'objectId', 'scriptId', 'timestamp', 'backendNodeId', 'parentId', 'frameId', 'loaderId', 'baseURL', 'documentURL', 'styleSheetId']) {
+  _logObject(object, title, stabilizeNames = ['id', 'nodeId', 'objectId', 'scriptId', 'timestamp', 'backendNodeId', 'parentId', 'frameId', 'loaderId', 'baseURL', 'documentURL', 'styleSheetId', 'executionContextId', 'targetId', 'browserContextId']) {
     var lines = [];
 
     function dumpValue(value, prefix, prefixWithName) {
@@ -77,7 +78,9 @@ var TestRunner = class {
   }
 
   url(relative) {
-    return this._baseURL + relative;
+    if (relative.startsWith('http://') || relative.startsWith('https://'))
+      return relative;
+    return this._targetBaseURL + relative;
   }
 
   async runTestSuite(testSuite) {
@@ -123,7 +126,7 @@ var TestRunner = class {
   }
 
   async loadScript(url) {
-    var source = await this._fetch(this.url(url));
+    var source = await this._fetch(this._testBaseURL + url);
     return eval(`${source}\n//# sourceURL=${url}`);
   };
 
@@ -131,8 +134,11 @@ var TestRunner = class {
     var targetId = (await DevToolsAPI._sendCommandOrDie('Target.createTarget', {url: 'about:blank'})).targetId;
     await DevToolsAPI._sendCommandOrDie('Target.activateTarget', {targetId});
     var page = new TestRunner.Page(this, targetId);
-    var dummyURL = window.location.href;
-    dummyURL = dummyURL.substring(0, dummyURL.indexOf('inspector-protocol-test.html')) + 'inspector-protocol-page.html';
+    var dummyURL = DevToolsHost.dummyPageURL;
+    if (!dummyURL) {
+      dummyURL = window.location.href;
+      dummyURL = dummyURL.substring(0, dummyURL.indexOf('inspector-protocol-test.html')) + 'inspector-protocol-page.html';
+    }
     await page._navigate(dummyURL);
     return page;
   }
@@ -257,6 +263,17 @@ TestRunner.Session = class {
     this._childSessions.set(sessionId, session);
     session._parentSession = this;
     return session;
+  }
+
+  async createTargetInNewContext(width, height, url, enableBeginFrameControl) {
+    const browserContextId = (await this.protocol.Target.createBrowserContext())
+        .result.browserContextId;
+    const targetId = (await this.protocol.Target.createTarget(
+        {url, browserContextId, width, height, enableBeginFrameControl}))
+        .result.targetId;
+    const sessionId = (await this.protocol.Target.attachToTarget({targetId}))
+        .result.sessionId;
+    return this.createChild(sessionId);
   }
 
   _dispatchMessageFromTarget(event) {
@@ -470,7 +487,7 @@ DevToolsAPI._log = function(text) {
 };
 
 DevToolsAPI._completeTest = function() {
-  window.testRunner.notifyDone();
+  testRunner.notifyDone();
 };
 
 DevToolsAPI._die = function(message, error) {
@@ -515,7 +532,7 @@ DevToolsAPI._sendCommand = function(method, params) {
 DevToolsAPI._sendCommandOrDie = function(method, params) {
   return DevToolsAPI._sendCommand(method, params).then(message => {
     if (message.error)
-      DevToolsAPI._die('Error communicating with harness', new Error(message.error));
+      DevToolsAPI._die('Error communicating with harness', new Error(JSON.stringify(message.error)));
     return message.result;
   });
 };
@@ -536,16 +553,21 @@ DevToolsAPI._fetch = function(url) {
   });
 };
 
-window.testRunner.dumpAsText();
-window.testRunner.waitUntilDone();
-window.testRunner.setCanOpenWindows(true);
+testRunner.dumpAsText();
+testRunner.waitUntilDone();
+testRunner.setCanOpenWindows(true);
 
 window.addEventListener('load', () => {
   var params = new URLSearchParams(window.location.search);
+
   var testScriptURL = params.get('test');
-  var baseURL = testScriptURL.substring(0, testScriptURL.lastIndexOf('/') + 1);
+  var testBaseURL = testScriptURL.substring(0, testScriptURL.lastIndexOf('/') + 1);
+
+  var targetPageURL = params.get('target') || params.get('test');
+  var targetBaseURL = targetPageURL.substring(0, targetPageURL.lastIndexOf('/') + 1);
+
   DevToolsAPI._fetch(testScriptURL).then(testScript => {
-    var testRunner = new TestRunner(baseURL, DevToolsAPI._log, DevToolsAPI._completeTest, DevToolsAPI._fetch);
+    var testRunner = new TestRunner(testBaseURL, targetBaseURL, DevToolsAPI._log, DevToolsAPI._completeTest, DevToolsAPI._fetch);
     var testFunction = eval(`${testScript}\n//# sourceURL=${testScriptURL}`);
     if (params.get('debug')) {
       var dispatch = DevToolsAPI.dispatchMessage;

@@ -6,232 +6,110 @@
 
 #include <utility>
 
-#include "base/logging.h"
-#include "base/macros.h"
-#include "base/memory/ptr_util.h"
-#include "base/strings/string_number_conversions.h"
-#include "base/strings/utf_string_conversions.h"
-#include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/trace_event.h"
-#include "content/browser/bad_message.h"
-#include "content/browser/service_worker/embedded_worker_status.h"
 #include "content/browser/service_worker/service_worker_context_core.h"
 #include "content/browser/service_worker/service_worker_context_wrapper.h"
-#include "content/browser/service_worker/service_worker_handle.h"
-#include "content/browser/service_worker/service_worker_navigation_handle_core.h"
-#include "content/browser/service_worker/service_worker_registration.h"
-#include "content/common/service_worker/service_worker_messages.h"
 #include "content/common/service_worker/service_worker_utils.h"
-#include "content/public/browser/content_browser_client.h"
-#include "content/public/browser/render_frame_host.h"
-#include "content/public/browser/web_contents.h"
-#include "content/public/common/browser_side_navigation_policy.h"
 #include "content/public/common/child_process_host.h"
-#include "content/public/common/content_client.h"
-#include "content/public/common/origin_util.h"
-#include "ipc/ipc_message_macros.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_error_type.mojom.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_object.mojom.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_provider_type.mojom.h"
-#include "third_party/WebKit/public/platform/modules/serviceworker/WebServiceWorkerError.h"
-#include "url/gurl.h"
-
-using blink::MessagePortChannel;
-using blink::WebServiceWorkerError;
+#include "third_party/blink/public/mojom/service_worker/service_worker_provider_type.mojom.h"
 
 namespace content {
 
-namespace {
-
-const uint32_t kServiceWorkerFilteredMessageClasses[] = {
-    ServiceWorkerMsgStart,
-};
-
-}  // namespace
-
 ServiceWorkerDispatcherHost::ServiceWorkerDispatcherHost(
-    int render_process_id,
-    ResourceContext* resource_context)
-    : BrowserMessageFilter(kServiceWorkerFilteredMessageClasses,
-                           arraysize(kServiceWorkerFilteredMessageClasses)),
-      BrowserAssociatedInterface<mojom::ServiceWorkerDispatcherHost>(this,
-                                                                     this),
-      render_process_id_(render_process_id),
-      resource_context_(resource_context),
-      channel_ready_(false),
-      weak_ptr_factory_(this) {}
+    scoped_refptr<ServiceWorkerContextWrapper> context_wrapper,
+    int render_process_id)
+    : render_process_id_(render_process_id), context_wrapper_(context_wrapper) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+}
 
 ServiceWorkerDispatcherHost::~ServiceWorkerDispatcherHost() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  if (GetContext() && phase_ == Phase::kAddedToContext)
-    GetContext()->RemoveDispatcherHost(render_process_id_);
 }
 
-void ServiceWorkerDispatcherHost::Init(
-    ServiceWorkerContextWrapper* context_wrapper) {
-  if (!BrowserThread::CurrentlyOn(BrowserThread::IO)) {
-    BrowserThread::PostTask(
-        BrowserThread::IO, FROM_HERE,
-        base::BindOnce(&ServiceWorkerDispatcherHost::Init, this,
-                       base::RetainedRef(context_wrapper)));
-    return;
-  }
-
-  // Just speculating that maybe we were destructed before Init() was called on
-  // the IO thread in order to try to fix https://crbug.com/750267.
-  if (phase_ != Phase::kInitial)
-    return;
-
-  context_wrapper_ = context_wrapper;
-  if (!GetContext())
-    return;
-  GetContext()->AddDispatcherHost(render_process_id_, this);
-  phase_ = Phase::kAddedToContext;
-}
-
-void ServiceWorkerDispatcherHost::OnFilterAdded(IPC::Channel* channel) {
-  TRACE_EVENT0("ServiceWorker",
-               "ServiceWorkerDispatcherHost::OnFilterAdded");
+void ServiceWorkerDispatcherHost::AddBinding(
+    mojom::ServiceWorkerDispatcherHostAssociatedRequest request) {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  channel_ready_ = true;
-  std::vector<std::unique_ptr<IPC::Message>> messages;
-  messages.swap(pending_messages_);
-  for (auto& message : messages) {
-    BrowserMessageFilter::Send(message.release());
-  }
+  bindings_.AddBinding(this, std::move(request));
 }
 
-void ServiceWorkerDispatcherHost::OnFilterRemoved() {
-  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  // Don't wait until the destructor to teardown since a new dispatcher host
-  // for this process might be created before then.
-  if (GetContext() && phase_ == Phase::kAddedToContext) {
-    GetContext()->RemoveDispatcherHost(render_process_id_);
-    weak_ptr_factory_.InvalidateWeakPtrs();
-  }
-  phase_ = Phase::kRemovedFromContext;
-  context_wrapper_ = nullptr;
-  channel_ready_ = false;
-}
-
-void ServiceWorkerDispatcherHost::OnDestruct() const {
-  // Destruct on the IO thread since |context_wrapper_| should only be accessed
-  // on the IO thread.
-  BrowserThread::DeleteOnIOThread::Destruct(this);
-}
-
-bool ServiceWorkerDispatcherHost::OnMessageReceived(
-    const IPC::Message& message) {
-  return false;
-}
-
-bool ServiceWorkerDispatcherHost::Send(IPC::Message* message) {
-  if (channel_ready_) {
-    BrowserMessageFilter::Send(message);
-    // Don't bother passing through Send()'s result: it's not reliable.
-    return true;
-  }
-
-  pending_messages_.push_back(base::WrapUnique(message));
-  return true;
-}
-
-void ServiceWorkerDispatcherHost::RegisterServiceWorkerHandle(
-    std::unique_ptr<ServiceWorkerHandle> handle) {
-  int handle_id = handle->handle_id();
-  handles_.AddWithID(std::move(handle), handle_id);
-}
-
-ServiceWorkerHandle* ServiceWorkerDispatcherHost::FindServiceWorkerHandle(
-    int provider_id,
-    int64_t version_id) {
-  for (base::IDMap<std::unique_ptr<ServiceWorkerHandle>>::iterator iter(
-           &handles_);
-       !iter.IsAtEnd(); iter.Advance()) {
-    ServiceWorkerHandle* handle = iter.GetCurrentValue();
-    DCHECK(handle);
-    DCHECK(handle->version());
-    if (handle->provider_id() == provider_id &&
-        handle->version()->version_id() == version_id) {
-      return handle;
-    }
-  }
-  return nullptr;
-}
-
-void ServiceWorkerDispatcherHost::UnregisterServiceWorkerHandle(int handle_id) {
-  handles_.Remove(handle_id);
-}
-
-base::WeakPtr<ServiceWorkerDispatcherHost>
-ServiceWorkerDispatcherHost::AsWeakPtr() {
-  return weak_ptr_factory_.GetWeakPtr();
+void ServiceWorkerDispatcherHost::RenderProcessExited(
+    RenderProcessHost* host,
+    const ChildProcessTerminationInfo& info) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::UI));
+  // TODO(crbug.com/736203) Try to remove this call. It should be unnecessary
+  // because provider hosts remove themselves when their Mojo connection to the
+  // renderer is destroyed. But if we don't remove the hosts immediately here,
+  // collisions of <process_id, provider_id> can occur if |this| is reused for
+  // another new renderer process due to reuse of the RenderProcessHost.
+  BrowserThread::PostTask(
+      BrowserThread::IO, FROM_HERE,
+      base::BindOnce(
+          &ServiceWorkerDispatcherHost::RemoveAllProviderHostsForProcess,
+          base::Unretained(this)));
 }
 
 void ServiceWorkerDispatcherHost::OnProviderCreated(
-    ServiceWorkerProviderHostInfo info) {
+    mojom::ServiceWorkerProviderHostInfoPtr info) {
+  DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
   TRACE_EVENT0("ServiceWorker",
                "ServiceWorkerDispatcherHost::OnProviderCreated");
-  if (!GetContext())
+  ServiceWorkerContextCore* context = context_wrapper_->context();
+  if (!context)
     return;
-  if (GetContext()->GetProviderHost(render_process_id_, info.provider_id)) {
-    bad_message::ReceivedBadMessage(
-        this, bad_message::SWDH_PROVIDER_CREATED_DUPLICATE_ID);
+  if (context->GetProviderHost(render_process_id_, info->provider_id)) {
+    bindings_.ReportBadMessage("SWDH_PROVIDER_CREATED_DUPLICATE_ID");
     return;
   }
 
-  if (IsBrowserSideNavigationEnabled() &&
-      ServiceWorkerUtils::IsBrowserAssignedProviderId(info.provider_id)) {
-    std::unique_ptr<ServiceWorkerProviderHost> provider_host;
-    // PlzNavigate
-    // Retrieve the provider host previously created for navigation requests.
-    ServiceWorkerNavigationHandleCore* navigation_handle_core =
-        GetContext()->GetNavigationHandleCore(info.provider_id);
-    if (navigation_handle_core != nullptr)
-      provider_host = navigation_handle_core->RetrievePreCreatedHost();
+  // Provider hosts for navigations are precreated on the browser process with a
+  // browser-assigned id. The renderer process calls OnProviderCreated once it
+  // creates the provider.
+  if (ServiceWorkerUtils::IsBrowserAssignedProviderId(info->provider_id)) {
+    if (info->type != blink::mojom::ServiceWorkerProviderType::kForWindow) {
+      bindings_.ReportBadMessage(
+          "SWDH_PROVIDER_CREATED_ILLEGAL_TYPE_NOT_WINDOW");
+      return;
+    }
 
+    // Retrieve the provider host pre-created for the navigation.
+    std::unique_ptr<ServiceWorkerProviderHost> provider_host =
+        context->ReleaseProviderHost(ChildProcessHost::kInvalidUniqueID,
+                                     info->provider_id);
     // If no host is found, create one.
-    if (provider_host == nullptr) {
-      GetContext()->AddProviderHost(ServiceWorkerProviderHost::Create(
-          render_process_id_, std::move(info), GetContext()->AsWeakPtr(),
-          AsWeakPtr()));
+    // TODO(crbug.com/789111#c14): This is probably not right, see bug.
+    if (!provider_host) {
+      context->AddProviderHost(ServiceWorkerProviderHost::Create(
+          render_process_id_, std::move(info), context->AsWeakPtr()));
       return;
     }
 
-    // Otherwise, completed the initialization of the pre-created host.
-    if (info.type != blink::mojom::ServiceWorkerProviderType::kForWindow) {
-      bad_message::ReceivedBadMessage(
-          this, bad_message::SWDH_PROVIDER_CREATED_ILLEGAL_TYPE_NOT_WINDOW);
-      return;
-    }
+    // Otherwise, complete initialization of the pre-created host.
     provider_host->CompleteNavigationInitialized(render_process_id_,
-                                                 std::move(info), AsWeakPtr());
-    GetContext()->AddProviderHost(std::move(provider_host));
-  } else {
-    // Provider hosts for service workers should be pre-created in StartWorker
-    // in ServiceWorkerVersion.
-    if (info.type ==
-        blink::mojom::ServiceWorkerProviderType::kForServiceWorker) {
-      bad_message::ReceivedBadMessage(
-          this, bad_message::SWDH_PROVIDER_CREATED_ILLEGAL_TYPE_CONTROLLER);
-      return;
-    }
-    if (ServiceWorkerUtils::IsBrowserAssignedProviderId(info.provider_id)) {
-      bad_message::ReceivedBadMessage(
-          this, bad_message::SWDH_PROVIDER_CREATED_BAD_ID);
-      return;
-    }
-    GetContext()->AddProviderHost(ServiceWorkerProviderHost::Create(
-        render_process_id_, std::move(info), GetContext()->AsWeakPtr(),
-        AsWeakPtr()));
+                                                 std::move(info));
+    context->AddProviderHost(std::move(provider_host));
+    return;
   }
+
+  // Provider hosts for service workers don't call OnProviderCreated. They are
+  // precreated and ServiceWorkerProviderHost::CompleteStartWorkerPreparation is
+  // called during the startup sequence once a process is allocated.
+  if (info->type ==
+      blink::mojom::ServiceWorkerProviderType::kForServiceWorker) {
+    bindings_.ReportBadMessage(
+        "SWDH_PROVIDER_CREATED_ILLEGAL_TYPE_SERVICE_WORKER");
+    return;
+  }
+
+  context->AddProviderHost(ServiceWorkerProviderHost::Create(
+      render_process_id_, std::move(info), context->AsWeakPtr()));
 }
 
-ServiceWorkerContextCore* ServiceWorkerDispatcherHost::GetContext() {
+void ServiceWorkerDispatcherHost::RemoveAllProviderHostsForProcess() {
   DCHECK(BrowserThread::CurrentlyOn(BrowserThread::IO));
-  if (!context_wrapper_.get())
-    return nullptr;
-  return context_wrapper_->context();
+  if (context_wrapper_->context()) {
+    context_wrapper_->context()->RemoveAllProviderHostsForProcess(
+        render_process_id_);
+  }
 }
 
 }  // namespace content

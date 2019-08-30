@@ -8,14 +8,18 @@
 #include "ash/login/mock_login_screen_client.h"
 #include "ash/login/ui/fake_login_detachable_base_model.h"
 #include "ash/login/ui/lock_contents_view.h"
+#include "ash/login/ui/login_auth_user_view.h"
+#include "ash/login/ui/login_big_user_view.h"
+#include "ash/login/ui/login_bubble.h"
 #include "ash/login/ui/login_test_base.h"
 #include "ash/login/ui/login_test_utils.h"
 #include "ash/public/cpp/config.h"
 #include "ash/root_window_controller.h"
 #include "ash/session/test_session_controller_client.h"
+#include "ash/shelf/shelf.h"
 #include "ash/shelf/shelf_widget.h"
 #include "ash/shell.h"
-#include "ash/system/tray/system_tray.h"
+#include "ash/system/status_area_widget.h"
 #include "base/run_loop.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "ui/events/test/event_generator.h"
@@ -49,17 +53,6 @@ class LockScreenAppFocuser {
 
   DISALLOW_COPY_AND_ASSIGN(LockScreenAppFocuser);
 };
-
-// Returns true if |view| or any child of it has focus.
-bool HasFocusInAnyChildView(views::View* view) {
-  if (view->HasFocus())
-    return true;
-  for (int i = 0; i < view->child_count(); ++i) {
-    if (HasFocusInAnyChildView(view->child_at(i)))
-      return true;
-  }
-  return false;
-}
 
 // Keeps tabbing through |view| until the view loses focus.
 // The number of generated tab events will be limited - if the focus is still
@@ -104,7 +97,8 @@ testing::AssertionResult VerifyNotFocused(views::View* view) {
 TEST_F(LockScreenSanityTest, PasswordIsInitiallyFocused) {
   // Build lock screen.
   auto* contents = new LockContentsView(
-      mojom::TrayActionState::kNotAvailable, data_dispatcher(),
+      mojom::TrayActionState::kNotAvailable, LockScreen::ScreenType::kLock,
+      data_dispatcher(),
       std::make_unique<FakeLoginDetachableBaseModel>(data_dispatcher()));
 
   // The lock screen requires at least one user.
@@ -113,15 +107,17 @@ TEST_F(LockScreenSanityTest, PasswordIsInitiallyFocused) {
   std::unique_ptr<views::Widget> widget = CreateWidgetWithContent(contents);
 
   // Textfield should have focus.
-  EXPECT_EQ(MakeLoginPasswordTestApi(contents).textfield(),
-            contents->GetFocusManager()->GetFocusedView());
+  EXPECT_EQ(
+      MakeLoginPasswordTestApi(contents, AuthTarget::kPrimary).textfield(),
+      contents->GetFocusManager()->GetFocusedView());
 }
 
 // Verifies submitting the password invokes mojo lock screen client.
 TEST_F(LockScreenSanityTest, PasswordSubmitCallsLoginScreenClient) {
   // Build lock screen.
   auto* contents = new LockContentsView(
-      mojom::TrayActionState::kNotAvailable, data_dispatcher(),
+      mojom::TrayActionState::kNotAvailable, LockScreen::ScreenType::kLock,
+      data_dispatcher(),
       std::make_unique<FakeLoginDetachableBaseModel>(data_dispatcher()));
 
   // The lock screen requires at least one user.
@@ -132,12 +128,12 @@ TEST_F(LockScreenSanityTest, PasswordSubmitCallsLoginScreenClient) {
   // Password submit runs mojo.
   std::unique_ptr<MockLoginScreenClient> client = BindMockLoginScreenClient();
   client->set_authenticate_user_callback_result(false);
-  EXPECT_CALL(*client,
-              AuthenticateUser_(users()[0]->basic_user_info->account_id, _, _,
-                                false, _));
-  ui::test::EventGenerator& generator = GetEventGenerator();
-  generator.PressKey(ui::KeyboardCode::VKEY_A, 0);
-  generator.PressKey(ui::KeyboardCode::VKEY_RETURN, 0);
+  EXPECT_CALL(
+      *client,
+      AuthenticateUser_(users()[0]->basic_user_info->account_id, _, false, _));
+  ui::test::EventGenerator* generator = GetEventGenerator();
+  generator->PressKey(ui::KeyboardCode::VKEY_A, 0);
+  generator->PressKey(ui::KeyboardCode::VKEY_RETURN, 0);
   base::RunLoop().RunUntilIdle();
 }
 
@@ -148,26 +144,27 @@ TEST_F(LockScreenSanityTest,
   std::unique_ptr<MockLoginScreenClient> client = BindMockLoginScreenClient();
 
   auto* contents = new LockContentsView(
-      mojom::TrayActionState::kAvailable, data_dispatcher(),
+      mojom::TrayActionState::kAvailable, LockScreen::ScreenType::kLock,
+      data_dispatcher(),
       std::make_unique<FakeLoginDetachableBaseModel>(data_dispatcher()));
   SetUserCount(1);
   std::unique_ptr<views::Widget> widget = CreateWidgetWithContent(contents);
   LoginPasswordView::TestApi password_test_api =
-      MakeLoginPasswordTestApi(contents);
+      MakeLoginPasswordTestApi(contents, AuthTarget::kPrimary);
 
   MockLoginScreenClient::AuthenticateUserCallback callback;
   auto submit_password = [&]() {
     // Capture the authentication callback.
     client->set_authenticate_user_callback_storage(&callback);
     EXPECT_CALL(*client, AuthenticateUser_(testing::_, testing::_, testing::_,
-                                           testing::_, testing::_));
+                                           testing::_));
 
     // Submit password with content 'a'. This creates a browser-process
     // authentication request stored in |callback|.
     DCHECK(callback.is_null());
-    ui::test::EventGenerator& generator = GetEventGenerator();
-    generator.PressKey(ui::KeyboardCode::VKEY_A, 0);
-    generator.PressKey(ui::KeyboardCode::VKEY_RETURN, 0);
+    ui::test::EventGenerator* generator = GetEventGenerator();
+    generator->PressKey(ui::KeyboardCode::VKEY_A, 0);
+    generator->PressKey(ui::KeyboardCode::VKEY_RETURN, 0);
     base::RunLoop().RunUntilIdle();
     DCHECK(!callback.is_null());
   };
@@ -202,7 +199,8 @@ TEST_F(LockScreenSanityTest, TabGoesFromLockToShelfAndBackToLock) {
 
   // Create lock screen.
   auto* lock = new LockContentsView(
-      mojom::TrayActionState::kNotAvailable, data_dispatcher(),
+      mojom::TrayActionState::kNotAvailable, LockScreen::ScreenType::kLock,
+      data_dispatcher(),
       std::make_unique<FakeLoginDetachableBaseModel>(data_dispatcher()));
   SetUserCount(1);
   std::unique_ptr<views::Widget> widget = CreateWidgetWithContent(lock);
@@ -215,12 +213,12 @@ TEST_F(LockScreenSanityTest, TabGoesFromLockToShelfAndBackToLock) {
   EXPECT_TRUE(VerifyNotFocused(shelf));
 
   // Tab (eventually) goes to the shelf.
-  ASSERT_TRUE(TabThroughView(&GetEventGenerator(), lock, false /*reverse*/));
+  ASSERT_TRUE(TabThroughView(GetEventGenerator(), lock, false /*reverse*/));
   EXPECT_TRUE(VerifyNotFocused(lock));
   EXPECT_TRUE(VerifyFocused(shelf));
 
   // A single shift+tab brings focus back to the lock screen.
-  GetEventGenerator().PressKey(ui::KeyboardCode::VKEY_TAB, ui::EF_SHIFT_DOWN);
+  GetEventGenerator()->PressKey(ui::KeyboardCode::VKEY_TAB, ui::EF_SHIFT_DOWN);
   EXPECT_TRUE(VerifyFocused(lock));
   EXPECT_TRUE(VerifyNotFocused(shelf));
 }
@@ -234,14 +232,14 @@ TEST_F(LockScreenSanityTest, ShiftTabGoesFromLockToStatusAreaAndBackToLock) {
       session_manager::SessionState::LOCKED);
 
   auto* lock = new LockContentsView(
-      mojom::TrayActionState::kNotAvailable, data_dispatcher(),
+      mojom::TrayActionState::kNotAvailable, LockScreen::ScreenType::kLock,
+      data_dispatcher(),
       std::make_unique<FakeLoginDetachableBaseModel>(data_dispatcher()));
   SetUserCount(1);
   std::unique_ptr<views::Widget> widget = CreateWidgetWithContent(lock);
   views::View* status_area =
       RootWindowController::ForWindow(lock->GetWidget()->GetNativeWindow())
-          ->GetSystemTray()
-          ->GetWidget()
+          ->GetStatusAreaWidget()
           ->GetContentsView();
 
   // Lock screen has focus.
@@ -249,13 +247,13 @@ TEST_F(LockScreenSanityTest, ShiftTabGoesFromLockToStatusAreaAndBackToLock) {
   EXPECT_TRUE(VerifyNotFocused(status_area));
 
   // Focus from user view to the status area.
-  GetEventGenerator().PressKey(ui::KeyboardCode::VKEY_TAB, ui::EF_SHIFT_DOWN);
+  GetEventGenerator()->PressKey(ui::KeyboardCode::VKEY_TAB, ui::EF_SHIFT_DOWN);
 
   EXPECT_TRUE(VerifyNotFocused(lock));
   EXPECT_TRUE(VerifyFocused(status_area));
 
   // A single tab brings focus back to the lock screen.
-  GetEventGenerator().PressKey(ui::KeyboardCode::VKEY_TAB, 0);
+  GetEventGenerator()->PressKey(ui::KeyboardCode::VKEY_TAB, 0);
   EXPECT_TRUE(VerifyFocused(lock));
   EXPECT_TRUE(VerifyNotFocused(status_area));
 }
@@ -265,7 +263,8 @@ TEST_F(LockScreenSanityTest, TabWithLockScreenAppActive) {
       session_manager::SessionState::LOCKED);
 
   auto* lock = new LockContentsView(
-      mojom::TrayActionState::kNotAvailable, data_dispatcher(),
+      mojom::TrayActionState::kNotAvailable, LockScreen::ScreenType::kLock,
+      data_dispatcher(),
       std::make_unique<FakeLoginDetachableBaseModel>(data_dispatcher()));
   SetUserCount(1);
   std::unique_ptr<views::Widget> widget = CreateWidgetWithContent(lock);
@@ -276,8 +275,7 @@ TEST_F(LockScreenSanityTest, TabWithLockScreenAppActive) {
 
   views::View* status_area =
       RootWindowController::ForWindow(lock->GetWidget()->GetNativeWindow())
-          ->GetSystemTray()
-          ->GetWidget()
+          ->GetStatusAreaWidget()
           ->GetContentsView();
 
   LoginScreenController* controller = Shell::Get()->login_screen_controller();
@@ -307,7 +305,7 @@ TEST_F(LockScreenSanityTest, TabWithLockScreenAppActive) {
   EXPECT_TRUE(VerifyFocused(shelf));
 
   // Reversing focus should bring focus back to the lock screen app.
-  GetEventGenerator().PressKey(ui::KeyboardCode::VKEY_TAB, ui::EF_SHIFT_DOWN);
+  GetEventGenerator()->PressKey(ui::KeyboardCode::VKEY_TAB, ui::EF_SHIFT_DOWN);
   // Focus is passed to lock screen apps via mojo - flush the request.
   controller->FlushForTesting();
   EXPECT_TRUE(VerifyFocused(lock_screen_app));
@@ -320,7 +318,7 @@ TEST_F(LockScreenSanityTest, TabWithLockScreenAppActive) {
 
   // Tabbing out of the status area (in default order) should focus the lock
   // screen app again.
-  GetEventGenerator().PressKey(ui::KeyboardCode::VKEY_TAB, 0);
+  GetEventGenerator()->PressKey(ui::KeyboardCode::VKEY_TAB, 0);
   // Focus is passed to lock screen apps via mojo - flush the request.
   controller->FlushForTesting();
   EXPECT_TRUE(VerifyFocused(lock_screen_app));
@@ -337,7 +335,8 @@ TEST_F(LockScreenSanityTest, FocusLockScreenWhenLockScreenAppExit) {
   GetSessionControllerClient()->SetSessionState(
       session_manager::SessionState::LOCKED);
   auto* lock = new LockContentsView(
-      mojom::TrayActionState::kNotAvailable, data_dispatcher(),
+      mojom::TrayActionState::kNotAvailable, LockScreen::ScreenType::kLock,
+      data_dispatcher(),
       std::make_unique<FakeLoginDetachableBaseModel>(data_dispatcher()));
   SetUserCount(1);
   std::unique_ptr<views::Widget> widget = CreateWidgetWithContent(lock);
@@ -366,8 +365,77 @@ TEST_F(LockScreenSanityTest, FocusLockScreenWhenLockScreenAppExit) {
   EXPECT_TRUE(VerifyFocused(lock));
 
   // Tab through the lock screen - the focus should eventually get to the shelf.
-  ASSERT_TRUE(TabThroughView(&GetEventGenerator(), lock, false /*reverse*/));
+  ASSERT_TRUE(TabThroughView(GetEventGenerator(), lock, false /*reverse*/));
   EXPECT_TRUE(VerifyFocused(shelf));
+}
+
+TEST_F(LockScreenSanityTest, RemoveUser) {
+  std::unique_ptr<MockLoginScreenClient> client = BindMockLoginScreenClient();
+  LoginScreenController* controller =
+      ash::Shell::Get()->login_screen_controller();
+
+  auto* contents = new LockContentsView(
+      mojom::TrayActionState::kAvailable, LockScreen::ScreenType::kLock,
+      data_dispatcher(),
+      std::make_unique<FakeLoginDetachableBaseModel>(data_dispatcher()));
+
+  // Add two users, the first of which can be removed.
+  users().push_back(CreateUser("test1@test"));
+  users()[0]->can_remove = true;
+  users().push_back(CreateUser("test2@test"));
+  data_dispatcher()->NotifyUsers(users());
+
+  std::unique_ptr<views::Widget> widget = CreateWidgetWithContent(contents);
+
+  auto primary = [&]() {
+    return LoginUserView::TestApi(
+        MakeLoginAuthTestApi(contents, AuthTarget::kPrimary).user_view());
+  };
+  auto secondary = [&]() {
+    return LoginUserView::TestApi(
+        MakeLoginAuthTestApi(contents, AuthTarget::kSecondary).user_view());
+  };
+
+  // Fires a return and validates that mock expectations have been satisfied.
+  auto submit = [&]() {
+    GetEventGenerator()->PressKey(ui::VKEY_RETURN, 0);
+    controller->FlushForTesting();
+    testing::Mock::VerifyAndClearExpectations(client.get());
+  };
+  auto focus_and_submit = [&](views::View* view) {
+    view->RequestFocus();
+    DCHECK(view->HasFocus());
+    submit();
+  };
+
+  // The secondary user is not removable (as configured above) so showing the
+  // dropdown does not result in an interactive/focusable view.
+  focus_and_submit(secondary().dropdown());
+  EXPECT_TRUE(secondary().menu());
+  EXPECT_FALSE(HasFocusInAnyChildView(secondary().menu()->bubble_view()));
+  // TODO(jdufault): Run submit() and then EXPECT_FALSE(secondary().menu()); to
+  // verify that double-enter closes the bubble.
+
+  // The primary user is removable, so the menu is interactive. Submitting the
+  // first time shows the remove user warning, submitting the second time
+  // actually removes the user. Removing the user triggers a mojo API call as
+  // well as removes the user from the UI.
+  focus_and_submit(primary().dropdown());
+  EXPECT_TRUE(primary().menu());
+  EXPECT_TRUE(HasFocusInAnyChildView(primary().menu()->bubble_view()));
+  EXPECT_CALL(*client, OnRemoveUserWarningShown()).Times(1);
+  submit();
+  EXPECT_CALL(*client, RemoveUser(users()[0]->basic_user_info->account_id))
+      .Times(1);
+  submit();
+
+  // Secondary auth should be gone because it is now the primary auth.
+  EXPECT_FALSE(MakeLockContentsViewTestApi(contents).opt_secondary_big_view());
+  EXPECT_TRUE(MakeLockContentsViewTestApi(contents)
+                  .primary_big_view()
+                  ->GetCurrentUser()
+                  ->basic_user_info->account_id ==
+              users()[1]->basic_user_info->account_id);
 }
 
 }  // namespace ash

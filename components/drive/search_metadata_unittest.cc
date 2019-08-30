@@ -54,7 +54,7 @@ class SearchMetadataTest : public testing::Test {
  protected:
   void SetUp() override {
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
-    fake_free_disk_space_getter_.reset(new FakeFreeDiskSpaceGetter);
+    fake_free_disk_space_getter_ = std::make_unique<FakeFreeDiskSpaceGetter>();
 
     metadata_storage_.reset(new ResourceMetadataStorage(
         temp_dir_.GetPath(), base::ThreadTaskRunnerHandle::Get().get()));
@@ -480,10 +480,8 @@ TEST_F(SearchMetadataTest,
   // \xE3\x80\x80 is ideographic space.
   SearchMetadata(
       base::ThreadTaskRunnerHandle::Get(), resource_metadata_.get(),
-      "Directory\xE3\x80\x80"
-      "1",
-      base::Bind(&MatchesType, SEARCH_METADATA_ALL), kDefaultAtMostNumMatches,
-      MetadataSearchOrder::LAST_ACCESSED,
+      R"(Directory　1)", base::Bind(&MatchesType, SEARCH_METADATA_ALL),
+      kDefaultAtMostNumMatches, MetadataSearchOrder::LAST_ACCESSED,
       google_apis::test_util::CreateCopyResultCallback(&error, &result));
 
   base::RunLoop().RunUntilIdle();

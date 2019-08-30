@@ -12,22 +12,48 @@
 
 namespace features {
 
+// If enabled, the emoji picker context menu item may be shown for editable
+// text areas.
+const base::Feature kEnableEmojiContextMenu {
+  "EnableEmojiContextMenu",
+#if defined(OS_MACOSX)
+      base::FEATURE_ENABLED_BY_DEFAULT
+#else
+      base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+};
+
 // Enables the floating virtual keyboard behavior.
 const base::Feature kEnableFloatingVirtualKeyboard = {
-    "enable-floating-virtual-keyboard", base::FEATURE_ENABLED_BY_DEFAULT};
+    "enable-floating-virtual-keyboard", base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Enables the full screen handwriting virtual keyboard behavior.
+const base::Feature kEnableFullscreenHandwritingVirtualKeyboard = {
+    "enable-fullscreen-handwriting-virtual-keyboard",
+    base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kEnableStylusVirtualKeyboard = {
+    "enable-stylus-virtual-keyboard", base::FEATURE_DISABLED_BY_DEFAULT};
+
+// If enabled, uses the Material Design UI for virtual keyboard.
+const base::Feature kEnableVirtualKeyboardMdUi = {
+    "EnableVirtualKeyboardMdUi", base::FEATURE_DISABLED_BY_DEFAULT};
+
+const base::Feature kEnableVirtualKeyboardUkm = {
+    "EnableVirtualKeyboardUkm", base::FEATURE_DISABLED_BY_DEFAULT};
+
+// Enables all upcoming UI features.
+const base::Feature kExperimentalUi{"ExperimentalUi",
+                                    base::FEATURE_DISABLED_BY_DEFAULT};
 
 // Applies the material design mode to elements throughout Chrome (not just top
 // Chrome).
 const base::Feature kSecondaryUiMd = {"SecondaryUiMd",
-// Enabled by default on Windows, Mac and Desktop Linux.
-// http://crbug.com/775847.
-#if defined(OS_WIN) || defined(OS_MACOSX) || \
-    (defined(OS_LINUX) && !defined(OS_CHROMEOS))
-                                      base::FEATURE_ENABLED_BY_DEFAULT
-#else
-                                      base::FEATURE_DISABLED_BY_DEFAULT
-#endif
-};
+                                      base::FEATURE_ENABLED_BY_DEFAULT};
+
+// Allows system keyboard event capture when |features::kKeyboardLockApi| is on.
+const base::Feature kSystemKeyboardLock{"SystemKeyboardLock",
+                                        base::FEATURE_ENABLED_BY_DEFAULT};
 
 const base::Feature kTouchableAppContextMenu = {
     "EnableTouchableAppContextMenu", base::FEATURE_DISABLED_BY_DEFAULT};
@@ -37,10 +63,41 @@ bool IsTouchableAppContextMenuEnabled() {
          switches::IsTouchableAppContextMenuEnabled();
 }
 
+const base::Feature kNotificationIndicator = {
+    "EnableNotificationIndicator", base::FEATURE_DISABLED_BY_DEFAULT};
+
+bool IsNotificationIndicatorEnabled() {
+  return base::FeatureList::IsEnabled(kNotificationIndicator);
+}
+
+// Enables GPU rasterization for all UI drawing (where not blacklisted).
+const base::Feature kUiGpuRasterization = {"UiGpuRasterization",
+#if defined(OS_MACOSX)
+                                           base::FEATURE_ENABLED_BY_DEFAULT
+#else
+                                           base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+};
+
+bool IsUiGpuRasterizationEnabled() {
+  return base::FeatureList::IsEnabled(kUiGpuRasterization);
+}
+
+// Enables scrolling with layers under ui using the ui::Compositor.
+const base::Feature kUiCompositorScrollWithLayers = {
+    "UiCompositorScrollWithLayers",
+// TODO(https://crbug.com/615948): Use composited scrolling on all platforms.
+#if defined(OS_MACOSX)
+    base::FEATURE_ENABLED_BY_DEFAULT
+#else
+    base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+};
+
 #if defined(OS_WIN)
-// Enables stylus appearing as touch when in contact with digitizer.
-const base::Feature kDirectManipulationStylus = {
-    "DirectManipulationStylus", base::FEATURE_ENABLED_BY_DEFAULT};
+// Enables InputPane API for controlling on screen keyboard.
+const base::Feature kInputPaneOnScreenKeyboard = {
+    "InputPaneOnScreenKeyboard", base::FEATURE_ENABLED_BY_DEFAULT};
 
 // Enables using WM_POINTER instead of WM_TOUCH for touch events.
 const base::Feature kPointerEventsForTouch = {"PointerEventsForTouch",
@@ -56,27 +113,46 @@ bool IsUsingWMPointerForTouch() {
 
 // Enables DirectManipulation API for processing Precision Touchpad events.
 const base::Feature kPrecisionTouchpad{"PrecisionTouchpad",
-                                       base::FEATURE_DISABLED_BY_DEFAULT};
+                                       base::FEATURE_ENABLED_BY_DEFAULT};
+// Enables Swipe left/right to navigation back/forward API for processing
+// Precision Touchpad events.
+const base::Feature kPrecisionTouchpadScrollPhase{
+    "PrecisionTouchpadScrollPhase", base::FEATURE_ENABLED_BY_DEFAULT};
 #endif  // defined(OS_WIN)
 
-// Used to have ash run in its own process. This implicitly turns on the
-// WindowService. That is, if this is set IsMusEnabled() returns true.
+#if defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_LINUX)
+// Enables stylus appearing as touch when in contact with digitizer.
+const base::Feature kDirectManipulationStylus = {
+    "DirectManipulationStylus",
+#if defined(OS_WIN)
+    base::FEATURE_ENABLED_BY_DEFAULT
+#else
+    base::FEATURE_DISABLED_BY_DEFAULT
+#endif
+};
+#endif  // defined(OS_WIN) || defined(OS_MACOSX) || defined(OS_LINUX)
+
 const base::Feature kMash = {"Mash", base::FEATURE_DISABLED_BY_DEFAULT};
 
-// Used to control the mus service (aka the UI service). This makes mus run in
-// process.
-const base::Feature kMus = {"Mus", base::FEATURE_DISABLED_BY_DEFAULT};
+const base::Feature kMashDeprecated = {"MashDeprecated",
+                                       base::FEATURE_DISABLED_BY_DEFAULT};
 
-bool IsMusEnabled() {
-#if defined(USE_AURA)
-  return base::FeatureList::IsEnabled(features::kMus) ||
-         base::FeatureList::IsEnabled(features::kMash);
-#else
-  return false;
-#endif
+bool IsAshInBrowserProcess() {
+  return !base::FeatureList::IsEnabled(features::kMashDeprecated) &&
+         !base::FeatureList::IsEnabled(features::kMash);
 }
 
-#if defined(OS_MACOSX) && BUILDFLAG(MAC_VIEWS_BROWSER)
+#if defined(OS_MACOSX)
+// When enabled, the NSWindows for apps will be created in the app's process,
+// and will forward input to the browser process.
+const base::Feature kHostWindowsInAppShimProcess{
+    "HostWindowsInAppShimProcess", base::FEATURE_DISABLED_BY_DEFAULT};
+
+bool HostWindowsInAppShimProcess() {
+  return base::FeatureList::IsEnabled(kHostWindowsInAppShimProcess);
+}
+
+#if BUILDFLAG(MAC_VIEWS_BROWSER)
 // Causes Views browser builds to use Views browser windows by default rather
 // than Cocoa browser windows.
 const base::Feature kViewsBrowserWindows{"ViewsBrowserWindows",
@@ -85,8 +161,18 @@ const base::Feature kViewsBrowserWindows{"ViewsBrowserWindows",
 // Returns whether a Views-capable browser build should use the Cocoa browser
 // UI.
 bool IsViewsBrowserCocoa() {
-  return !base::FeatureList::IsEnabled(kViewsBrowserWindows);
+  return !base::FeatureList::IsEnabled(kViewsBrowserWindows) &&
+      !base::FeatureList::IsEnabled(kExperimentalUi);
 }
-#endif  //  defined(OS_MACOSX) && BUILDFLAG(MAC_VIEWS_BROWSER)
+#endif  //  BUILDFLAG(MAC_VIEWS_BROWSER)
+#endif  //  defined(OS_MACOSX)
+
+const base::Feature kEnableOzoneDrmMojo = {"OzoneDrmMojo",
+                                           base::FEATURE_DISABLED_BY_DEFAULT};
+
+bool IsOzoneDrmMojo() {
+  return base::FeatureList::IsEnabled(kEnableOzoneDrmMojo) ||
+         IsAshInBrowserProcess();
+}
 
 }  // namespace features

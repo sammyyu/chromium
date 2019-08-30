@@ -10,6 +10,7 @@
 #include <limits>
 #include <map>
 #include <memory>
+#include <set>
 #include <utility>
 
 #include "base/bind.h"
@@ -788,25 +789,47 @@ void LoginDatabase::ReportMetrics(const std::string& sync_username,
   LogNumberOfAccountsForScheme("Https", https_logins);
   LogNumberOfAccountsForScheme("Other", other_logins);
 
-  sql::Statement form_based_passwords_statement(
-      db_.GetUniqueStatement("SELECT signon_realm, password_value FROM logins "
-                             "WHERE blacklisted_by_user = 0 AND scheme = 0"));
+  sql::Statement saved_passwords_statement(
+      db_.GetUniqueStatement("SELECT signon_realm, password_value, scheme "
+                             "FROM logins WHERE blacklisted_by_user = 0"));
 
   std::map<base::string16, std::vector<std::string>> passwords_to_realms;
-  while (form_based_passwords_statement.Step()) {
-    std::string signon_realm = form_based_passwords_statement.ColumnString(0);
+  size_t failed_encryption = 0;
+  while (saved_passwords_statement.Step()) {
     base::string16 decrypted_password;
     // Note that CryptProtectData() is non-deterministic, so passwords must be
     // decrypted before checking equality.
-    if (!IsValidAndroidFacetURI(signon_realm) &&
-        DecryptedString(form_based_passwords_statement.ColumnString(1),
+    if (DecryptedString(saved_passwords_statement.ColumnString(1),
                         &decrypted_password) == ENCRYPTION_RESULT_SUCCESS) {
-      passwords_to_realms[decrypted_password].push_back(signon_realm);
+      std::string signon_realm = saved_passwords_statement.ColumnString(0);
+      if (saved_passwords_statement.ColumnInt(2) == 0 &&
+          !decrypted_password.empty() &&
+          !IsValidAndroidFacetURI(signon_realm)) {
+        passwords_to_realms[decrypted_password].push_back(
+            std::move(signon_realm));
+      }
+    } else {
+      ++failed_encryption;
     }
   }
+  UMA_HISTOGRAM_COUNTS_100("PasswordManager.InaccessiblePasswords",
+                           failed_encryption);
 
   for (const auto& password_to_realms : passwords_to_realms)
     LogPasswordReuseMetrics(password_to_realms.second);
+
+  sql::Statement blacklist_statement(
+      db_.GetUniqueStatement("SELECT signon_realm "
+                             "FROM logins WHERE blacklisted_by_user = 1"));
+  std::set<std::string> signon_realms;
+  size_t blacklisted_items = 0;
+  while (blacklist_statement.Step()) {
+    signon_realms.insert(blacklist_statement.ColumnString(0));
+    ++blacklisted_items;
+  }
+  size_t blacklisted_duplicates = blacklisted_items - signon_realms.size();
+  UMA_HISTOGRAM_COUNTS_1000("PasswordManager.BlacklistedDuplicates",
+                            blacklisted_duplicates);
 }
 
 PasswordStoreChangeList LoginDatabase::AddLogin(const PasswordForm& form) {
@@ -978,10 +1001,9 @@ bool LoginDatabase::DisableAutoSignInForOrigin(const GURL& origin) {
   return s.Run();
 }
 
-// static
 LoginDatabase::EncryptionResult LoginDatabase::InitPasswordFormFromStatement(
     PasswordForm* form,
-    const sql::Statement& s) {
+    const sql::Statement& s) const {
   std::string encrypted_password;
   s.ColumnBlobAsString(COLUMN_PASSWORD_VALUE, &encrypted_password);
   base::string16 decrypted_password;
@@ -1259,11 +1281,10 @@ std::string LoginDatabase::GetEncryptedPassword(
   return encrypted_password;
 }
 
-// static
 bool LoginDatabase::StatementToForms(
     sql::Statement* statement,
     const PasswordStore::FormDigest* matched_form,
-    std::vector<std::unique_ptr<PasswordForm>>* forms) {
+    std::vector<std::unique_ptr<PasswordForm>>* forms) const {
   PSLDomainMatchMetric psl_domain_match_metric = PSL_DOMAIN_MATCH_NONE;
 
   forms->clear();

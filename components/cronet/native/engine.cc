@@ -114,9 +114,15 @@ Cronet_RESULT Cronet_EngineImpl::StartWithParams(
     case Cronet_EngineParams_HTTP_CACHE_MODE_IN_MEMORY:
       context_config_builder.http_cache = URLRequestContextConfig::MEMORY;
       break;
-    case Cronet_EngineParams_HTTP_CACHE_MODE_DISK:
+    case Cronet_EngineParams_HTTP_CACHE_MODE_DISK: {
       context_config_builder.http_cache = URLRequestContextConfig::DISK;
-      if (!base::DirectoryExists(base::FilePath(params->storage_path))) {
+#if defined(OS_WIN)
+      const base::FilePath storage_path(
+          base::FilePath::FromUTF8Unsafe(params->storage_path));
+#else
+      const base::FilePath storage_path(params->storage_path);
+#endif
+      if (!base::DirectoryExists(storage_path)) {
         return CheckResult(
             Cronet_RESULT_ILLEGAL_ARGUMENT_STORAGE_PATH_MUST_EXIST);
       }
@@ -128,6 +134,7 @@ Cronet_RESULT Cronet_EngineImpl::StartWithParams(
       }
       in_use_storage_path_ = params->storage_path;
       break;
+    }
     default:
       context_config_builder.http_cache = URLRequestContextConfig::DISABLED;
   }
@@ -258,9 +265,6 @@ class Cronet_EngineImpl::Callback : public CronetURLRequestContext::Callback {
   // CronetURLRequestContext::Callback implementation:
   void OnInitNetworkThread() override;
   void OnDestroyNetworkThread() override;
-  void OnInitCertVerifierData(net::CertVerifier* cert_verifier,
-                              const std::string& cert_verifier_data) override;
-  void OnSaveCertVerifierData(net::CertVerifier* cert_verifier) override;
   void OnEffectiveConnectionTypeChanged(
       net::EffectiveConnectionType effective_connection_type) override;
   void OnRTTOrThroughputEstimatesComputed(
@@ -305,13 +309,6 @@ void Cronet_EngineImpl::Callback::OnInitNetworkThread() {
 void Cronet_EngineImpl::Callback::OnDestroyNetworkThread() {
   DCHECK_CALLED_ON_VALID_THREAD(network_thread_checker_);
 }
-
-void Cronet_EngineImpl::Callback::OnInitCertVerifierData(
-    net::CertVerifier* cert_verifier,
-    const std::string& cert_verifier_data) {}
-
-void Cronet_EngineImpl::Callback::OnSaveCertVerifierData(
-    net::CertVerifier* cert_verifier) {}
 
 void Cronet_EngineImpl::Callback::OnEffectiveConnectionTypeChanged(
     net::EffectiveConnectionType effective_connection_type) {

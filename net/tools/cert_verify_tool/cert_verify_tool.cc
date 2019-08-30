@@ -116,9 +116,15 @@ class CertVerifyImplUsingProc : public CertVerifyImpl {
       return true;  // "skipping" is considered a successful return.
     }
 
+    base::FilePath dump_path;
+    if (!dump_prefix_path.empty()) {
+      dump_path = dump_prefix_path.AddExtension(FILE_PATH_LITERAL(".pem"))
+                      .InsertBeforeExtensionASCII("." + GetName());
+    }
+
     return VerifyUsingCertVerifyProc(proc_.get(), target_der_cert, hostname,
                                      intermediate_der_certs, root_der_certs,
-                                     crl_set, dump_prefix_path);
+                                     crl_set, dump_path);
   }
 
  private:
@@ -173,6 +179,11 @@ const char kUsage[] =
     " --intermediates=<certs path>\n"
     "      <certs path> is a file containing certificates [1] for use when\n"
     "      path building is looking for intermediates.\n"
+    "\n"
+    " --trust-last-cert\n"
+    "      Removes the final intermediate from the chain and instead adds it\n"
+    "      as a root. This is useful when providing a <target/chain>\n"
+    "      parameter whose final certificate is a trust anchor.\n"
     "\n"
     " --time=<time>\n"
     "      Use <time> instead of the current system time. <time> is\n"
@@ -277,6 +288,18 @@ int main(int argc, char** argv) {
   if (target_der_cert.der_cert.empty()) {
     std::cerr << "ERROR: no target cert\n";
     return 1;
+  }
+
+  // If --trust-last-cert was specified, move the final intermediate to the
+  // roots list.
+  if (command_line.HasSwitch("trust-last-cert")) {
+    if (intermediate_der_certs.empty()) {
+      std::cerr << "ERROR: no intermediate certificates\n";
+      return 1;
+    }
+
+    root_der_certs.push_back(intermediate_der_certs.back());
+    intermediate_der_certs.pop_back();
   }
 
   // Create a network thread to be used for AIA fetches, and wait for a

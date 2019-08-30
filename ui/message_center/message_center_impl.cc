@@ -12,7 +12,6 @@
 #include "base/auto_reset.h"
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/observer_list.h"
 #include "base/stl_util.h"
 #include "base/strings/string_util.h"
@@ -76,15 +75,6 @@ void MessageCenterImpl::OnBlockingStateChanged(NotificationBlocker* blocker) {
   NotificationList::PopupNotifications popups =
       notification_list_->GetPopupNotifications(blockers_, &blocked);
 
-  // Close already displayed pop-ups that are blocked now.
-  for (const std::string& notification_id : blocked) {
-    // Do not call MessageCenterImpl::MarkSinglePopupAsShown() directly here
-    // just for performance reason. MessageCenterImpl::MarkSinglePopupAsShown()
-    // calls NotificationList::MarkSinglePopupAsShown(), but the whole cache
-    // will be recreated below.
-    if (FindVisibleNotificationById(notification_id)->IsRead())
-      notification_list_->MarkSinglePopupAsShown(notification_id, true);
-  }
   visible_notifications_ =
       notification_list_->GetVisibleNotifications(blockers_);
 
@@ -119,6 +109,16 @@ bool MessageCenterImpl::IsMessageCenterVisible() const {
   return visible_;
 }
 
+void MessageCenterImpl::SetHasMessageCenterView(bool has_message_center_view) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  has_message_center_view_ = has_message_center_view;
+}
+
+bool MessageCenterImpl::HasMessageCenterView() const {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  return has_message_center_view_;
+}
+
 size_t MessageCenterImpl::NotificationCount() const {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   return visible_notifications_.size();
@@ -139,6 +139,12 @@ Notification* MessageCenterImpl::FindVisibleNotificationById(
     const std::string& id) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   return notification_list_->GetNotificationById(id);
+}
+
+NotificationList::Notifications MessageCenterImpl::FindNotificationsByAppId(
+    const std::string& app_id) {
+  DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
+  return notification_list_->GetNotificationsByAppId(app_id);
 }
 
 const NotificationList::Notifications&
@@ -312,16 +318,14 @@ void MessageCenterImpl::ClickOnNotification(const std::string& id) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (FindVisibleNotificationById(id) == NULL)
     return;
-#if defined(OS_CHROMEOS)
-  if (HasPopupNotifications())
+  if (HasMessageCenterView() && HasPopupNotifications())
     MarkSinglePopupAsShown(id, true);
-#endif
   scoped_refptr<NotificationDelegate> delegate =
       notification_list_->GetNotificationDelegate(id);
   for (auto& observer : observer_list_)
-    observer.OnNotificationClicked(id);
-  if (delegate.get())
-    delegate->Click();
+    observer.OnNotificationClicked(id, base::nullopt, base::nullopt);
+  if (delegate)
+    delegate->Click(base::nullopt, base::nullopt);
 }
 
 void MessageCenterImpl::ClickOnNotificationButton(const std::string& id,
@@ -329,16 +333,14 @@ void MessageCenterImpl::ClickOnNotificationButton(const std::string& id,
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (!FindVisibleNotificationById(id))
     return;
-#if defined(OS_CHROMEOS)
-  if (HasPopupNotifications())
+  if (HasMessageCenterView() && HasPopupNotifications())
     MarkSinglePopupAsShown(id, true);
-#endif
   scoped_refptr<NotificationDelegate> delegate =
       notification_list_->GetNotificationDelegate(id);
   for (auto& observer : observer_list_)
-    observer.OnNotificationButtonClicked(id, button_index);
-  if (delegate.get())
-    delegate->ButtonClick(button_index);
+    observer.OnNotificationClicked(id, button_index, base::nullopt);
+  if (delegate)
+    delegate->Click(button_index, base::nullopt);
 }
 
 void MessageCenterImpl::ClickOnNotificationButtonWithReply(
@@ -348,16 +350,14 @@ void MessageCenterImpl::ClickOnNotificationButtonWithReply(
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   if (!FindVisibleNotificationById(id))
     return;
-#if defined(OS_CHROMEOS)
-  if (HasPopupNotifications())
+  if (HasMessageCenterView() && HasPopupNotifications())
     MarkSinglePopupAsShown(id, true);
-#endif
   scoped_refptr<NotificationDelegate> delegate =
       notification_list_->GetNotificationDelegate(id);
   for (auto& observer : observer_list_)
-    observer.OnNotificationButtonClickedWithReply(id, button_index, reply);
-  if (delegate.get())
-    delegate->ButtonClickWithReply(button_index, reply);
+    observer.OnNotificationClicked(id, button_index, reply);
+  if (delegate)
+    delegate->Click(button_index, reply);
 }
 
 void MessageCenterImpl::ClickOnSettingsButton(const std::string& id) {
@@ -391,13 +391,13 @@ void MessageCenterImpl::MarkSinglePopupAsShown(const std::string& id,
   if (FindVisibleNotificationById(id) == NULL)
     return;
 
-#if !defined(OS_CHROMEOS)
-  RemoveNotification(id, false);
-#else
-  notification_list_->MarkSinglePopupAsShown(id, mark_notification_as_read);
-  for (auto& observer : observer_list_)
-    observer.OnNotificationUpdated(id);
-#endif  // defined(OS_CHROMEOS)
+  if (HasMessageCenterView()) {
+    notification_list_->MarkSinglePopupAsShown(id, mark_notification_as_read);
+    for (auto& observer : observer_list_)
+      observer.OnNotificationUpdated(id);
+  } else {
+    RemoveNotification(id, false);
+  }
 }
 
 void MessageCenterImpl::DisplayedNotification(

@@ -8,7 +8,6 @@
 
 #include "base/lazy_instance.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/path_service.h"
 #include "base/strings/string_number_conversions.h"
 #include "chrome/browser/browser_process.h"
@@ -23,7 +22,7 @@
 #include "net/base/net_errors.h"
 #include "net/log/net_log_source.h"
 #include "net/socket/tcp_server_socket.h"
-#include "third_party/WebKit/public/public_features.h"
+#include "third_party/blink/public/public_buildflags.h"
 #include "ui/base/resource/resource_bundle.h"
 
 namespace {
@@ -104,13 +103,13 @@ RemoteDebuggingServer::RemoteDebuggingServer() {
     // The client requested an ephemeral port. Must write the selected
     // port to a well-known location in the profile directory to
     // bootstrap the connection process.
-    bool result = PathService::Get(chrome::DIR_USER_DATA, &output_dir);
+    bool result = base::PathService::Get(chrome::DIR_USER_DATA, &output_dir);
     DCHECK(result);
   }
 
   base::FilePath debug_frontend_dir;
 #if BUILDFLAG(DEBUG_DEVTOOLS)
-  PathService::Get(chrome::DIR_INSPECTOR_DEBUG, &debug_frontend_dir);
+  base::PathService::Get(chrome::DIR_INSPECTOR_DEBUG, &debug_frontend_dir);
 #endif
 
   content::DevToolsAgentHost::StartRemoteDebuggingServer(

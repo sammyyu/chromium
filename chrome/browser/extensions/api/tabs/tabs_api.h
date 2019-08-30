@@ -9,7 +9,6 @@
 #include <vector>
 
 #include "base/compiler_specific.h"
-#include "chrome/browser/extensions/chrome_extension_function.h"
 #include "chrome/browser/extensions/chrome_extension_function_details.h"
 #include "chrome/common/extensions/api/tabs.h"
 #include "components/zoom/zoom_controller.h"
@@ -138,21 +137,22 @@ class TabsHighlightFunction : public UIThreadExtensionFunction {
                     std::string* error);
   DECLARE_EXTENSION_FUNCTION("tabs.highlight", TABS_HIGHLIGHT)
 };
-class TabsUpdateFunction : public ChromeAsyncExtensionFunction {
+class TabsUpdateFunction : public UIThreadExtensionFunction {
  public:
   TabsUpdateFunction();
 
  protected:
   ~TabsUpdateFunction() override {}
-  virtual bool UpdateURL(const std::string& url,
-                         int tab_id,
-                         bool* is_async);
-  virtual void PopulateResult();
+  bool UpdateURL(const std::string& url,
+                 int tab_id,
+                 bool* is_async,
+                 std::string* error);
+  ResponseValue GetResult();
 
   content::WebContents* web_contents_;
 
  private:
-  bool RunAsync() override;
+  ResponseAction Run() override;
   void OnExecuteCodeFinished(const std::string& error,
                              const GURL& on_url,
                              const base::ListValue& script_result);
@@ -181,11 +181,11 @@ class TabsRemoveFunction : public UIThreadExtensionFunction {
   bool RemoveTab(int tab_id, std::string* error);
   DECLARE_EXTENSION_FUNCTION("tabs.remove", TABS_REMOVE)
 };
-class TabsDetectLanguageFunction : public ChromeAsyncExtensionFunction,
+class TabsDetectLanguageFunction : public UIThreadExtensionFunction,
                                    public content::NotificationObserver {
  private:
   ~TabsDetectLanguageFunction() override {}
-  bool RunAsync() override;
+  ResponseAction Run() override;
 
   void Observe(int type,
                const content::NotificationSource& source,
@@ -197,14 +197,14 @@ class TabsDetectLanguageFunction : public ChromeAsyncExtensionFunction,
 
 class TabsCaptureVisibleTabFunction
     : public extensions::WebContentsCaptureClient,
-      public AsyncExtensionFunction {
+      public UIThreadExtensionFunction {
  public:
   TabsCaptureVisibleTabFunction();
   static void RegisterProfilePrefs(user_prefs::PrefRegistrySyncable* registry);
 
   // ExtensionFunction implementation.
   bool HasPermission() override;
-  bool RunAsync() override;
+  ResponseAction Run() override;
 
  protected:
   ~TabsCaptureVisibleTabFunction() override {}
@@ -212,7 +212,7 @@ class TabsCaptureVisibleTabFunction
  private:
   ChromeExtensionFunctionDetails chrome_details_;
 
-  content::WebContents* GetWebContentsForID(int window_id);
+  content::WebContents* GetWebContentsForID(int window_id, std::string* error);
 
   // extensions::WebContentsCaptureClient:
   bool IsScreenshotEnabled() const override;
@@ -221,9 +221,11 @@ class TabsCaptureVisibleTabFunction
   void OnCaptureFailure(CaptureResult result) override;
 
  private:
-  void SetErrorMessage(CaptureResult result);
-
   DECLARE_EXTENSION_FUNCTION("tabs.captureVisibleTab", TABS_CAPTUREVISIBLETAB)
+
+  static std::string CaptureResultToErrorMessage(CaptureResult result);
+
+  DISALLOW_COPY_AND_ASSIGN(TabsCaptureVisibleTabFunction);
 };
 
 // Implement API call tabs.executeScript and tabs.insertCSS.
@@ -239,8 +241,8 @@ class ExecuteCodeInTabFunction : public ExecuteCodeFunction {
 
   // Initializes |execute_tab_id_| and |details_|.
   InitResult Init() override;
-  bool CanExecuteScriptOnPage() override;
-  ScriptExecutor* GetScriptExecutor() override;
+  bool CanExecuteScriptOnPage(std::string* error) override;
+  ScriptExecutor* GetScriptExecutor(std::string* error) override;
   bool IsWebView() const override;
   const GURL& GetWebViewSrc() const override;
 
@@ -258,10 +260,6 @@ class TabsExecuteScriptFunction : public ExecuteCodeInTabFunction {
  private:
   ~TabsExecuteScriptFunction() override {}
 
-  void OnExecuteCodeFinished(const std::string& error,
-                             const GURL& on_url,
-                             const base::ListValue& script_result) override;
-
   DECLARE_EXTENSION_FUNCTION("tabs.executeScript", TABS_EXECUTESCRIPT)
 };
 
@@ -274,7 +272,7 @@ class TabsInsertCSSFunction : public ExecuteCodeInTabFunction {
   DECLARE_EXTENSION_FUNCTION("tabs.insertCSS", TABS_INSERTCSS)
 };
 
-class ZoomAPIFunction : public ChromeAsyncExtensionFunction {
+class ZoomAPIFunction : public UIThreadExtensionFunction {
  protected:
   ~ZoomAPIFunction() override {}
 
@@ -284,14 +282,14 @@ class ZoomAPIFunction : public ChromeAsyncExtensionFunction {
   //
   // TODO(...) many other tabs API functions use similar behavior. There should
   // be a way to share this implementation somehow.
-  content::WebContents* GetWebContents(int tab_id);
+  content::WebContents* GetWebContents(int tab_id, std::string* error);
 };
 
 class TabsSetZoomFunction : public ZoomAPIFunction {
  private:
   ~TabsSetZoomFunction() override {}
 
-  bool RunAsync() override;
+  ResponseAction Run() override;
 
   DECLARE_EXTENSION_FUNCTION("tabs.setZoom", TABS_SETZOOM)
 };
@@ -300,7 +298,7 @@ class TabsGetZoomFunction : public ZoomAPIFunction {
  private:
   ~TabsGetZoomFunction() override {}
 
-  bool RunAsync() override;
+  ResponseAction Run() override;
 
   DECLARE_EXTENSION_FUNCTION("tabs.getZoom", TABS_GETZOOM)
 };
@@ -309,7 +307,7 @@ class TabsSetZoomSettingsFunction : public ZoomAPIFunction {
  private:
   ~TabsSetZoomSettingsFunction() override {}
 
-  bool RunAsync() override;
+  ResponseAction Run() override;
 
   DECLARE_EXTENSION_FUNCTION("tabs.setZoomSettings", TABS_SETZOOMSETTINGS)
 };
@@ -318,7 +316,7 @@ class TabsGetZoomSettingsFunction : public ZoomAPIFunction {
  private:
   ~TabsGetZoomSettingsFunction() override {}
 
-  bool RunAsync() override;
+  ResponseAction Run() override;
 
   DECLARE_EXTENSION_FUNCTION("tabs.getZoomSettings", TABS_GETZOOMSETTINGS)
 };

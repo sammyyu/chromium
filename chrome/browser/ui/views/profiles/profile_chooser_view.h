@@ -53,14 +53,14 @@ class ProfileChooserView : public content::WebContentsDelegate,
   // call this function when the button is clicked and if the bubble isn't
   // showing it will appear while if it is showing, nothing will happen here and
   // the existing bubble will auto-close due to focus loss.
-  // There are 2 ways to position the Bubble, if |anchor_view| is set, then
+  // There are 2 ways to position the Bubble, if |anchor_button| is set, then
   // |parent_window| and |anchor_rect| are ignored. Otherwise, |parent_window|
   // and |anchor_rect| have to be set.
   static void ShowBubble(
       profiles::BubbleViewMode view_mode,
       const signin::ManageAccountsParams& manage_accounts_params,
       signin_metrics::AccessPoint access_point,
-      views::View* anchor_view,
+      views::Button* anchor_button,
       gfx::NativeView parent_window,
       const gfx::Rect& anchor_rect,
       Browser* browser,
@@ -78,7 +78,7 @@ class ProfileChooserView : public content::WebContentsDelegate,
   typedef std::map<views::Button*, int> ButtonIndexes;
   typedef std::map<views::Button*, std::string> AccountButtonIndexes;
 
-  ProfileChooserView(views::View* anchor_view,
+  ProfileChooserView(views::Button* anchor_button,
                      Browser* browser,
                      profiles::BubbleViewMode view_mode,
                      signin::GAIAServiceType service_type,
@@ -143,6 +143,7 @@ class ProfileChooserView : public content::WebContentsDelegate,
   views::View* CreateGuestProfileView();
   views::View* CreateOptionsView(bool display_lock, AvatarMenu* avatar_menu);
   views::View* CreateSupervisedUserDisclaimerView();
+  views::View* CreateAutofillHomeView();
 
   // Account Management view for the profile |avatar_item|.
   views::View* CreateCurrentProfileAccountsView(
@@ -177,8 +178,9 @@ class ProfileChooserView : public content::WebContentsDelegate,
   // Clean-up done after an action was performed in the ProfileChooser.
   void PostActionPerformed(ProfileMetrics::ProfileDesktopMenu action_performed);
 
-  // Callback for DiceAccountsMenu.
+  // Callbacks for DiceAccountsMenu.
   void EnableSync(const base::Optional<AccountInfo>& account);
+  void SignOutAllWebAccounts();
 
   // Methods to keep track of the number of times the Dice sign-in promo has
   // been shown.
@@ -187,6 +189,7 @@ class ProfileChooserView : public content::WebContentsDelegate,
 
   std::unique_ptr<AvatarMenu> avatar_menu_;
   Browser* const browser_;
+  views::Button* const anchor_button_;
 
   // Other profiles used in the "fast profile switcher" view.
   ButtonIndexes open_other_profile_indexes_map_;
@@ -217,6 +220,9 @@ class ProfileChooserView : public content::WebContentsDelegate,
   views::LabelButton* lock_button_;
   views::LabelButton* close_all_windows_button_;
   views::Link* add_account_link_;
+  views::LabelButton* passwords_button_;
+  views::LabelButton* credit_cards_button_;
+  views::LabelButton* addresses_button_;
 
   // Buttons displayed in the gaia signin view.
   views::ImageButton* gaia_signin_cancel_button_;

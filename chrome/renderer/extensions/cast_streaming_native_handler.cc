@@ -18,7 +18,6 @@
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/sys_info.h"
@@ -40,11 +39,11 @@
 #include "media/base/limits.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/ip_address.h"
-#include "third_party/WebKit/public/platform/WebMediaStream.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
-#include "third_party/WebKit/public/platform/WebURL.h"
-#include "third_party/WebKit/public/web/WebDOMMediaStreamTrack.h"
-#include "third_party/WebKit/public/web/WebMediaStreamRegistry.h"
+#include "third_party/blink/public/platform/web_media_stream.h"
+#include "third_party/blink/public/platform/web_media_stream_track.h"
+#include "third_party/blink/public/platform/web_url.h"
+#include "third_party/blink/public/web/web_dom_media_stream_track.h"
+#include "third_party/blink/public/web/web_media_stream_registry.h"
 #include "url/gurl.h"
 
 using content::V8ValueConverter;
@@ -921,8 +920,8 @@ void CastStreamingNativeHandler::StartCastRtpReceiver(
       media::AudioParameters::AUDIO_PCM_LINEAR,
       media::GuessChannelLayout(audio_config.channels),
       audio_config.rtp_timebase,  // sampling rate
-      16, static_cast<int>(audio_config.rtp_timebase /
-                           audio_config.target_frame_rate));
+      static_cast<int>(audio_config.rtp_timebase /
+                       audio_config.target_frame_rate));
 
   if (!params.IsValid()) {
     args.GetIsolate()->ThrowException(v8::Exception::TypeError(

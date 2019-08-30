@@ -19,12 +19,12 @@
 #include "content/public/common/request_context_type.h"
 #include "services/network/public/mojom/fetch_api.mojom.h"
 #include "services/network/public/mojom/request_context_frame_type.mojom.h"
-#include "third_party/WebKit/public/mojom/page/page_visibility_state.mojom.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_client.mojom.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_object.mojom.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_registration.mojom.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_state.mojom.h"
-#include "third_party/WebKit/public/platform/modules/fetch/fetch_api_request.mojom.h"
+#include "third_party/blink/public/mojom/page/page_visibility_state.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_client.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_object.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_registration.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_state.mojom.h"
+#include "third_party/blink/public/platform/modules/fetch/fetch_api_request.mojom.h"
 #include "url/gurl.h"
 
 // This file is to have common definitions that are to be shared by
@@ -46,7 +46,13 @@ extern const char kServiceWorkerUpdateErrorPrefix[];
 extern const char kServiceWorkerUnregisterErrorPrefix[];
 extern const char kServiceWorkerGetRegistrationErrorPrefix[];
 extern const char kServiceWorkerGetRegistrationsErrorPrefix[];
-extern const char kFetchScriptError[];
+extern const char kServiceWorkerFetchScriptError[];
+extern const char kServiceWorkerBadHTTPResponseError[];
+extern const char kServiceWorkerSSLError[];
+extern const char kServiceWorkerBadMIMEError[];
+extern const char kServiceWorkerNoMIMEError[];
+extern const char kServiceWorkerRedirectError[];
+extern const char kServiceWorkerAllowed[];
 
 // Constants for invalid identifiers.
 static const int kInvalidEmbeddedWorkerThreadId = -1;
@@ -84,10 +90,14 @@ struct CONTENT_EXPORT ServiceWorkerFetchRequest {
   ServiceWorkerFetchRequest& operator=(const ServiceWorkerFetchRequest& other);
   ~ServiceWorkerFetchRequest();
   size_t EstimatedStructSize();
+  std::string Serialize() const;
 
   static blink::mojom::FetchCacheMode GetCacheModeFromLoadFlags(int load_flags);
+  static ServiceWorkerFetchRequest ParseFromString(
+      const std::string& serialized);
 
-  // Be sure to update EstimatedStructSize() when adding members.
+  // Be sure to update EstimatedStructSize(), Serialize(), and ParseFromString()
+  // when adding members.
   network::mojom::FetchRequestMode mode =
       network::mojom::FetchRequestMode::kNoCORS;
   bool is_main_resource_load = false;
@@ -108,6 +118,7 @@ struct CONTENT_EXPORT ServiceWorkerFetchRequest {
   bool keepalive = false;
   std::string client_id;
   bool is_reload = false;
+  bool is_history_navigation = false;
 };
 
 // Roughly corresponds to the Fetch API's Response type. This struct has several

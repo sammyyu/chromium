@@ -18,6 +18,7 @@
 #include "chrome/renderer/extensions/app_bindings.h"
 #include "chrome/renderer/extensions/app_hooks_delegate.h"
 #include "chrome/renderer/extensions/automation_internal_custom_bindings.h"
+#include "chrome/renderer/extensions/cast_streaming_native_handler.h"
 #include "chrome/renderer/extensions/extension_hooks_delegate.h"
 #include "chrome/renderer/extensions/media_galleries_custom_bindings.h"
 #include "chrome/renderer/extensions/notifications_native_handler.h"
@@ -46,14 +47,10 @@
 #include "extensions/renderer/native_handler.h"
 #include "extensions/renderer/resource_bundle_source_map.h"
 #include "extensions/renderer/script_context.h"
-#include "media/media_features.h"
-#include "third_party/WebKit/public/platform/WebString.h"
-#include "third_party/WebKit/public/platform/WebURL.h"
-#include "third_party/WebKit/public/web/WebSecurityPolicy.h"
-
-#if BUILDFLAG(ENABLE_WEBRTC)
-#include "chrome/renderer/extensions/cast_streaming_native_handler.h"
-#endif
+#include "media/media_buildflags.h"
+#include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/public/platform/web_url.h"
+#include "third_party/blink/public/web/web_security_policy.h"
 
 #if defined(OS_CHROMEOS)
 #include "chrome/renderer/extensions/file_browser_handler_custom_bindings.h"
@@ -69,8 +66,8 @@ ChromeExtensionsDispatcherDelegate::ChromeExtensionsDispatcherDelegate() {
 ChromeExtensionsDispatcherDelegate::~ChromeExtensionsDispatcherDelegate() {
 }
 
-void ChromeExtensionsDispatcherDelegate::InitOriginPermissions(
-    const extensions::Extension* extension,
+void ChromeExtensionsDispatcherDelegate::AddOriginAccessPermissions(
+    const extensions::Extension& extension,
     bool is_extension_active) {
   // Allow component extensions to access chrome://theme/.
   //
@@ -79,21 +76,20 @@ void ChromeExtensionsDispatcherDelegate::InitOriginPermissions(
   // component extension somehow starts as inactive and becomes active later,
   // we'll re-init the origin permissions, so there's no danger in being
   // conservative.
-  if (extensions::Manifest::IsComponentLocation(extension->location()) &&
+  if (extensions::Manifest::IsComponentLocation(extension.location()) &&
       is_extension_active) {
     blink::WebSecurityPolicy::AddOriginAccessWhitelistEntry(
-        extension->url(), blink::WebString::FromUTF8(content::kChromeUIScheme),
+        extension.url(), blink::WebString::FromUTF8(content::kChromeUIScheme),
         blink::WebString::FromUTF8(chrome::kChromeUIThemeHost), false);
   }
 
   // TODO(jstritar): We should try to remove this special case. Also, these
   // whitelist entries need to be updated when the kManagement permission
   // changes.
-  if (is_extension_active &&
-      extension->permissions_data()->HasAPIPermission(
-          extensions::APIPermission::kManagement)) {
+  if (is_extension_active && extension.permissions_data()->HasAPIPermission(
+                                 extensions::APIPermission::kManagement)) {
     blink::WebSecurityPolicy::AddOriginAccessWhitelistEntry(
-        extension->url(), blink::WebString::FromUTF8(content::kChromeUIScheme),
+        extension.url(), blink::WebString::FromUTF8(content::kChromeUIScheme),
         blink::WebString::FromUTF8(chrome::kChromeUIExtensionIconHost), false);
   }
 }
@@ -138,12 +134,10 @@ void ChromeExtensionsDispatcherDelegate::RegisterNativeHandlers(
   module_system->RegisterNativeHandler(
       "webstore", std::unique_ptr<NativeHandler>(
                       new extensions::WebstoreBindings(context)));
-#if BUILDFLAG(ENABLE_WEBRTC)
   module_system->RegisterNativeHandler(
       "cast_streaming_natives",
       std::make_unique<extensions::CastStreamingNativeHandler>(
           context, bindings_system));
-#endif
   module_system->RegisterNativeHandler(
       "automationInternal",
       std::make_unique<extensions::AutomationInternalCustomBindings>(
@@ -181,8 +175,6 @@ void ChromeExtensionsDispatcherDelegate::PopulateSourceMap(
   source_map->RegisterSource("developerPrivate",
                              IDR_DEVELOPER_PRIVATE_CUSTOM_BINDINGS_JS);
   source_map->RegisterSource("downloads", IDR_DOWNLOADS_CUSTOM_BINDINGS_JS);
-  source_map->RegisterSource("feedbackPrivate",
-                             IDR_FEEDBACK_PRIVATE_CUSTOM_BINDINGS_JS);
   source_map->RegisterSource("gcm", IDR_GCM_CUSTOM_BINDINGS_JS);
   source_map->RegisterSource("identity", IDR_IDENTITY_CUSTOM_BINDINGS_JS);
   source_map->RegisterSource("imageWriterPrivate",
@@ -237,7 +229,6 @@ void ChromeExtensionsDispatcherDelegate::PopulateSourceMap(
                              IDR_TERMINAL_PRIVATE_CUSTOM_BINDINGS_JS);
 #endif  // defined(OS_CHROMEOS)
 
-#if BUILDFLAG(ENABLE_WEBRTC)
   source_map->RegisterSource("cast.streaming.rtpStream",
                              IDR_CAST_STREAMING_RTP_STREAM_CUSTOM_BINDINGS_JS);
   source_map->RegisterSource("cast.streaming.session",
@@ -248,14 +239,11 @@ void ChromeExtensionsDispatcherDelegate::PopulateSourceMap(
   source_map->RegisterSource(
       "cast.streaming.receiverSession",
       IDR_CAST_STREAMING_RECEIVER_SESSION_CUSTOM_BINDINGS_JS);
-#endif
   source_map->RegisterSource(
       "webrtcDesktopCapturePrivate",
       IDR_WEBRTC_DESKTOP_CAPTURE_PRIVATE_CUSTOM_BINDINGS_JS);
-#if BUILDFLAG(ENABLE_WEBRTC)
   source_map->RegisterSource("webrtcLoggingPrivate",
                              IDR_WEBRTC_LOGGING_PRIVATE_CUSTOM_BINDINGS_JS);
-#endif
   source_map->RegisterSource("webstore", IDR_WEBSTORE_CUSTOM_BINDINGS_JS);
 
 
@@ -276,7 +264,8 @@ void ChromeExtensionsDispatcherDelegate::PopulateSourceMap(
       IDR_MEDIA_STATUS_MOJOM_JS);
   source_map->RegisterSource("media_router_bindings",
                              IDR_MEDIA_ROUTER_BINDINGS_JS);
-  source_map->RegisterSource("mojo/common/time.mojom", IDR_MOJO_TIME_MOJOM_JS);
+  source_map->RegisterSource("mojo/public/mojom/base/time.mojom",
+                             IDR_MOJO_TIME_MOJOM_JS);
   source_map->RegisterSource("net/interfaces/ip_address.mojom",
                              IDR_MOJO_IP_ADDRESS_MOJOM_JS);
   source_map->RegisterSource("net/interfaces/ip_endpoint.mojom",

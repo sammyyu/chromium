@@ -169,6 +169,9 @@ class ASH_EXPORT RootWindowController {
   // lead to a crash.
   SystemTray* GetSystemTray();
 
+  // Returns if system tray and its widget is visible.
+  bool IsSystemTrayVisible();
+
   // True if the window can receive events on this root window.
   bool CanWindowReceiveEvents(aura::Window* window);
 
@@ -231,6 +234,7 @@ class ASH_EXPORT RootWindowController {
   void ShowContextMenu(const gfx::Point& location_in_screen,
                        ui::MenuSourceType source_type);
   void HideContextMenu();
+  bool IsContextMenuShown() const;
 
   // Called when the login status changes after login (such as lock/unlock).
   void UpdateAfterLoginStatusChange(LoginStatus status);

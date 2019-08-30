@@ -20,21 +20,23 @@
 #include "components/autofill/core/common/autofill_features.h"
 #include "components/autofill/core/common/form_data.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/public/platform/WebString.h"
-#include "third_party/WebKit/public/platform/WebVector.h"
-#include "third_party/WebKit/public/web/WebDocument.h"
-#include "third_party/WebKit/public/web/WebElement.h"
-#include "third_party/WebKit/public/web/WebElementCollection.h"
-#include "third_party/WebKit/public/web/WebFormControlElement.h"
-#include "third_party/WebKit/public/web/WebFormElement.h"
-#include "third_party/WebKit/public/web/WebInputElement.h"
-#include "third_party/WebKit/public/web/WebLocalFrame.h"
-#include "third_party/WebKit/public/web/WebSelectElement.h"
+#include "third_party/blink/public/platform/web_string.h"
+#include "third_party/blink/public/platform/web_vector.h"
+#include "third_party/blink/public/web/web_document.h"
+#include "third_party/blink/public/web/web_element.h"
+#include "third_party/blink/public/web/web_element_collection.h"
+#include "third_party/blink/public/web/web_form_control_element.h"
+#include "third_party/blink/public/web/web_form_element.h"
+#include "third_party/blink/public/web/web_input_element.h"
+#include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_script_source.h"
+#include "third_party/blink/public/web/web_select_element.h"
 
 using autofill::features::kAutofillEnforceMinRequiredFieldsForHeuristics;
 using autofill::features::kAutofillEnforceMinRequiredFieldsForQuery;
 using autofill::features::kAutofillEnforceMinRequiredFieldsForUpload;
 using base::ASCIIToUTF16;
+using blink::WebAutofillState;
 using blink::WebDocument;
 using blink::WebElement;
 using blink::WebFormControlElement;
@@ -1223,7 +1225,8 @@ class FormAutofillTest : public ChromeRenderViewTest {
                                    const char* placeholder_firstname,
                                    const char* placeholder_lastname,
                                    const char* placeholder_phone,
-                                   const char* placeholder_creditcard) {
+                                   const char* placeholder_creditcard,
+                                   const char* placeholder_city) {
     LoadHTML(html);
     WebLocalFrame* web_frame = GetMainFrame();
     ASSERT_NE(nullptr, web_frame);
@@ -1238,19 +1241,28 @@ class FormAutofillTest : public ChromeRenderViewTest {
     std::vector<WebFormControlElement> control_elements =
         ExtractAutofillableElementsInForm(form_element);
 
-    ASSERT_EQ(4U, control_elements.size());
+    ASSERT_EQ(5U, control_elements.size());
     // We now modify the values.
-    // This will be ignored.
+    // This will be ignored, the string will be sanitized into an empty string.
     control_elements[0].SetValue(WebString::FromUTF16(
         base::char16(base::i18n::kLeftToRightMark) + ASCIIToUTF16("     ")));
+
     // This will be considered as a value entered by the user.
     control_elements[1].SetValue(WebString::FromUTF16(ASCIIToUTF16("Earp")));
-    // This will be ignored.
+    control_elements[1].SetIsEnteredByUserForTest();
+
+    // This will be ignored, the string will be sanitized into an empty string.
     control_elements[2].SetValue(
         WebString::FromUTF16(ASCIIToUTF16("(___)-___-____")));
-    // This will be ignored.
+
+    // This will be ignored, the string will be sanitized into an empty string.
     control_elements[3].SetValue(
         WebString::FromUTF16(ASCIIToUTF16("____-____-____-____")));
+
+    // This will be ignored, because it's injected by the website and not the
+    // user.
+    control_elements[4].SetValue(
+        WebString::FromUTF16(ASCIIToUTF16("Enter your city..")));
 
     // Find the form that contains the input element.
     FormData form;
@@ -1263,17 +1275,19 @@ class FormAutofillTest : public ChromeRenderViewTest {
     EXPECT_EQ(GURL("http://abc.com"), form.action);
 
     const std::vector<FormFieldData>& fields = form.fields;
-    ASSERT_EQ(4U, fields.size());
+    ASSERT_EQ(5U, fields.size());
 
     // Preview the form and verify that the cursor position has been updated.
     form.fields[0].value = ASCIIToUTF16("Wyatt");
     form.fields[1].value = ASCIIToUTF16("Earpagus");
     form.fields[2].value = ASCIIToUTF16("888-123-4567");
     form.fields[3].value = ASCIIToUTF16("1111-2222-3333-4444");
+    form.fields[4].value = ASCIIToUTF16("Montreal");
     form.fields[0].is_autofilled = true;
     form.fields[1].is_autofilled = true;
     form.fields[2].is_autofilled = true;
     form.fields[3].is_autofilled = true;
+    form.fields[4].is_autofilled = true;
     PreviewForm(form, input_element);
     // The selection should be set after the fifth character.
     EXPECT_EQ(5, input_element.SelectionStart());
@@ -1293,7 +1307,7 @@ class FormAutofillTest : public ChromeRenderViewTest {
     EXPECT_EQ(GURL("http://abc.com"), form2.action);
 
     const std::vector<FormFieldData>& fields2 = form2.fields;
-    ASSERT_EQ(4U, fields2.size());
+    ASSERT_EQ(5U, fields2.size());
 
     FormFieldData expected;
     expected.form_control_type = "text";
@@ -1347,6 +1361,22 @@ class FormAutofillTest : public ChromeRenderViewTest {
     }
     expected.is_autofilled = true;
     EXPECT_FORM_FIELD_DATA_EQUALS(expected, fields2[3]);
+
+    expected.name = ASCIIToUTF16("city");
+    expected.value =
+        base::FeatureList::IsEnabled(features::kAutofillPrefilledFields)
+            ? ASCIIToUTF16("Montreal")
+            : control_elements[4].Value().Utf16();
+    if (placeholder_city) {
+      expected.label = ASCIIToUTF16(placeholder_city);
+      expected.placeholder = ASCIIToUTF16(placeholder_city);
+    } else {
+      expected.label.clear();
+      expected.placeholder.clear();
+    }
+    expected.is_autofilled =
+        base::FeatureList::IsEnabled(features::kAutofillPrefilledFields);
+    EXPECT_FORM_FIELD_DATA_EQUALS(expected, fields2[4]);
 
     // Verify that the cursor position has been updated.
     EXPECT_EQ(5, input_element.SelectionStart());
@@ -1497,6 +1527,7 @@ class FormAutofillTest : public ChromeRenderViewTest {
     control_elements[1].SetValue(WebString::FromUTF16(ASCIIToUTF16("____/__")));
     control_elements[2].SetValue(
         WebString::FromUTF16(ASCIIToUTF16("John Smith")));
+    control_elements[2].SetIsEnteredByUserForTest();
 
     // Find the form that contains the input element.
     FormData form;
@@ -1584,7 +1615,7 @@ class FormAutofillTest : public ChromeRenderViewTest {
     EXPECT_EQ(19, input_element.SelectionEnd());
   }
 
-  void TestClearFormWithNode(const char* html, bool unowned) {
+  void TestClearSectionWithNode(const char* html, bool unowned) {
     LoadHTML(html);
     WebLocalFrame* web_frame = GetMainFrame();
     ASSERT_NE(nullptr, web_frame);
@@ -1595,20 +1626,20 @@ class FormAutofillTest : public ChromeRenderViewTest {
 
     // Set the auto-filled attribute.
     WebInputElement firstname = GetInputElementById("firstname");
-    firstname.SetAutofilled(true);
+    firstname.SetAutofillState(WebAutofillState::kAutofilled);
     WebInputElement lastname = GetInputElementById("lastname");
-    lastname.SetAutofilled(true);
+    lastname.SetAutofillState(WebAutofillState::kAutofilled);
     WebInputElement month = GetInputElementById("month");
-    month.SetAutofilled(true);
+    month.SetAutofillState(WebAutofillState::kAutofilled);
     WebFormControlElement textarea = GetFormControlElementById("textarea");
-    textarea.SetAutofilled(true);
+    textarea.SetAutofillState(WebAutofillState::kAutofilled);
 
     // Set the value of the disabled text input element.
     WebInputElement notenabled = GetInputElementById("notenabled");
     notenabled.SetValue(WebString::FromUTF8("no clear"));
 
     // Clear the form.
-    EXPECT_TRUE(form_cache.ClearFormWithElement(firstname));
+    EXPECT_TRUE(form_cache.ClearSectionWithElement(firstname));
 
     // Verify that the auto-filled attribute has been turned off.
     EXPECT_FALSE(firstname.IsAutofilled());
@@ -1686,8 +1717,113 @@ class FormAutofillTest : public ChromeRenderViewTest {
     EXPECT_EQ(0, firstname.SelectionEnd());
   }
 
-  void TestClearFormWithNodeContainingSelectOne(const char* html,
-                                                bool unowned) {
+  void TestClearTwoSections(const char* html, bool unowned) {
+    LoadHTML(html);
+    WebLocalFrame* web_frame = GetMainFrame();
+    ASSERT_NE(nullptr, web_frame);
+
+    FormCache form_cache(web_frame);
+    std::vector<FormData> forms = form_cache.ExtractNewForms();
+    ASSERT_EQ(1U, forms.size());
+
+    // Set the autofilled attribute and specify the section attribute.
+    WebInputElement firstname_shipping =
+        GetInputElementById("firstname-shipping");
+    firstname_shipping.SetAutofillValue("John");
+    firstname_shipping.SetAutofillState(WebAutofillState::kAutofilled);
+    firstname_shipping.SetAutofillSection("shipping");
+
+    WebInputElement lastname_shipping =
+        GetInputElementById("lastname-shipping");
+    lastname_shipping.SetAutofillValue("Smith");
+    lastname_shipping.SetAutofillState(WebAutofillState::kAutofilled);
+    lastname_shipping.SetAutofillSection("shipping");
+
+    WebInputElement city_shipping = GetInputElementById("city-shipping");
+    city_shipping.SetAutofillValue("Montreal");
+    city_shipping.SetAutofillState(WebAutofillState::kAutofilled);
+    city_shipping.SetAutofillSection("shipping");
+
+    WebInputElement firstname_billing =
+        GetInputElementById("firstname-billing");
+    firstname_billing.SetAutofillValue("John");
+    firstname_billing.SetAutofillState(WebAutofillState::kAutofilled);
+    firstname_billing.SetAutofillSection("billing");
+
+    WebInputElement lastname_billing = GetInputElementById("lastname-billing");
+    lastname_billing.SetAutofillValue("Smith");
+    lastname_billing.SetAutofillState(WebAutofillState::kAutofilled);
+    lastname_billing.SetAutofillSection("billing");
+
+    WebInputElement city_billing = GetInputElementById("city-billing");
+    city_billing.SetAutofillValue("Paris");
+    city_billing.SetAutofillState(WebAutofillState::kAutofilled);
+    city_billing.SetAutofillSection("billing");
+
+    // Clear the first (shipping) section.
+    EXPECT_TRUE(form_cache.ClearSectionWithElement(firstname_shipping));
+
+    // Verify that the autofilled attribute is false only for the shipping
+    // section.
+    EXPECT_FALSE(firstname_shipping.IsAutofilled());
+    EXPECT_FALSE(lastname_shipping.IsAutofilled());
+    EXPECT_FALSE(city_shipping.IsAutofilled());
+    EXPECT_TRUE(firstname_billing.IsAutofilled());
+    EXPECT_TRUE(lastname_billing.IsAutofilled());
+    EXPECT_TRUE(city_billing.IsAutofilled());
+
+    // Verify that the shipping section is cleared, but not the billing one.
+    FormData form;
+    FormFieldData field;
+    EXPECT_TRUE(FindFormAndFieldForFormControlElement(firstname_shipping, &form,
+                                                      &field));
+    EXPECT_EQ(GetCanonicalOriginForDocument(web_frame->GetDocument()),
+              form.origin);
+    EXPECT_FALSE(form.origin.is_empty());
+    if (!unowned) {
+      EXPECT_EQ(ASCIIToUTF16("TestForm"), form.name);
+      EXPECT_EQ(GURL("http://abc.com"), form.action);
+    }
+
+    const std::vector<FormFieldData>& fields = form.fields;
+    ASSERT_EQ(6U, fields.size());
+
+    FormFieldData expected;
+    expected.form_control_type = "text";
+    expected.max_length = WebInputElement::DefaultMaxLength();
+
+    // shipping section
+    expected.is_autofilled = false;
+    expected.name = ASCIIToUTF16("firstname-shipping");
+    EXPECT_FORM_FIELD_DATA_EQUALS(expected, fields[0]);
+
+    expected.name = ASCIIToUTF16("lastname-shipping");
+    EXPECT_FORM_FIELD_DATA_EQUALS(expected, fields[1]);
+
+    expected.name = ASCIIToUTF16("city-shipping");
+    EXPECT_FORM_FIELD_DATA_EQUALS(expected, fields[2]);
+
+    // billing section
+    expected.is_autofilled = true;
+    expected.name = ASCIIToUTF16("firstname-billing");
+    expected.value = ASCIIToUTF16("John");
+    EXPECT_FORM_FIELD_DATA_EQUALS(expected, fields[3]);
+
+    expected.name = ASCIIToUTF16("lastname-billing");
+    expected.value = ASCIIToUTF16("Smith");
+    EXPECT_FORM_FIELD_DATA_EQUALS(expected, fields[4]);
+
+    expected.name = ASCIIToUTF16("city-billing");
+    expected.value = ASCIIToUTF16("Paris");
+    EXPECT_FORM_FIELD_DATA_EQUALS(expected, fields[5]);
+
+    // Verify that the cursor position has been updated.
+    EXPECT_EQ(0, firstname_shipping.SelectionStart());
+    EXPECT_EQ(0, firstname_shipping.SelectionEnd());
+  }
+
+  void TestClearSectionWithNodeContainingSelectOne(const char* html,
+                                                   bool unowned) {
     LoadHTML(html);
     WebLocalFrame* web_frame = GetMainFrame();
     ASSERT_NE(nullptr, web_frame);
@@ -1698,18 +1834,18 @@ class FormAutofillTest : public ChromeRenderViewTest {
 
     // Set the auto-filled attribute.
     WebInputElement firstname = GetInputElementById("firstname");
-    firstname.SetAutofilled(true);
+    firstname.SetAutofillState(WebAutofillState::kAutofilled);
     WebInputElement lastname = GetInputElementById("lastname");
-    lastname.SetAutofilled(true);
+    lastname.SetAutofillState(WebAutofillState::kAutofilled);
 
     // Set the value and auto-filled attribute of the state element.
     WebSelectElement state =
         web_frame->GetDocument().GetElementById("state").To<WebSelectElement>();
     state.SetValue(WebString::FromUTF8("AK"));
-    state.SetAutofilled(true);
+    state.SetAutofillState(WebAutofillState::kAutofilled);
 
     // Clear the form.
-    EXPECT_TRUE(form_cache.ClearFormWithElement(firstname));
+    EXPECT_TRUE(form_cache.ClearSectionWithElement(firstname));
 
     // Verify that the auto-filled attribute has been turned off.
     EXPECT_FALSE(firstname.IsAutofilled());
@@ -1766,15 +1902,15 @@ class FormAutofillTest : public ChromeRenderViewTest {
 
     // Set the auto-filled attribute.
     WebInputElement firstname = GetInputElementById("firstname");
-    firstname.SetAutofilled(true);
+    firstname.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement lastname = GetInputElementById("lastname");
-    lastname.SetAutofilled(true);
+    lastname.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement email = GetInputElementById("email");
-    email.SetAutofilled(true);
+    email.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement email2 = GetInputElementById("email2");
-    email2.SetAutofilled(true);
+    email2.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement phone = GetInputElementById("phone");
-    phone.SetAutofilled(true);
+    phone.SetAutofillState(WebAutofillState::kPreviewed);
 
     // Set the suggested values on two of the elements.
     lastname.SetSuggestedValue(WebString::FromASCII("Earp"));
@@ -1783,7 +1919,8 @@ class FormAutofillTest : public ChromeRenderViewTest {
     phone.SetSuggestedValue(WebString::FromASCII("650-777-9999"));
 
     // Clear the previewed fields.
-    EXPECT_TRUE(ClearPreviewedFormWithElement(lastname, false));
+    EXPECT_TRUE(
+        ClearPreviewedFormWithElement(lastname, WebAutofillState::kNotFilled));
 
     // Fields with empty suggestions suggestions are not modified.
     EXPECT_EQ(ASCIIToUTF16("Wyatt"), firstname.Value().Utf16());
@@ -1820,15 +1957,15 @@ class FormAutofillTest : public ChromeRenderViewTest {
 
     // Set the auto-filled attribute.
     WebInputElement firstname = GetInputElementById("firstname");
-    firstname.SetAutofilled(true);
+    firstname.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement lastname = GetInputElementById("lastname");
-    lastname.SetAutofilled(true);
+    lastname.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement email = GetInputElementById("email");
-    email.SetAutofilled(true);
+    email.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement email2 = GetInputElementById("email2");
-    email2.SetAutofilled(true);
+    email2.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement phone = GetInputElementById("phone");
-    phone.SetAutofilled(true);
+    phone.SetAutofillState(WebAutofillState::kPreviewed);
 
     // Set the suggested values on all of the elements.
     firstname.SetSuggestedValue(WebString::FromASCII("Wyatt"));
@@ -1838,7 +1975,8 @@ class FormAutofillTest : public ChromeRenderViewTest {
     phone.SetSuggestedValue(WebString::FromASCII("650-777-9999"));
 
     // Clear the previewed fields.
-    EXPECT_TRUE(ClearPreviewedFormWithElement(firstname, false));
+    EXPECT_TRUE(
+        ClearPreviewedFormWithElement(firstname, WebAutofillState::kNotFilled));
 
     // Fields with non-empty values are restored.
     EXPECT_EQ(ASCIIToUTF16("W"), firstname.Value().Utf16());
@@ -1873,15 +2011,15 @@ class FormAutofillTest : public ChromeRenderViewTest {
 
     // Set the auto-filled attribute.
     WebInputElement firstname = GetInputElementById("firstname");
-    firstname.SetAutofilled(true);
+    firstname.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement lastname = GetInputElementById("lastname");
-    lastname.SetAutofilled(true);
+    lastname.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement email = GetInputElementById("email");
-    email.SetAutofilled(true);
+    email.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement email2 = GetInputElementById("email2");
-    email2.SetAutofilled(true);
+    email2.SetAutofillState(WebAutofillState::kPreviewed);
     WebInputElement phone = GetInputElementById("phone");
-    phone.SetAutofilled(true);
+    phone.SetAutofillState(WebAutofillState::kPreviewed);
 
     // Set the suggested values on all of the elements.
     firstname.SetSuggestedValue(WebString::FromASCII("Wyatt"));
@@ -1891,7 +2029,8 @@ class FormAutofillTest : public ChromeRenderViewTest {
     phone.SetSuggestedValue(WebString::FromASCII("650-777-9999"));
 
     // Clear the previewed fields.
-    EXPECT_TRUE(ClearPreviewedFormWithElement(firstname, true));
+    EXPECT_TRUE(ClearPreviewedFormWithElement(firstname,
+                                              WebAutofillState::kAutofilled));
 
     // Fields with non-empty values are restored.
     EXPECT_EQ(ASCIIToUTF16("W"), firstname.Value().Utf16());
@@ -1927,16 +2066,16 @@ class FormAutofillTest : public ChromeRenderViewTest {
 
     // Set the autofilled attribute.
     WebInputElement firstname = GetInputElementById("firstname");
-    firstname.SetAutofilled(false);
+    firstname.SetAutofillState(WebAutofillState::kNotFilled);
     WebInputElement lastname = GetInputElementById("lastname");
-    lastname.SetAutofilled(true);
+    lastname.SetAutofillState(WebAutofillState::kAutofilled);
     WebInputElement email = GetInputElementById("email");
-    email.SetAutofilled(true);
+    email.SetAutofillState(WebAutofillState::kAutofilled);
     WebInputElement phone = GetInputElementById("phone");
-    phone.SetAutofilled(true);
+    phone.SetAutofillState(WebAutofillState::kAutofilled);
 
     // Clear the fields.
-    EXPECT_TRUE(form_cache.ClearFormWithElement(firstname));
+    EXPECT_TRUE(form_cache.ClearSectionWithElement(firstname));
 
     // Verify only autofilled fields are cleared.
     EXPECT_EQ(ASCIIToUTF16("Wyatt"), firstname.Value().Utf16());
@@ -2060,7 +2199,7 @@ TEST_F(FormAutofillTest, WebFormControlElementToFormFieldAutofilled) {
   ASSERT_NE(nullptr, frame);
 
   WebInputElement element = GetInputElementById("element");
-  element.SetAutofilled(true);
+  element.SetAutofillState(WebAutofillState::kAutofilled);
   FormFieldData result;
   WebFormControlElementToFormField(element, nullptr, EXTRACT_VALUE, &result);
 
@@ -2083,7 +2222,7 @@ TEST_F(FormAutofillTest, WebFormControlElementToClickableFormField) {
   ASSERT_NE(nullptr, frame);
 
   WebInputElement element = GetInputElementById("checkbox");
-  element.SetAutofilled(true);
+  element.SetAutofillState(WebAutofillState::kAutofilled);
   FormFieldData result;
   WebFormControlElementToFormField(element, nullptr, EXTRACT_VALUE, &result);
 
@@ -2096,7 +2235,7 @@ TEST_F(FormAutofillTest, WebFormControlElementToClickableFormField) {
   EXPECT_FORM_FIELD_DATA_EQUALS(expected, result);
 
   element = GetInputElementById("radio");
-  element.SetAutofilled(true);
+  element.SetAutofillState(WebAutofillState::kAutofilled);
   WebFormControlElementToFormField(element, nullptr, EXTRACT_VALUE, &result);
   expected.name = ASCIIToUTF16("radio");
   expected.value = ASCIIToUTF16("male");
@@ -2160,7 +2299,7 @@ TEST_F(FormAutofillTest,
   ASSERT_NE(nullptr, frame);
 
   WebFormControlElement element = GetFormControlElementById("element");
-  element.SetAutofilled(true);
+  element.SetAutofillState(WebAutofillState::kAutofilled);
 
   FormFieldData result1;
   WebFormControlElementToFormField(element, nullptr, EXTRACT_VALUE, &result1);
@@ -2530,30 +2669,31 @@ TEST_F(FormAutofillTest, DetectTextDirectionWhenAncestorHasInlineStyle) {
 }
 
 TEST_F(FormAutofillTest, WebFormElementToFormData) {
-  LoadHTML("<FORM name='TestForm' action='http://cnn.com' method='post'>"
-           "  <LABEL for='firstname'>First name:</LABEL>"
-           "    <INPUT type='text' id='firstname' value='John'/>"
-           "  <LABEL for='lastname'>Last name:</LABEL>"
-           "    <INPUT type='text' id='lastname' value='Smith'/>"
-           "  <LABEL for='street-address'>Address:</LABEL>"
-           "    <TEXTAREA id='street-address'>"
-                 "123 Fantasy Ln.&#10;"
-                 "Apt. 42"
-                "</TEXTAREA>"
-           "  <LABEL for='state'>State:</LABEL>"
-           "    <SELECT id='state'/>"
-           "      <OPTION value='CA'>California</OPTION>"
-           "      <OPTION value='TX'>Texas</OPTION>"
-           "    </SELECT>"
-           "  <LABEL for='password'>Password:</LABEL>"
-           "    <INPUT type='password' id='password' value='secret'/>"
-           "  <LABEL for='month'>Card expiration:</LABEL>"
-           "    <INPUT type='month' id='month' value='2011-12'/>"
-           "    <INPUT type='submit' name='reply-send' value='Send'/>"
-           // The below inputs should be ignored
-           "  <LABEL for='notvisible'>Hidden:</LABEL>"
-           "    <INPUT type='hidden' id='notvisible' value='apple'/>"
-           "</FORM>");
+  LoadHTML(
+      "<FORM name='TestForm' action='http://cnn.com/submit/?a=1' method='post'>"
+      "  <LABEL for='firstname'>First name:</LABEL>"
+      "    <INPUT type='text' id='firstname' value='John'/>"
+      "  <LABEL for='lastname'>Last name:</LABEL>"
+      "    <INPUT type='text' id='lastname' value='Smith'/>"
+      "  <LABEL for='street-address'>Address:</LABEL>"
+      "    <TEXTAREA id='street-address'>"
+      "123 Fantasy Ln.&#10;"
+      "Apt. 42"
+      "</TEXTAREA>"
+      "  <LABEL for='state'>State:</LABEL>"
+      "    <SELECT id='state'/>"
+      "      <OPTION value='CA'>California</OPTION>"
+      "      <OPTION value='TX'>Texas</OPTION>"
+      "    </SELECT>"
+      "  <LABEL for='password'>Password:</LABEL>"
+      "    <INPUT type='password' id='password' value='secret'/>"
+      "  <LABEL for='month'>Card expiration:</LABEL>"
+      "    <INPUT type='month' id='month' value='2011-12'/>"
+      "    <INPUT type='submit' name='reply-send' value='Send'/>"
+      // The below inputs should be ignored
+      "  <LABEL for='notvisible'>Hidden:</LABEL>"
+      "    <INPUT type='hidden' id='notvisible' value='apple'/>"
+      "</FORM>");
 
   WebLocalFrame* frame = GetMainFrame();
   ASSERT_NE(nullptr, frame);
@@ -2569,9 +2709,10 @@ TEST_F(FormAutofillTest, WebFormElementToFormData) {
   EXPECT_TRUE(WebFormElementToFormData(forms[0], input_element, nullptr,
                                        EXTRACT_VALUE, &form, &field));
   EXPECT_EQ(ASCIIToUTF16("TestForm"), form.name);
+  EXPECT_EQ(forms[0].UniqueRendererFormId(), form.unique_renderer_id);
   EXPECT_EQ(GetCanonicalOriginForDocument(frame->GetDocument()), form.origin);
   EXPECT_FALSE(form.origin.is_empty());
-  EXPECT_EQ(GURL("http://cnn.com"), form.action);
+  EXPECT_EQ(GURL("http://cnn.com/submit/"), form.action);
 
   const std::vector<FormFieldData>& fields = form.fields;
   ASSERT_EQ(6U, fields.size());
@@ -2618,6 +2759,13 @@ TEST_F(FormAutofillTest, WebFormElementToFormData) {
   expected.form_control_type = "month";
   expected.max_length = 0;
   EXPECT_FORM_FIELD_DATA_EQUALS(expected, fields[5]);
+
+  // Check unique_renderer_id.
+  WebVector<WebFormControlElement> form_control_elements;
+  forms[0].GetFormControlElements(form_control_elements);
+  for (size_t i = 0; i < fields.size(); ++i)
+    EXPECT_EQ(form_control_elements[i].UniqueRendererFormControlId(),
+              fields[i].unique_renderer_id);
 }
 
 TEST_F(FormAutofillTest, WebFormElementConsiderNonControlLabelableElements) {
@@ -4528,9 +4676,10 @@ TEST_F(FormAutofillTest, FillFormModifyValues) {
       "  <INPUT type='text' id='phone' placeholder='Phone' value='Phone'/>"
       "  <INPUT type='text' id='cc' placeholder='Credit Card Number' "
       "value='Credit Card'/>"
+      "  <INPUT type='text' id='city' placeholder='City' value='City'/>"
       "  <INPUT type='submit' value='Send'/>"
       "</FORM>",
-      "First Name", "Last Name", "Phone", "Credit Card Number");
+      "First Name", "Last Name", "Phone", "Credit Card Number", "City");
 }
 
 TEST_F(FormAutofillTest, FillFormModifyInitiatingValue) {
@@ -4583,8 +4732,8 @@ TEST_F(FormAutofillTest, FillFormNonEmptyFieldForUnownedForm) {
       true, nullptr, nullptr, nullptr, nullptr, nullptr);
 }
 
-TEST_F(FormAutofillTest, ClearFormWithNode) {
-  TestClearFormWithNode(
+TEST_F(FormAutofillTest, ClearSectionWithNode) {
+  TestClearSectionWithNode(
       "<FORM name='TestForm' action='http://abc.com' method='post'>"
       "  <INPUT type='text' id='firstname' value='Wyatt'/>"
       "  <INPUT type='text' id='lastname' value='Earp'/>"
@@ -4603,8 +4752,22 @@ TEST_F(FormAutofillTest, ClearFormWithNode) {
       false);
 }
 
-TEST_F(FormAutofillTest, ClearFormWithNodeForUnownedForm) {
-  TestClearFormWithNode(
+// Test regular FillForm function.
+TEST_F(FormAutofillTest, ClearTwoSections) {
+  TestClearTwoSections(
+      "<FORM name='TestForm' action='http://abc.com' method='post'>"
+      "  <INPUT type='text' id='firstname-shipping'/>"
+      "  <INPUT type='text' id='lastname-shipping'/>"
+      "  <INPUT type='text' id='city-shipping'/>"
+      "  <INPUT type='text' id='firstname-billing'/>"
+      "  <INPUT type='text' id='lastname-billing'/>"
+      "  <INPUT type='text' id='city-billing'/>"
+      "</FORM>",
+      false);
+}
+
+TEST_F(FormAutofillTest, ClearSectionWithNodeForUnownedForm) {
+  TestClearSectionWithNode(
       "<HEAD><TITLE>store checkout</TITLE></HEAD>"
       "  <!-- Indented on purpose //-->"
       "  <INPUT type='text' id='firstname' value='Wyatt'/>"
@@ -4623,8 +4786,8 @@ TEST_F(FormAutofillTest, ClearFormWithNodeForUnownedForm) {
       true);
 }
 
-TEST_F(FormAutofillTest, ClearFormWithNodeContainingSelectOne) {
-  TestClearFormWithNodeContainingSelectOne(
+TEST_F(FormAutofillTest, ClearSectionWithNodeContainingSelectOne) {
+  TestClearSectionWithNodeContainingSelectOne(
       "<FORM name='TestForm' action='http://abc.com' method='post'>"
       "  <INPUT type='text' id='firstname' value='Wyatt'/>"
       "  <INPUT type='text' id='lastname' value='Earp'/>"
@@ -4639,8 +4802,9 @@ TEST_F(FormAutofillTest, ClearFormWithNodeContainingSelectOne) {
       false);
 }
 
-TEST_F(FormAutofillTest, ClearFormWithNodeContainingSelectOneForUnownedForm) {
-  TestClearFormWithNodeContainingSelectOne(
+TEST_F(FormAutofillTest,
+       ClearSectionWithNodeContainingSelectOneForUnownedForm) {
+  TestClearSectionWithNodeContainingSelectOne(
       "<HEAD><TITLE>store checkout</TITLE></HEAD>"
       "<INPUT type='text' id='firstname' value='Wyatt'/>"
       "<INPUT type='text' id='lastname' value='Earp'/>"
@@ -5168,6 +5332,40 @@ TEST_F(FormAutofillTest, FormCache_ExtractNewForms) {
       EXPECT_EQ(test_case.is_formless_checkout, forms[0].is_formless_checkout);
     }
   }
+}
+
+TEST_F(FormAutofillTest, WebFormElementNotFoundInForm) {
+  LoadHTML(
+      "<form id='form'>"
+      "  <input type='text' id='firstname' value='John'>"
+      "  <input type='text' id='lastname' value='John'>"
+      "</form>");
+
+  WebLocalFrame* frame = GetMainFrame();
+  ASSERT_NE(nullptr, frame);
+
+  WebFormElement web_form =
+      frame->GetDocument().GetElementById("form").To<WebFormElement>();
+  ASSERT_FALSE(web_form.IsNull());
+
+  WebFormControlElement control_element = frame->GetDocument()
+                                              .GetElementById("firstname")
+                                              .To<WebFormControlElement>();
+  ASSERT_FALSE(control_element.IsNull());
+  FormData form;
+  FormFieldData field;
+  EXPECT_TRUE(WebFormElementToFormData(web_form, control_element, nullptr,
+                                       EXTRACT_NONE, &form, &field));
+
+  const std::vector<FormFieldData>& fields = form.fields;
+  ASSERT_EQ(2U, fields.size());
+  EXPECT_EQ(ASCIIToUTF16("firstname"), fields[0].name);
+  EXPECT_EQ(ASCIIToUTF16("firstname"), field.name);
+
+  frame->ExecuteScript(
+      WebString("document.getElementById('firstname').remove();"));
+  EXPECT_FALSE(WebFormElementToFormData(web_form, control_element, nullptr,
+                                        EXTRACT_NONE, &form, &field));
 }
 
 }  // namespace form_util

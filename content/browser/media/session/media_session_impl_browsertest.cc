@@ -13,7 +13,7 @@
 #include "base/memory/ptr_util.h"
 #include "base/metrics/histogram_samples.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/simple_test_tick_clock.h"
 #include "content/browser/media/session/audio_focus_delegate.h"
 #include "content/browser/media/session/media_session_service_impl.h"
@@ -334,6 +334,34 @@ IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest,
 
 IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest, AudioFocusInitialState) {
   EXPECT_FALSE(IsActive());
+}
+
+IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest,
+                       AddPlayerOnSuspendedFocusUnducks) {
+  auto player_observer = std::make_unique<MockMediaSessionPlayerObserver>();
+  StartNewPlayer(player_observer.get(), media::MediaContentType::Persistent);
+
+  UISuspend();
+  EXPECT_FALSE(IsActive());
+
+  SystemStartDucking();
+  EXPECT_EQ(kDuckingVolumeMultiplier, player_observer->GetVolumeMultiplier(0));
+
+  EXPECT_TRUE(
+      AddPlayer(player_observer.get(), 0, media::MediaContentType::Persistent));
+  EXPECT_EQ(kDefaultVolumeMultiplier, player_observer->GetVolumeMultiplier(0));
+}
+
+IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest,
+                       CanRequestFocusBeforePlayerCreation) {
+  auto player_observer = std::make_unique<MockMediaSessionPlayerObserver>();
+
+  media_session_->RequestSystemAudioFocus(
+      content::AudioFocusManager::AudioFocusType::Gain);
+  EXPECT_TRUE(IsActive());
+
+  StartNewPlayer(player_observer.get(), media::MediaContentType::Persistent);
+  EXPECT_TRUE(IsActive());
 }
 
 IN_PROC_BROWSER_TEST_F(MediaSessionImplBrowserTest, StartPlayerGivesFocus) {

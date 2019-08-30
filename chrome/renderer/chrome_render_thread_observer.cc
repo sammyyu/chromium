@@ -17,7 +17,6 @@
 #include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/weak_ptr.h"
 #include "base/metrics/histogram.h"
 #include "base/metrics/statistics_recorder.h"
@@ -55,11 +54,11 @@
 #include "net/base/net_module.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "services/service_manager/public/cpp/connector.h"
-#include "third_party/WebKit/public/common/associated_interfaces/associated_interface_registry.h"
-#include "third_party/WebKit/public/web/WebDocument.h"
-#include "third_party/WebKit/public/web/WebFrame.h"
-#include "third_party/WebKit/public/web/WebSecurityPolicy.h"
-#include "third_party/WebKit/public/web/WebView.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#include "third_party/blink/public/web/web_document.h"
+#include "third_party/blink/public/web/web_frame.h"
+#include "third_party/blink/public/web/web_security_policy.h"
+#include "third_party/blink/public/web/web_view.h"
 
 #if BUILDFLAG(ENABLE_EXTENSIONS)
 #include "chrome/renderer/extensions/extension_localization_peer.h"
@@ -137,6 +136,8 @@ class RendererResourceDelegate : public content::ResourceDispatcherDelegate {
 
 bool ChromeRenderThreadObserver::is_incognito_process_ = false;
 
+bool ChromeRenderThreadObserver::is_signed_in_ = false;
+
 ChromeRenderThreadObserver::ChromeRenderThreadObserver()
     : visited_link_slave_(new visitedlink::VisitedLinkSlave),
       weak_factory_(this) {
@@ -187,13 +188,13 @@ void ChromeRenderThreadObserver::UnregisterMojoInterfaces(
       chrome::mojom::RendererConfiguration::Name_);
 }
 
-void ChromeRenderThreadObserver::NetworkStateChanged(bool online) {
-  online_ = online;
-}
-
 void ChromeRenderThreadObserver::SetInitialConfiguration(
     bool is_incognito_process) {
   is_incognito_process_ = is_incognito_process;
+}
+
+void ChromeRenderThreadObserver::SetIsSignedIn(bool is_signed_in) {
+  is_signed_in_ = is_signed_in;
 }
 
 void ChromeRenderThreadObserver::SetContentSettingRules(

@@ -7,11 +7,11 @@
 #include <utility>
 
 #include "ash/app_list/app_list_controller_impl.h"
-#include "ash/app_list/app_list_presenter_impl.h"
+#include "ash/app_list/presenter/app_list_presenter_impl.h"
+#include "ash/app_list/views/app_list_view.h"
 #include "ash/shell.h"
 #include "base/run_loop.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "ui/app_list/views/app_list_view.h"
 
 namespace ash {
 
@@ -37,16 +37,24 @@ void AppListTestHelper::ShowAndRunLoop(uint64_t display_id) {
   ShowAndRunLoop(display_id, app_list::AppListShowSource::kSearchKey);
 }
 
+void AppListTestHelper::Show(uint64_t display_id) {
+  ShowAndRunLoop(display_id, app_list::AppListShowSource::kSearchKey);
+}
+
 void AppListTestHelper::ShowAndRunLoop(
     uint64_t display_id,
     app_list::AppListShowSource show_source) {
-  app_list_controller_->Show(display_id, show_source);
+  app_list_controller_->Show(display_id, show_source, base::TimeTicks());
   WaitUntilIdle();
 }
 
 void AppListTestHelper::DismissAndRunLoop() {
   app_list_controller_->DismissAppList();
   WaitUntilIdle();
+}
+
+void AppListTestHelper::Dismiss() {
+  app_list_controller_->DismissAppList();
 }
 
 void AppListTestHelper::ToggleAndRunLoop(uint64_t display_id) {
@@ -56,7 +64,8 @@ void AppListTestHelper::ToggleAndRunLoop(uint64_t display_id) {
 void AppListTestHelper::ToggleAndRunLoop(
     uint64_t display_id,
     app_list::AppListShowSource show_source) {
-  app_list_controller_->ToggleAppList(display_id, show_source);
+  app_list_controller_->ToggleAppList(display_id, show_source,
+                                      base::TimeTicks());
   WaitUntilIdle();
 }
 

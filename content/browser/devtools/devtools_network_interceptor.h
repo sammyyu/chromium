@@ -11,6 +11,7 @@
 #include "base/unguessable_token.h"
 #include "content/browser/devtools/protocol/network.h"
 #include "content/public/common/resource_type.h"
+#include "mojo/public/cpp/system/data_pipe.h"
 #include "net/base/net_errors.h"
 
 namespace content {
@@ -24,6 +25,7 @@ struct InterceptedRequestInfo {
   base::UnguessableToken frame_id;
   ResourceType resource_type;
   bool is_navigation;
+  protocol::Maybe<bool> is_download;
   protocol::Maybe<protocol::Object> redirect_headers;
   protocol::Maybe<int> redirect_status_code;
   protocol::Maybe<protocol::String> redirect_url;
@@ -35,14 +37,21 @@ struct InterceptedRequestInfo {
 
 class DevToolsNetworkInterceptor {
  public:
+  virtual ~DevToolsNetworkInterceptor() = default;
+
   using RequestInterceptedCallback =
       base::RepeatingCallback<void(std::unique_ptr<InterceptedRequestInfo>)>;
   using ContinueInterceptedRequestCallback =
       protocol::Network::Backend::ContinueInterceptedRequestCallback;
   using GetResponseBodyForInterceptionCallback =
       protocol::Network::Backend::GetResponseBodyForInterceptionCallback;
+  using TakeResponseBodyPipeCallback =
+      base::OnceCallback<void(protocol::Response,
+                              mojo::ScopedDataPipeConsumerHandle,
+                              const std::string& mime_type)>;
 
   struct Modifications {
+    Modifications();
     Modifications(base::Optional<net::Error> error_reason,
                   base::Optional<std::string> raw_response,
                   protocol::Maybe<std::string> modified_url,
@@ -73,25 +82,27 @@ class DevToolsNetworkInterceptor {
   };
 
   enum InterceptionStage {
-    REQUEST,
-    RESPONSE,
+    DONT_INTERCEPT = 0,
+    REQUEST = (1 << 0),
+    RESPONSE = (1 << 1),
     // Note: Both is not sent from front-end. It is used if both Request
     // and HeadersReceived was found it upgrades it to Both.
-    BOTH,
-    DONT_INTERCEPT
+    BOTH = (REQUEST | RESPONSE),
   };
 
   struct Pattern {
    public:
-    Pattern();
     ~Pattern();
     Pattern(const Pattern& other);
     Pattern(const std::string& url_pattern,
             base::flat_set<ResourceType> resource_types,
             InterceptionStage interception_stage);
+
+    bool Matches(const std::string& url, ResourceType resource_type) const;
+
     const std::string url_pattern;
     const base::flat_set<ResourceType> resource_types;
-    InterceptionStage interception_stage;
+    const InterceptionStage interception_stage;
   };
 
   struct FilterEntry {
@@ -120,6 +131,13 @@ class DevToolsNetworkInterceptor {
       std::unique_ptr<Modifications> modifications,
       std::unique_ptr<ContinueInterceptedRequestCallback> callback) = 0;
 };
+
+inline DevToolsNetworkInterceptor::InterceptionStage& operator|=(
+    DevToolsNetworkInterceptor::InterceptionStage& a,
+    const DevToolsNetworkInterceptor::InterceptionStage& b) {
+  a = static_cast<DevToolsNetworkInterceptor::InterceptionStage>(a | b);
+  return a;
+}
 
 }  // namespace content
 

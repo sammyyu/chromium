@@ -102,7 +102,8 @@
   [_shadow setAlpha:0];
 }
 
-- (CGFloat)searchFieldProgressForOffset:(CGFloat)offset {
+- (CGFloat)searchFieldProgressForOffset:(CGFloat)offset
+                         safeAreaInsets:(UIEdgeInsets)safeAreaInsets {
   NOTREACHED();
   return 0;
 }
@@ -111,7 +112,6 @@
                         height:(NSLayoutConstraint*)heightConstraint
                      topMargin:(NSLayoutConstraint*)topMarginConstraint
                      hintLabel:(UILabel*)hintLabel
-                hintLabelWidth:(NSLayoutConstraint*)hintLabelWidthConstraint
             subviewConstraints:(NSArray*)constraints
                      forOffset:(CGFloat)offset
                    screenWidth:(CGFloat)screenWidth
@@ -119,8 +119,8 @@
   CGFloat contentWidth = std::max<CGFloat>(
       0, screenWidth - safeAreaInsets.left - safeAreaInsets.right);
   // The scroll offset at which point searchField's frame should stop growing.
-  CGFloat maxScaleOffset =
-      self.frame.size.height - ntp_header::kMinHeaderHeight;
+  CGFloat maxScaleOffset = self.frame.size.height -
+                           ntp_header::kMinHeaderHeight - safeAreaInsets.top;
   // The scroll offset at which point searchField's frame should start
   // growing.
   CGFloat startScaleOffset = maxScaleOffset - ntp_header::kAnimationDistance;

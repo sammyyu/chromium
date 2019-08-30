@@ -97,10 +97,6 @@ void DataReductionProxyService::ReadPersistedClientConfig() {
       !last_config_retrieval_time.is_null() &&
       time_since_last_config_retrieval > base::TimeDelta::FromHours(24);
 
-  UMA_HISTOGRAM_BOOLEAN(
-      "DataReductionProxy.ConfigService.PersistedConfigIsExpired",
-      persisted_config_is_expired);
-
   if (persisted_config_is_expired)
     return;
 
@@ -136,12 +132,15 @@ void DataReductionProxyService::UpdateContentLengths(
     int64_t original_size,
     bool data_reduction_proxy_enabled,
     DataReductionProxyRequestType request_type,
-    const std::string& mime_type) {
+    const std::string& mime_type,
+    bool is_user_traffic,
+    data_use_measurement::DataUseUserData::DataUseContentType content_type,
+    int32_t service_hash_code) {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   if (compression_stats_) {
-    compression_stats_->RecordDataUseWithMimeType(data_used, original_size,
-                                                  data_reduction_proxy_enabled,
-                                                  request_type, mime_type);
+    compression_stats_->RecordDataUseWithMimeType(
+        data_used, original_size, data_reduction_proxy_enabled, request_type,
+        mime_type, is_user_traffic, content_type, service_hash_code);
   }
 }
 

@@ -49,6 +49,8 @@ TEST_F(ProtoEnumConversionsTest, GetWifiCredentialSecurityClassString) {
 
 TEST_F(ProtoEnumConversionsTest, GetUpdatesSourceString) {
   TestEnumStringFunction(sync_pb::GetUpdatesCallerInfo::GetUpdatesSource_MIN,
+                         sync_pb::GetUpdatesCallerInfo::PERIODIC);
+  TestEnumStringFunction(sync_pb::GetUpdatesCallerInfo::RETRY,
                          sync_pb::GetUpdatesCallerInfo::GetUpdatesSource_MAX);
 }
 
@@ -84,11 +86,13 @@ TEST_F(ProtoEnumConversionsTest, GetActionString) {
 
 TEST_F(ProtoEnumConversionsTest, GetUserEventSpecificsString) {
   TestEnumStringFunction(
-      sync_pb::UserEventSpecifics::UserConsent::CONSENT_STATUS_UNSPECIFIED,
-      sync_pb::UserEventSpecifics::UserConsent::GIVEN);
-  TestEnumStringFunction(
       sync_pb::UserEventSpecifics::UserConsent::FEATURE_UNSPECIFIED,
       sync_pb::UserEventSpecifics::UserConsent::CHROME_SYNC);
+}
+
+TEST_F(ProtoEnumConversionsTest, GetConsentStatusString) {
+  TestEnumStringFunction(sync_pb::UserConsentTypes::CONSENT_STATUS_UNSPECIFIED,
+                         sync_pb::UserConsentTypes::GIVEN);
 }
 
 }  // namespace

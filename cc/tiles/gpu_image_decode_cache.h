@@ -12,6 +12,7 @@
 #include "base/containers/mru_cache.h"
 #include "base/memory/discardable_memory.h"
 #include "base/memory/memory_coordinator_client.h"
+#include "base/memory/memory_pressure_listener.h"
 #include "base/synchronization/lock.h"
 #include "base/trace_event/memory_dump_provider.h"
 #include "cc/cc_export.h"
@@ -105,7 +106,8 @@ class CC_EXPORT GpuImageDecodeCache
   explicit GpuImageDecodeCache(viz::RasterContextProvider* context,
                                bool use_transfer_cache,
                                SkColorType color_type,
-                               size_t max_working_set_bytes);
+                               size_t max_working_set_bytes,
+                               int max_texture_size);
   ~GpuImageDecodeCache() override;
 
   // ImageDecodeCache overrides.
@@ -125,7 +127,6 @@ class CC_EXPORT GpuImageDecodeCache
       bool aggressively_free_resources) override;
   void ClearCache() override;
   size_t GetMaximumMemoryLimitBytes() const override;
-  void NotifyImageUnused(const PaintImage::FrameKey& frame_key) override;
 
   // MemoryDumpProvider overrides.
   bool OnMemoryDump(const base::trace_event::MemoryDumpArgs& args,
@@ -134,6 +135,11 @@ class CC_EXPORT GpuImageDecodeCache
   // base::MemoryCoordinatorClient overrides.
   void OnMemoryStateChange(base::MemoryState state) override;
   void OnPurgeMemory() override;
+
+  // TODO(gyuyoung): OnMemoryPressure is deprecated. So this should be removed
+  // when the memory coordinator is enabled by default.
+  void OnMemoryPressure(
+      base::MemoryPressureListener::MemoryPressureLevel level);
 
   // Called by Decode / Upload tasks.
   void DecodeImageInTask(const DrawImage& image, TaskType task_type);
@@ -159,6 +165,7 @@ class CC_EXPORT GpuImageDecodeCache
   void SetImageDecodingFailedForTesting(const DrawImage& image);
   bool DiscardableIsLockedForTesting(const DrawImage& image);
   bool IsInInUseCacheForTesting(const DrawImage& image) const;
+  bool IsInPersistentCacheForTesting(const DrawImage& image) const;
   sk_sp<SkImage> GetSWImageDecodeForTesting(const DrawImage& image);
 
  private:
@@ -287,7 +294,8 @@ class CC_EXPORT GpuImageDecodeCache
               size_t size,
               const gfx::ColorSpace& target_color_space,
               SkFilterQuality quality,
-              int mip_level,
+              int upload_scale_mip_level,
+              bool needs_mips,
               bool is_bitmap_backed);
 
     bool IsGpuOrTransferCache() const;
@@ -298,7 +306,8 @@ class CC_EXPORT GpuImageDecodeCache
     const size_t size;
     gfx::ColorSpace target_color_space;
     SkFilterQuality quality;
-    int mip_level;
+    int upload_scale_mip_level;
+    bool needs_mips = false;
     bool is_bitmap_backed;
     bool is_budgeted = false;
 
@@ -338,7 +347,7 @@ class CC_EXPORT GpuImageDecodeCache
     explicit InUseCacheKey(const DrawImage& draw_image);
 
     PaintImage::FrameKey frame_key;
-    int mip_level;
+    int upload_scale_mip_level;
     SkFilterQuality filter_quality;
     gfx::ColorSpace target_color_space;
   };
@@ -363,10 +372,13 @@ class CC_EXPORT GpuImageDecodeCache
                                            const TracingInfo& tracing_info,
                                            DecodeTaskType task_type);
 
-  void RefImageDecode(const DrawImage& draw_image);
-  void UnrefImageDecode(const DrawImage& draw_image);
-  void RefImage(const DrawImage& draw_image);
-  void UnrefImageInternal(const DrawImage& draw_image);
+  void RefImageDecode(const DrawImage& draw_image,
+                      const InUseCacheKey& cache_key);
+  void UnrefImageDecode(const DrawImage& draw_image,
+                        const InUseCacheKey& cache_key);
+  void RefImage(const DrawImage& draw_image, const InUseCacheKey& cache_key);
+  void UnrefImageInternal(const DrawImage& draw_image,
+                          const InUseCacheKey& cache_key);
 
   // Called any time the ownership of an object changed. This includes changes
   // to ref-count or to orphaned status.
@@ -384,12 +396,14 @@ class CC_EXPORT GpuImageDecodeCache
 
   scoped_refptr<GpuImageDecodeCache::ImageData> CreateImageData(
       const DrawImage& image);
+  void WillAddCacheEntry(const DrawImage& draw_image);
   SkImageInfo CreateImageInfoForDrawImage(const DrawImage& draw_image,
                                           int upload_scale_mip_level) const;
 
   // Finds the ImageData that should be used for the given DrawImage. Looks
   // first in the |in_use_cache_|, and then in the |persistent_cache_|.
-  ImageData* GetImageDataForDrawImage(const DrawImage& image);
+  ImageData* GetImageDataForDrawImage(const DrawImage& image,
+                                      const InUseCacheKey& key);
 
   // Returns true if the given ImageData can be used to draw the specified
   // DrawImage.
@@ -424,6 +438,20 @@ class CC_EXPORT GpuImageDecodeCache
 
   void CheckContextLockAcquiredIfNecessary();
 
+  sk_sp<SkColorSpace> ColorSpaceForImageDecode(const DrawImage& image,
+                                               DecodedDataMode mode) const;
+
+  // |persistent_cache_| represents the long-lived cache, keeping a certain
+  // budget of ImageDatas alive even when their ref count reaches zero.
+  using PersistentCache = base::HashingMRUCache<PaintImage::FrameKey,
+                                                scoped_refptr<ImageData>,
+                                                PaintImage::FrameKeyHash>;
+  PersistentCache::iterator RemoveFromPersistentCache(
+      PersistentCache::iterator it);
+
+  // Adds mips to an image if required.
+  void UpdateMipsIfNeeded(const DrawImage& draw_image, ImageData* image_data);
+
   const SkColorType color_type_;
   const bool use_transfer_cache_ = false;
   viz::RasterContextProvider* context_;
@@ -434,12 +462,15 @@ class CC_EXPORT GpuImageDecodeCache
   // be accessed without a lock since they are thread safe.
   base::Lock lock_;
 
-  // |persistent_cache_| represents the long-lived cache, keeping a certain
-  // budget of ImageDatas alive even when their ref count reaches zero.
-  using PersistentCache = base::HashingMRUCache<PaintImage::FrameKey,
-                                                scoped_refptr<ImageData>,
-                                                PaintImage::FrameKeyHash>;
   PersistentCache persistent_cache_;
+
+  struct CacheEntries {
+    PaintImage::ContentId content_ids[2] = {PaintImage::kInvalidContentId,
+                                            PaintImage::kInvalidContentId};
+  };
+  // A map of PaintImage::Id to entries for this image in the
+  // |persistent_cache_|.
+  base::flat_map<PaintImage::Id, CacheEntries> paint_image_entries_;
 
   // |in_use_cache_| represents the in-use (short-lived) cache. Entries are
   // cleaned up as soon as their ref count reaches zero.
@@ -464,6 +495,8 @@ class CC_EXPORT GpuImageDecodeCache
   // Records the maximum number of items in the cache over the lifetime of the
   // cache. This is updated anytime we are requested to reduce cache usage.
   size_t lifetime_max_items_in_cache_ = 0u;
+
+  std::unique_ptr<base::MemoryPressureListener> memory_pressure_listener_;
 };
 
 }  // namespace cc

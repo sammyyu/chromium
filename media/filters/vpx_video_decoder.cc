@@ -156,8 +156,9 @@ void VpxVideoDecoder::Initialize(
   bound_init_cb.Run(true);
 }
 
-void VpxVideoDecoder::Decode(const scoped_refptr<DecoderBuffer>& buffer,
+void VpxVideoDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
                              const DecodeCB& decode_cb) {
+  DVLOG(3) << __func__ << ": " << buffer->AsHumanReadableString();
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
   DCHECK(buffer);
   DCHECK(!decode_cb.is_null());
@@ -374,7 +375,7 @@ bool VpxVideoDecoder::VpxDecode(const DecoderBuffer* buffer,
       ->metadata()
       ->SetInteger(VideoFrameMetadata::COLOR_SPACE, color_space);
 
-  if (config_.color_space_info() != VideoColorSpace()) {
+  if (config_.color_space_info().IsSpecified()) {
     // config_.color_space_info() comes from the color tag which is
     // more expressive than the bitstream, so prefer it over the
     // bitstream data below.

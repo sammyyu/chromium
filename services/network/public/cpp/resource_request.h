@@ -11,6 +11,7 @@
 #include "base/component_export.h"
 #include "base/memory/ref_counted.h"
 #include "base/optional.h"
+#include "base/unguessable_token.h"
 #include "net/base/request_priority.h"
 #include "net/http/http_request_headers.h"
 #include "net/url_request/url_request.h"
@@ -41,6 +42,11 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
   // setting site_for_cookies = url, but this should ideally only be
   // done if there really is no way to determine the correct value.
   GURL site_for_cookies;
+
+  // Boolean indicating whether SameSite cookies are allowed to be attached
+  // to the request. It should be used as additional input to network side
+  // checks.
+  bool attach_same_site_cookies = false;
 
   // First-party URL redirect policy: During server redirects, the first-party
   // URL for cookies normally doesn't change. However, if this is true, the
@@ -118,15 +124,23 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
   // about this.
   bool skip_service_worker = false;
 
-  // The request mode passed to the ServiceWorker.
-  mojom::FetchRequestMode fetch_request_mode =
-      mojom::FetchRequestMode::kSameOrigin;
+  // https://fetch.spec.whatwg.org/#concept-request-mode
+  // Used mainly by CORS handling (out-of-blink CORS), CORB, Service Worker.
+  // CORS handling needs a proper origin (including a unique opaque origin).
+  // Hence a request with kSameOrigin, kCORS, or kCORSWithForcedPreflight should
+  // have a non-null request_initiator.
+  mojom::FetchRequestMode fetch_request_mode = mojom::FetchRequestMode::kNoCORS;
 
-  // The credentials mode passed to the ServiceWorker.
+  // https://fetch.spec.whatwg.org/#concept-request-credentials-mode
+  // Used mainly by CORS handling (out-of-blink CORS), Service Worker.
+  // If this member is kOmit, then DO_NOT_SAVE_COOKIES, DO_NOT_SEND_COOKIES,
+  // and DO_NOT_SEND_AUTH_DATA must be set on load_flags.
   mojom::FetchCredentialsMode fetch_credentials_mode =
-      mojom::FetchCredentialsMode::kOmit;
+      mojom::FetchCredentialsMode::kInclude;
 
-  // The redirect mode used in Fetch API.
+  // https://fetch.spec.whatwg.org/#concept-request-redirect-mode
+  // Used mainly by CORS handling (out-of-blink CORS), Service Worker.
+  // This member must be kFollow as long as |fetch_request_mode| is kNoCORS.
   mojom::FetchRedirectMode fetch_redirect_mode =
       mojom::FetchRedirectMode::kFollow;
 
@@ -145,12 +159,6 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
 
   // Optional resource request body (may be null).
   scoped_refptr<ResourceRequestBody> request_body;
-
-  // If true, then the response body will be downloaded to a file and the path
-  // to that file will be provided in ResponseInfo::download_file_path.
-  // Deprecated and not supported by the network service code.
-  // TODO(mek): Remove this flag once all usage of it is gone (XHR and PPAPI).
-  bool download_to_file = false;
 
   // True if the request can work after the fetch group is terminated.
   // https://fetch.spec.whatwg.org/#request-keepalive-flag
@@ -182,21 +190,13 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
   // about this.
   int transition_type = 0;
 
-  // For navigations, whether this navigation should replace the current session
-  // history entry on commit.
-  bool should_replace_current_entry = false;
-
-  // The following two members identify a previous request that has been
-  // created before this navigation has been transferred to a new process.
-  // This serves the purpose of recycling the old request.
-  // Unless this refers to a transferred navigation, these values are -1 and -1.
-  int transferred_request_child_id = -1;
-  int transferred_request_request_id = -1;
-
   // Whether or not we should allow the URL to download.
   bool allow_download = false;
 
   // Whether to intercept headers to pass back to the renderer.
+  // This also enables reporting of SSLInfo in URLLoaderClient's
+  // OnResponseReceived and OnComplete, as well as invocation of
+  // OnTransferSizeUpdated().
   bool report_raw_headers = false;
 
   // Whether or not to request a Preview version of the resource or let the
@@ -206,13 +206,15 @@ struct COMPONENT_EXPORT(NETWORK_CPP_BASE) ResourceRequest {
   // about this.
   int previews_state = 0;
 
-  // PlzNavigate: the stream url associated with a navigation. Used to get
-  // access to the body of the response that has already been fetched by the
-  // browser.
-  GURL resource_body_stream_url;
-
-  // Wether or not the initiator of this request is a secure context.
+  // Whether or not the initiator of this request is a secure context.
   bool initiated_in_secure_context = false;
+
+  // Whether or not this request (including redirects) should be upgraded to
+  // HTTPS due to an Upgrade-Insecure-Requests requirement.
+  bool upgrade_if_insecure = false;
+
+  // The profile ID of network conditions to throttle the network request.
+  base::Optional<base::UnguessableToken> throttling_profile_id;
 };
 
 }  // namespace network

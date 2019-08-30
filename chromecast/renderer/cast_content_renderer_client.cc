@@ -13,7 +13,7 @@
 #include "chromecast/media/base/media_codec_support.h"
 #include "chromecast/media/base/supported_codec_profile_levels_memo.h"
 #include "chromecast/public/media/media_capabilities_shlib.h"
-#include "chromecast/renderer/cast_render_frame_action_deferrer.h"
+#include "chromecast/renderer/cast_media_load_deferrer.h"
 #include "chromecast/renderer/media/key_systems_cast.h"
 #include "chromecast/renderer/media/media_caps_observer_impl.h"
 #include "components/network_hints/renderer/prescient_networking_dispatcher.h"
@@ -26,11 +26,10 @@
 #include "mojo/public/cpp/bindings/interface_request.h"
 #include "services/service_manager/public/cpp/connector.h"
 #include "services/service_manager/public/cpp/interface_provider.h"
-#include "third_party/WebKit/public/platform/WebColor.h"
-#include "third_party/WebKit/public/platform/WebRuntimeFeatures.h"
-#include "third_party/WebKit/public/web/WebFrameWidget.h"
-#include "third_party/WebKit/public/web/WebSettings.h"
-#include "third_party/WebKit/public/web/WebView.h"
+#include "third_party/blink/public/platform/web_runtime_features.h"
+#include "third_party/blink/public/web/web_frame_widget.h"
+#include "third_party/blink/public/web/web_settings.h"
+#include "third_party/blink/public/web/web_view.h"
 
 #if defined(OS_ANDROID)
 #include "media/base/android/media_codec_util.h"
@@ -60,9 +59,6 @@ namespace shell {
 CastContentRendererClient::CastContentRendererClient()
     : supported_profiles_(new media::SupportedCodecProfileLevelsMemo()),
       app_media_capabilities_observer_binding_(this),
-      allow_hidden_media_playback_(
-          base::CommandLine::ForCurrentProcess()->HasSwitch(
-              switches::kAllowHiddenMediaPlayback)),
       supported_bitstream_audio_codecs_(kBitstreamAudioCodecNone) {
 #if defined(OS_ANDROID)
   DCHECK(::media::MediaCodecUtil::IsMediaCodecAvailable())
@@ -150,6 +146,9 @@ void CastContentRendererClient::RenderViewCreated(
 void CastContentRendererClient::RenderFrameCreated(
     content::RenderFrame* render_frame) {
   DCHECK(render_frame);
+  // Lifetime is tied to |render_frame| via content::RenderFrameObserver.
+  new CastMediaLoadDeferrer(render_frame);
+
   if (!app_media_capabilities_observer_binding_.is_bound()) {
     mojom::ApplicationMediaCapabilitiesObserverPtr observer;
     app_media_capabilities_observer_binding_.Bind(mojo::MakeRequest(&observer));
@@ -216,6 +215,8 @@ bool CastContentRendererClient::IsSupportedAudioConfig(
     return kBitstreamAudioCodecEac3 & supported_bitstream_audio_codecs_;
   if (config.codec == ::media::kCodecAC3)
     return kBitstreamAudioCodecAc3 & supported_bitstream_audio_codecs_;
+  if (config.codec == ::media::kCodecMpegHAudio)
+    return kBitstreamAudioCodecMpegHAudio & supported_bitstream_audio_codecs_;
 
   // TODO(sanfin): Implement this for Android.
   return true;
@@ -258,7 +259,9 @@ bool CastContentRendererClient::IsSupportedBitstreamAudioCodec(
   return (codec == ::media::kCodecAC3 &&
           (kBitstreamAudioCodecAc3 & supported_bitstream_audio_codecs_)) ||
          (codec == ::media::kCodecEAC3 &&
-          (kBitstreamAudioCodecEac3 & supported_bitstream_audio_codecs_));
+          (kBitstreamAudioCodecEac3 & supported_bitstream_audio_codecs_)) ||
+         (codec == ::media::kCodecMpegHAudio &&
+          (kBitstreamAudioCodecMpegHAudio & supported_bitstream_audio_codecs_));
 }
 
 blink::WebPrescientNetworking*
@@ -266,28 +269,19 @@ CastContentRendererClient::GetPrescientNetworking() {
   return prescient_networking_dispatcher_.get();
 }
 
-void CastContentRendererClient::DeferMediaLoad(
+bool CastContentRendererClient::DeferMediaLoad(
     content::RenderFrame* render_frame,
     bool render_frame_has_played_media_before,
-    const base::Closure& closure) {
-  if (allow_hidden_media_playback_) {
-    closure.Run();
-    return;
-  }
-
-  RunWhenInForeground(render_frame, closure);
+    base::OnceClosure closure) {
+  return RunWhenInForeground(render_frame, std::move(closure));
 }
 
-void CastContentRendererClient::RunWhenInForeground(
+bool CastContentRendererClient::RunWhenInForeground(
     content::RenderFrame* render_frame,
-    const base::Closure& closure) {
-  if (!render_frame->IsHidden()) {
-    closure.Run();
-    return;
-  }
-
-  // Lifetime is tied to |render_frame| via content::RenderFrameObserver.
-  new CastRenderFrameActionDeferrer(render_frame, closure);
+    base::OnceClosure closure) {
+  auto* media_load_deferrer = CastMediaLoadDeferrer::Get(render_frame);
+  DCHECK(media_load_deferrer);
+  return media_load_deferrer->RunWhenInForeground(std::move(closure));
 }
 
 bool CastContentRendererClient::AllowIdleMediaSuspend() {

@@ -12,6 +12,7 @@
 #include "content/browser/browser_main_loop.h"
 #include "content/browser/renderer_host/media/media_stream_manager.h"
 #include "content/browser/renderer_host/media/video_capture_manager.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/notification_source.h"
 #include "content/public/browser/render_frame_host.h"
@@ -30,7 +31,7 @@ namespace content {
 base::FilePath GetTestFilePath(const char* dir, const char* file) {
   base::FilePath path;
   base::ThreadRestrictions::ScopedAllowIO allow_io_for_path_service;
-  PathService::Get(DIR_TEST_DATA, &path);
+  base::PathService::Get(DIR_TEST_DATA, &path);
   if (dir)
     path = path.AppendASCII(dir);
   return path.AppendASCII(file);
@@ -146,9 +147,9 @@ void LookupAndLogNameAndIdOfFirstCamera() {
                       LOG(INFO) << "Using camera "
                                 << descriptors.front().display_name() << " ("
                                 << descriptors.front().model_id << ")";
-                      quit_closure.Run();
+                      std::move(quit_closure).Run();
                     },
-                    quit_closure));
+                    std::move(quit_closure)));
           },
           media_stream_manager, run_loop.QuitClosure()));
   run_loop.Run();

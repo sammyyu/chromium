@@ -32,8 +32,13 @@ enum class NavigationInitiationType {
   // if a navigation is already committed.
   NONE = 0,
 
-  // Navigation was initiated by actual user action.
-  USER_INITIATED,
+  // Navigation was initiated by the browser by calling NavigationManager
+  // methods. Examples of methods which cause browser-initiated navigations
+  // include:
+  //  * NavigationManager::Reload()
+  //  * NavigationManager::GoBack()
+  //  * NavigationManager::GoForward()
+  BROWSER_INITIATED,
 
   // Navigation was initiated by renderer. Examples of renderer-initiated
   // navigations include:
@@ -82,6 +87,9 @@ class NavigationManagerImpl : public NavigationManager {
   virtual void OnNavigationItemsPruned(size_t pruned_item_count) = 0;
   virtual void OnNavigationItemChanged() = 0;
   virtual void OnNavigationItemCommitted() = 0;
+
+  // Prepares for the deletion of WKWebView such as caching necessary data.
+  virtual void DetachFromWebView();
 
   // Temporary accessors and content/ class pass-throughs.
   // TODO(stuartmorgan): Re-evaluate this list once the refactorings have
@@ -159,8 +167,11 @@ class NavigationManagerImpl : public NavigationManager {
   void UpdateCurrentItemForReplaceState(const GURL& url,
                                         NSString* state_object);
 
-  // Same as GoToIndex(int), but allows renderer-initiated navigations.
-  void GoToIndex(int index, NavigationInitiationType initiation_type);
+  // Same as GoToIndex(int), but allows renderer-initiated navigations and
+  // specifying whether or not the navigation is caused by the user gesture.
+  void GoToIndex(int index,
+                 NavigationInitiationType initiation_type,
+                 bool has_user_gesture);
 
   // NavigationManager:
   NavigationItem* GetLastCommittedItem() const final;
@@ -171,7 +182,7 @@ class NavigationManagerImpl : public NavigationManager {
   void GoToIndex(int index) final;
   void Reload(ReloadType reload_type, bool check_for_reposts) final;
   void ReloadWithUserAgentType(UserAgentType user_agent_type) final;
-  void LoadIfNecessary() final;
+  void LoadIfNecessary() override;
 
   // Implementation for corresponding NavigationManager getters.
   virtual NavigationItemImpl* GetPendingItemImpl() const = 0;
@@ -221,7 +232,11 @@ class NavigationManagerImpl : public NavigationManager {
   NavigationItem* GetLastCommittedNonAppSpecificItem() const;
 
   // Subclass specific implementation to update session state.
-  virtual void FinishGoToIndex(int index, NavigationInitiationType type) = 0;
+  virtual void FinishGoToIndex(int index,
+                               NavigationInitiationType type,
+                               bool has_user_gesture) = 0;
+  virtual void FinishReload();
+  virtual void FinishLoadURLWithParams();
 
   // Returns true if the subclass uses placeholder URLs and this is such a URL.
   virtual bool IsPlaceholderUrl(const GURL& url) const;

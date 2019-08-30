@@ -13,8 +13,6 @@
 #include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/string_number_conversions.h"
@@ -23,13 +21,12 @@
 #include "base/task_scheduler/task_traits.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_task_runner_handle.h"
-#include "content/browser/browser_thread_impl.h"
+#include "base/unguessable_token.h"
 #include "content/browser/child_process_security_policy_impl.h"
 #include "content/browser/download/download_manager_impl.h"
 #include "content/browser/download/download_resource_handler.h"
 #include "content/browser/frame_host/navigation_request_info.h"
 #include "content/browser/loader/detachable_resource_handler.h"
-#include "content/browser/loader/downloaded_temp_file_impl.h"
 #include "content/browser/loader/navigation_url_loader.h"
 #include "content/browser/loader/resource_dispatcher_host_impl.h"
 #include "content/browser/loader/resource_loader.h"
@@ -60,7 +57,7 @@
 #include "content/public/test/test_utils.h"
 #include "content/test/test_content_browser_client.h"
 #include "content/test/test_navigation_url_loader_delegate.h"
-#include "mojo/common/data_pipe_utils.h"
+#include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "net/base/chunked_upload_data_stream.h"
 #include "net/base/elements_upload_data_stream.h"
 #include "net/base/load_flags.h"
@@ -80,10 +77,12 @@
 #include "net/url_request/url_request_test_job.h"
 #include "net/url_request/url_request_test_util.h"
 #include "services/network/public/cpp/resource_request.h"
+#include "services/network/resource_scheduler.h"
+#include "services/network/resource_scheduler_params_manager.h"
 #include "services/network/test/test_url_loader_client.h"
 #include "storage/browser/blob/shareable_file_reference.h"
 #include "testing/gtest/include/gtest/gtest.h"
-#include "third_party/WebKit/public/mojom/page/page_visibility_state.mojom.h"
+#include "third_party/blink/public/mojom/page/page_visibility_state.mojom.h"
 
 // TODO(eroman): Write unit tests for SafeBrowsing that exercise
 //               SafeBrowsingResourceHandler.
@@ -106,7 +105,6 @@ static network::ResourceRequest CreateResourceRequest(const char* method,
   request.plugin_child_id = -1;
   request.resource_type = type;
   request.appcache_host_id = kAppCacheNoHostId;
-  request.download_to_file = false;
   request.should_reset_appcache = false;
   request.is_main_frame = true;
   request.transition_type = ui::PAGE_TRANSITION_LINK;
@@ -673,8 +671,8 @@ class ResourceDispatcherHostTest : public testing::Test {
     HandleScheme("test");
     scoped_refptr<SiteInstance> site_instance =
         SiteInstance::Create(browser_context_.get());
-    web_contents_.reset(
-        WebContents::Create(WebContents::CreateParams(browser_context_.get())));
+    web_contents_ =
+        WebContents::Create(WebContents::CreateParams(browser_context_.get()));
     web_contents_filter_ = new TestFilterSpecifyingChild(
         browser_context_->GetResourceContext(),
         web_contents_->GetMainFrame()->GetProcess()->GetID());
@@ -814,12 +812,15 @@ class ResourceDispatcherHostTest : public testing::Test {
             false /* is_form_submission */, GURL() /* searchable_form_url */,
             std::string() /* searchable_form_encoding */,
             url::Origin::Create(url), GURL() /* client_side_redirect_url */,
-            nullptr /* devtools_initiator_info */);
+            base::nullopt /* devtools_initiator_info */);
     CommonNavigationParams common_params;
     common_params.url = url;
     std::unique_ptr<NavigationRequestInfo> request_info(
         new NavigationRequestInfo(common_params, std::move(begin_params), url,
-                                  true, false, false, -1, false, false, false));
+                                  true, false, false, -1, false, false, false,
+                                  false, nullptr,
+                                  base::UnguessableToken::Create(),
+                                  base::UnguessableToken::Create()));
     std::unique_ptr<NavigationURLLoader> test_loader =
         NavigationURLLoader::Create(
             browser_context_->GetResourceContext(),
@@ -837,6 +838,18 @@ class ResourceDispatcherHostTest : public testing::Test {
       return false;
     return request_info->detachable_handler() &&
            request_info->detachable_handler()->is_detached();
+  }
+
+  void SetMaxDelayableRequests(size_t max_delayable_requests) {
+    network::ResourceSchedulerParamsManager::ParamsForNetworkQualityContainer c;
+    for (int i = 0; i != net::EFFECTIVE_CONNECTION_TYPE_LAST; ++i) {
+      auto type = static_cast<net::EffectiveConnectionType>(i);
+      c[type] =
+          network::ResourceSchedulerParamsManager::ParamsForNetworkQuality(
+              max_delayable_requests, 0.0, false);
+    }
+    host_.scheduler()->SetResourceSchedulerParamsManagerForTests(
+        network::ResourceSchedulerParamsManager(c));
   }
 
   content::TestBrowserThreadBundle thread_bundle_;
@@ -963,7 +976,7 @@ void CheckSuccessfulRequest(network::TestURLLoaderClient* client,
     ASSERT_TRUE(body.is_valid());
 
     std::string actual;
-    EXPECT_TRUE(mojo::common::BlockingCopyToString(std::move(body), &actual));
+    EXPECT_TRUE(mojo::BlockingCopyToString(std::move(body), &actual));
     EXPECT_EQ(reference_data, actual);
   }
   client->RunUntilComplete();
@@ -1468,6 +1481,7 @@ TEST_F(ResourceDispatcherHostTest, CancelRequestsOnRenderFrameDeleted) {
   host_.SetDelegate(&delegate);
   host_.OnRenderViewHostCreated(filter_->child_id(), 0,
                                 request_context_getter_.get());
+  SetMaxDelayableRequests(1);
 
   // One RenderView issues a high priority request and a low priority one. Both
   // should be started.
@@ -2207,138 +2221,6 @@ TEST_F(ResourceDispatcherHostTest, DataSentBeforeDetach) {
   client.RunUntilComplete();
   EXPECT_TRUE(client.response_body().is_valid());
   EXPECT_EQ(net::ERR_ABORTED, client.completion_status().error_code);
-}
-
-// Tests the dispatcher host's temporary file management in the mojo-enabled
-// loading.
-TEST_F(ResourceDispatcherHostTest, RegisterDownloadedTempFileWithMojo) {
-  const int kRequestID = 1;
-
-  // Create a temporary file.
-  base::FilePath file_path;
-  ASSERT_TRUE(base::CreateTemporaryFile(&file_path));
-  EXPECT_TRUE(base::PathExists(file_path));
-  scoped_refptr<ShareableFileReference> deletable_file =
-      ShareableFileReference::GetOrCreate(
-          file_path, ShareableFileReference::DELETE_ON_FINAL_RELEASE,
-          base::CreateSingleThreadTaskRunnerWithTraits({base::MayBlock()})
-              .get());
-
-  // Not readable.
-  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(
-      filter_->child_id(), file_path));
-
-  // Register it for a resource request.
-  auto downloaded_file =
-      DownloadedTempFileImpl::Create(filter_->child_id(), kRequestID);
-  network::mojom::DownloadedTempFilePtr downloaded_file_ptr =
-      DownloadedTempFileImpl::Create(filter_->child_id(), kRequestID);
-  host_.RegisterDownloadedTempFile(filter_->child_id(), kRequestID, file_path);
-
-  // Should be readable now.
-  EXPECT_TRUE(ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(
-      filter_->child_id(), file_path));
-
-  // The child releases from the request.
-  downloaded_file_ptr = nullptr;
-  content::RunAllTasksUntilIdle();
-
-  // Still readable because there is another reference to the file. (The child
-  // may take additional blob references.)
-  EXPECT_TRUE(ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(
-      filter_->child_id(), file_path));
-
-  // Release extra references and wait for the file to be deleted. (This relies
-  // on the delete happening on the FILE thread which is mapped to main thread
-  // in this test.)
-  deletable_file = nullptr;
-  content::RunAllTasksUntilIdle();
-
-  // The file is no longer readable to the child and has been deleted.
-  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(
-      filter_->child_id(), file_path));
-  EXPECT_FALSE(base::PathExists(file_path));
-}
-
-// Tests that temporary files held on behalf of child processes are released
-// when the child process dies.
-TEST_F(ResourceDispatcherHostTest, ReleaseTemporiesOnProcessExit) {
-  const int kRequestID = 1;
-
-  // Create a temporary file.
-  base::FilePath file_path;
-  ASSERT_TRUE(base::CreateTemporaryFile(&file_path));
-  scoped_refptr<ShareableFileReference> deletable_file =
-      ShareableFileReference::GetOrCreate(
-          file_path, ShareableFileReference::DELETE_ON_FINAL_RELEASE,
-          base::CreateSingleThreadTaskRunnerWithTraits({base::MayBlock()})
-              .get());
-
-  // Register it for a resource request.
-  host_.RegisterDownloadedTempFile(filter_->child_id(), kRequestID, file_path);
-  deletable_file = nullptr;
-
-  // Should be readable now.
-  EXPECT_TRUE(ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(
-      filter_->child_id(), file_path));
-
-  // Let the process die.
-  filter_->OnChannelClosing();
-  content::RunAllTasksUntilIdle();
-
-  // The file is no longer readable to the child and has been deleted.
-  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(
-      filter_->child_id(), file_path));
-  EXPECT_FALSE(base::PathExists(file_path));
-}
-
-TEST_F(ResourceDispatcherHostTest, DownloadToFile) {
-  // Make a request which downloads to file.
-  network::mojom::URLLoaderPtr loader;
-  network::TestURLLoaderClient client;
-  network::ResourceRequest request = CreateResourceRequest(
-      "GET", RESOURCE_TYPE_SUB_RESOURCE, net::URLRequestTestJob::test_url_1());
-  request.download_to_file = true;
-  filter_->CreateLoaderAndStart(
-      mojo::MakeRequest(&loader), 0, 1, network::mojom::kURLLoadOptionNone,
-      request, client.CreateInterfacePtr(),
-      net::MutableNetworkTrafficAnnotationTag(TRAFFIC_ANNOTATION_FOR_TESTS));
-  content::RunAllTasksUntilIdle();
-
-  // The request should contain the following messages:
-  //     ReceivedResponse    (indicates headers received and filename)
-  //     DataDownloaded*     (bytes downloaded and total length)
-  //     RequestComplete     (request is done)
-  client.RunUntilComplete();
-  EXPECT_FALSE(client.response_head().download_file_path.empty());
-  EXPECT_EQ(net::URLRequestTestJob::test_data_1().size(),
-            static_cast<size_t>(client.download_data_length()));
-  EXPECT_EQ(net::OK, client.completion_status().error_code);
-
-  // Verify that the data ended up in the temporary file.
-  std::string contents;
-  ASSERT_TRUE(base::ReadFileToString(client.response_head().download_file_path,
-                                     &contents));
-  EXPECT_EQ(net::URLRequestTestJob::test_data_1(), contents);
-
-  // The file should be readable by the child.
-  EXPECT_TRUE(ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(
-      filter_->child_id(), client.response_head().download_file_path));
-
-  // When the renderer releases the file, it should be deleted.
-  // RunUntilIdle doesn't work because base::WorkerPool is involved.
-  ShareableFileReleaseWaiter waiter(client.response_head().download_file_path);
-  client.TakeDownloadedTempFile();
-  content::RunAllTasksUntilIdle();
-  waiter.Wait();
-  // The release callback runs before the delete is scheduled, so pump the
-  // message loop for the delete itself. (This relies on the delete happening on
-  // the FILE thread which is mapped to main thread in this test.)
-  content::RunAllTasksUntilIdle();
-
-  EXPECT_FALSE(base::PathExists(client.response_head().download_file_path));
-  EXPECT_FALSE(ChildProcessSecurityPolicyImpl::GetInstance()->CanReadFile(
-      filter_->child_id(), client.response_head().download_file_path));
 }
 
 WebContents* WebContentsBinder(WebContents* rv) { return rv; }

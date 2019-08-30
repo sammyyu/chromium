@@ -16,27 +16,51 @@ namespace shell {
 
 class TouchBlocker : public ui::EventHandler, public aura::WindowObserver {
  public:
-  explicit TouchBlocker(aura::Window* window) : window_(window) {
+  TouchBlocker(aura::Window* window, bool activated)
+      : window_(window), activated_(activated) {
     DCHECK(window_);
     window_->AddObserver(this);
-    window_->AddPreTargetHandler(this);
+    if (activated_) {
+      window_->AddPreTargetHandler(this);
+    }
   }
 
   ~TouchBlocker() override {
     if (window_) {
       window_->RemoveObserver(this);
+      if (activated_) {
+        window_->RemovePreTargetHandler(this);
+      }
+    }
+  }
+
+  void Activate(bool activate) {
+    if (!window_ || activate == activated_) {
+      return;
+    }
+
+    if (activate) {
+      window_->AddPreTargetHandler(this);
+    } else {
       window_->RemovePreTargetHandler(this);
     }
+
+    activated_ = activate;
   }
 
  private:
   // Overriden from ui::EventHandler.
-  void OnTouchEvent(ui::TouchEvent* touch) override { touch->SetHandled(); }
+  void OnTouchEvent(ui::TouchEvent* touch) override {
+    if (activated_) {
+      touch->SetHandled();
+    }
+  }
 
   // Overriden from aura::WindowObserver.
   void OnWindowDestroyed(aura::Window* window) override { window_ = nullptr; }
 
   aura::Window* window_;
+  bool activated_;
 
   DISALLOW_COPY_AND_ASSIGN(TouchBlocker);
 };
@@ -46,28 +70,40 @@ std::unique_ptr<CastContentWindow> CastContentWindow::Create(
     CastContentWindow::Delegate* delegate,
     bool is_headless,
     bool enable_touch_input) {
-  return base::WrapUnique(new CastContentWindowAura(enable_touch_input));
+  return base::WrapUnique(
+      new CastContentWindowAura(delegate, enable_touch_input));
 }
 
-CastContentWindowAura::~CastContentWindowAura() = default;
+CastContentWindowAura::CastContentWindowAura(
+    CastContentWindow::Delegate* delegate,
+    bool is_touch_enabled)
+    : delegate_(delegate),
+      gesture_dispatcher_(std::make_unique<CastGestureDispatcher>(delegate_)),
+      is_touch_enabled_(is_touch_enabled) {
+  DCHECK(delegate_);
+}
 
-CastContentWindowAura::CastContentWindowAura(bool is_touch_enabled)
-    : is_touch_enabled_(is_touch_enabled), touch_blocker_() {}
+CastContentWindowAura::~CastContentWindowAura() {
+  if (window_manager_) {
+    window_manager_->RemoveGestureHandler(this);
+  }
+}
 
 void CastContentWindowAura::CreateWindowForWebContents(
     content::WebContents* web_contents,
     CastWindowManager* window_manager,
     bool is_visible,
+    CastWindowManager::WindowId z_order,
     VisibilityPriority visibility_priority) {
   DCHECK(web_contents);
-  DCHECK(window_manager);
+  window_manager_ = window_manager;
+  DCHECK(window_manager_);
   gfx::NativeView window = web_contents->GetNativeView();
-  window_manager->SetWindowId(window, CastWindowManager::APP);
-  window_manager->AddWindow(window);
+  window_manager_->SetWindowId(window, z_order);
+  window_manager_->AddWindow(window);
+  window_manager_->AddGestureHandler(this);
 
-  if (!is_touch_enabled_) {
-    touch_blocker_ = std::make_unique<TouchBlocker>(window);
-  }
+  touch_blocker_ = std::make_unique<TouchBlocker>(window, !is_touch_enabled_);
 
   if (is_visible) {
     window->Show();
@@ -76,10 +112,52 @@ void CastContentWindowAura::CreateWindowForWebContents(
   }
 }
 
+void CastContentWindowAura::EnableTouchInput(bool enabled) {
+  if (touch_blocker_) {
+    touch_blocker_->Activate(!enabled);
+  }
+}
+
 void CastContentWindowAura::RequestVisibility(
     VisibilityPriority visibility_priority){};
 
+void CastContentWindowAura::NotifyVisibilityChange(
+    VisibilityType visibility_type) {
+  delegate_->OnVisibilityChange(visibility_type);
+}
+
 void CastContentWindowAura::RequestMoveOut(){};
+
+bool CastContentWindowAura::CanHandleSwipe(CastSideSwipeOrigin swipe_origin) {
+  return gesture_dispatcher_->CanHandleSwipe(swipe_origin);
+}
+
+void CastContentWindowAura::HandleSideSwipeBegin(
+    CastSideSwipeOrigin swipe_origin,
+    const gfx::Point& touch_location) {
+  gesture_dispatcher_->HandleSideSwipeBegin(swipe_origin, touch_location);
+}
+
+void CastContentWindowAura::HandleSideSwipeContinue(
+    CastSideSwipeOrigin swipe_origin,
+    const gfx::Point& touch_location) {
+  gesture_dispatcher_->HandleSideSwipeContinue(swipe_origin, touch_location);
+}
+
+void CastContentWindowAura::HandleSideSwipeEnd(
+    CastSideSwipeOrigin swipe_origin,
+    const gfx::Point& touch_location) {
+  gesture_dispatcher_->HandleSideSwipeEnd(swipe_origin, touch_location);
+}
+
+void CastContentWindowAura::HandleTapDownGesture(
+    const gfx::Point& touch_location) {
+  gesture_dispatcher_->HandleTapDownGesture(touch_location);
+}
+
+void CastContentWindowAura::HandleTapGesture(const gfx::Point& touch_location) {
+  gesture_dispatcher_->HandleTapGesture(touch_location);
+}
 
 }  // namespace shell
 }  // namespace chromecast

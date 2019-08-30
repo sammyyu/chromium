@@ -17,6 +17,8 @@ namespace internal {
 extern const char kHistogramFirstLayout[];
 extern const char kHistogramFirstInputDelay[];
 extern const char kHistogramFirstInputTimestamp[];
+extern const char kHistogramLongestInputDelay[];
+extern const char kHistogramLongestInputTimestamp[];
 extern const char kHistogramFirstPaint[];
 extern const char kHistogramFirstTextPaint[];
 extern const char kHistogramDomContentLoaded[];
@@ -52,7 +54,6 @@ extern const char kHistogramPageTimingForegroundDurationNoCommit[];
 
 extern const char kHistogramForegroundToFirstMeaningfulPaint[];
 
-extern const char kRapporMetricsNameCoarseTiming[];
 extern const char kHistogramFirstMeaningfulPaintStatus[];
 extern const char kHistogramTimeToInteractiveStatus[];
 
@@ -208,8 +209,6 @@ class CorePageLoadMetricsObserver
   void RecordByteAndResourceHistograms(
       const page_load_metrics::mojom::PageLoadTiming& timing,
       const page_load_metrics::PageLoadExtraInfo& info);
-  void RecordRappor(const page_load_metrics::mojom::PageLoadTiming& timing,
-                    const page_load_metrics::PageLoadExtraInfo& info);
   void RecordForegroundDurationHistograms(
       const page_load_metrics::mojom::PageLoadTiming& timing,
       const page_load_metrics::PageLoadExtraInfo& info,

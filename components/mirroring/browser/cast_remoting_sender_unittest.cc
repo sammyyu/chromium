@@ -9,7 +9,6 @@
 #include "base/callback_helpers.h"
 #include "base/compiler_specific.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/time/default_tick_clock.h"
 #include "content/public/test/test_browser_thread_bundle.h"
@@ -125,8 +124,8 @@ class CastRemotingSenderTest : public ::testing::Test {
     remoting_sender_->OnReceivedRtt(base::TimeDelta::FromMilliseconds(1));
 
     const MojoCreateDataPipeOptions data_pipe_options{
-        sizeof(MojoCreateDataPipeOptions),
-        MOJO_CREATE_DATA_PIPE_OPTIONS_FLAG_NONE, 1, kDataPipeCapacity};
+        sizeof(MojoCreateDataPipeOptions), MOJO_CREATE_DATA_PIPE_FLAG_NONE, 1,
+        kDataPipeCapacity};
     mojo::ScopedDataPipeConsumerHandle consumer_end;
     CHECK_EQ(MOJO_RESULT_OK,
              mojo::CreateDataPipe(&data_pipe_options, &producer_end_,

@@ -6,7 +6,6 @@
 
 #include "base/bind.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "chrome/browser/chromeos/login/oobe_screen.h"
@@ -58,9 +57,10 @@ class HidDetectionTest : public OobeBaseTest {
                    base::Unretained(fake_input_service_manager_.get())));
   }
 
-  ~HidDetectionTest() override {}
-
-  void SetUpOnMainThread() override { OobeBaseTest::SetUpOnMainThread(); }
+  ~HidDetectionTest() override {
+    service_manager::ServiceContext::ClearGlobalBindersForTesting(
+        device::mojom::kServiceName);
+  }
 
   void SetUpInProcessBrowserTestFixture() override {
     OobeBaseTest::SetUpInProcessBrowserTestFixture();
@@ -111,7 +111,7 @@ IN_PROC_BROWSER_TEST_F(HidDetectionTest, NoDevicesConnected) {
 }
 
 IN_PROC_BROWSER_TEST_F(HidDetectionSkipTest, BothDevicesPreConnected) {
-  OobeScreenWaiter(OobeScreen::SCREEN_OOBE_NETWORK).Wait();
+  OobeScreenWaiter(OobeScreen::SCREEN_OOBE_WELCOME).Wait();
 }
 
 }  // namespace chromeos

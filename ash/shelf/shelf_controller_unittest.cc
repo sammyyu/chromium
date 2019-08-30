@@ -94,6 +94,16 @@ TEST_F(ShelfControllerTest, InitializesBackButtonAndAppListItemDelegate) {
   EXPECT_TRUE(model->GetShelfItemDelegate(ShelfID(kAppListId)));
 }
 
+TEST_F(ShelfControllerTest, Shutdown) {
+  // Simulate a display change occurring during shutdown (e.g. due to a screen
+  // rotation animation being canceled).
+  Shell::Get()->shelf_controller()->Shutdown();
+  display_manager()->SetDisplayRotation(
+      display::Screen::GetScreen()->GetPrimaryDisplay().id(),
+      display::Display::ROTATE_90, display::Display::RotationSource::ACTIVE);
+  // Ash does not crash during cleanup.
+}
+
 TEST_F(ShelfControllerTest, ShelfModelChangeSynchronization) {
   ShelfController* controller = Shell::Get()->shelf_controller();
 
@@ -206,8 +216,9 @@ class ShelfControllerTouchableContextMenuTest : public AshTestBase {
   ~ShelfControllerTouchableContextMenuTest() override = default;
 
   void SetUp() override {
-    scoped_feature_list_.InitAndEnableFeature(
-        features::kTouchableAppContextMenu);
+    scoped_feature_list_.InitWithFeatures(
+        {features::kTouchableAppContextMenu, features::kNotificationIndicator},
+        {});
     AshTestBase::SetUp();
   }
 
@@ -440,6 +451,27 @@ TEST_F(ShelfControllerPrefsTest, ShelfSettingsInTabletMode) {
   Shell::Get()->tablet_mode_controller()->EnableTabletModeWindowManager(false);
   EXPECT_EQ(SHELF_ALIGNMENT_LEFT, shelf->alignment());
   EXPECT_EQ(SHELF_AUTO_HIDE_BEHAVIOR_ALWAYS, shelf->auto_hide_behavior());
+}
+
+using ShelfControllerAppModeTest = NoSessionAshTestBase;
+
+// Tests that shelf auto hide behavior is always hidden in app mode.
+TEST_F(ShelfControllerAppModeTest, AutoHideBehavior) {
+  SimulateKioskMode(user_manager::USER_TYPE_KIOSK_APP);
+
+  Shelf* shelf = GetPrimaryShelf();
+  EXPECT_EQ(SHELF_AUTO_HIDE_ALWAYS_HIDDEN, shelf->auto_hide_behavior());
+
+  Shell::Get()->tablet_mode_controller()->EnableTabletModeWindowManager(true);
+  EXPECT_EQ(SHELF_AUTO_HIDE_ALWAYS_HIDDEN, shelf->auto_hide_behavior());
+
+  display_manager()->SetDisplayRotation(
+      display::Screen::GetScreen()->GetPrimaryDisplay().id(),
+      display::Display::ROTATE_90, display::Display::RotationSource::ACTIVE);
+  EXPECT_EQ(SHELF_AUTO_HIDE_ALWAYS_HIDDEN, shelf->auto_hide_behavior());
+
+  Shell::Get()->tablet_mode_controller()->EnableTabletModeWindowManager(false);
+  EXPECT_EQ(SHELF_AUTO_HIDE_ALWAYS_HIDDEN, shelf->auto_hide_behavior());
 }
 
 }  // namespace

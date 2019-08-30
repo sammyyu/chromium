@@ -67,7 +67,6 @@ import org.chromium.content.browser.test.util.Criteria;
 import org.chromium.content.browser.test.util.CriteriaHelper;
 import org.chromium.content_public.browser.LoadUrlParams;
 import org.chromium.net.test.EmbeddedTestServer;
-import org.chromium.ui.base.DeviceFormFactor;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -157,7 +156,7 @@ public class BrowserActionActivityTest {
         mTestDelegate = new TestDelegate();
         mTestObserver = new EmptyTabModelObserver() {
             @Override
-            public void didAddTab(Tab tab, TabLaunchType type) {
+            public void didAddTab(Tab tab, @TabLaunchType int type) {
                 mDidAddTabCallback.notifyCalled();
             }
         };
@@ -220,7 +219,7 @@ public class BrowserActionActivityTest {
         Assert.assertEquals(1, mOnFinishNativeInitializationCallback.getCallCount());
 
         Context context = InstrumentationRegistry.getTargetContext();
-        Assert.assertEquals(context.getPackageName(), activity.mCreatorPackageName);
+        Assert.assertEquals(context.getPackageName(), activity.mUntrustedCreatorPackageName);
 
         // Check menu populated correctly.
         List<Pair<Integer, List<ContextMenuItem>>> menus = mItems;
@@ -268,7 +267,7 @@ public class BrowserActionActivityTest {
         Assert.assertEquals(0, mOnFinishNativeInitializationCallback.getCallCount());
 
         Context context = InstrumentationRegistry.getTargetContext();
-        Assert.assertEquals(context.getPackageName(), activity.mCreatorPackageName);
+        Assert.assertEquals(context.getPackageName(), activity.mUntrustedCreatorPackageName);
 
         // Check menu populated correctly that only copy, share and custom items are shown.
         List<Pair<Integer, List<ContextMenuItem>>> menus = mItems;
@@ -419,7 +418,6 @@ public class BrowserActionActivityTest {
 
         final BrowserActionActivity activity2 = startBrowserActionActivity(mTestPage3, 1);
         mOnBrowserActionsMenuShownCallback.waitForCallback(1);
-        mOnFinishNativeInitializationCallback.waitForCallback(1);
         Assert.assertEquals(2, mActivityTestRule.getActivity().getCurrentTabModel().getCount());
         openTabInBackground(activity2);
         // Notification title should be shown for multiple tabs.
@@ -432,13 +430,22 @@ public class BrowserActionActivityTest {
         });
 
         // Tabs should always be added at the end of the model.
-        Assert.assertEquals(3, mActivityTestRule.getActivity().getCurrentTabModel().getCount());
+        int tabCount = mActivityTestRule.getActivity().getCurrentTabModel().getCount();
         Assert.assertEquals(mTestPage,
-                mActivityTestRule.getActivity().getCurrentTabModel().getTabAt(0).getUrl());
+                mActivityTestRule.getActivity()
+                        .getCurrentTabModel()
+                        .getTabAt(tabCount - 3)
+                        .getUrl());
         Assert.assertEquals(mTestPage2,
-                mActivityTestRule.getActivity().getCurrentTabModel().getTabAt(1).getUrl());
+                mActivityTestRule.getActivity()
+                        .getCurrentTabModel()
+                        .getTabAt(tabCount - 2)
+                        .getUrl());
         Assert.assertEquals(mTestPage3,
-                mActivityTestRule.getActivity().getCurrentTabModel().getTabAt(2).getUrl());
+                mActivityTestRule.getActivity()
+                        .getCurrentTabModel()
+                        .getTabAt(tabCount - 1)
+                        .getUrl());
         Intent notificationIntent = BrowserActionsService.getNotificationIntent();
         notificationIntent.addFlags(Intent.FLAG_ACTIVITY_NEW_TASK);
 
@@ -450,7 +457,7 @@ public class BrowserActionActivityTest {
 
         // The Intent of the Browser Actions notification should toggle overview mode.
         mActivityTestRule.startActivityCompletely(notificationIntent);
-        if (DeviceFormFactor.isTablet()) {
+        if (mActivityTestRule.getActivity().isTablet()) {
             Assert.assertFalse(
                     mActivityTestRule.getActivity().getLayoutManager().overviewVisible());
         } else {
@@ -562,7 +569,7 @@ public class BrowserActionActivityTest {
         Assert.assertEquals(1, currentModel.index());
 
         // Tab switcher should be shown on phones.
-        if (DeviceFormFactor.isTablet()) {
+        if (mActivityTestRule.getActivity().isTablet()) {
             Assert.assertFalse(
                     mActivityTestRule.getActivity().getLayoutManager().overviewVisible());
         } else {

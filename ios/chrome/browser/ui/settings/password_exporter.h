@@ -32,7 +32,7 @@ enum class ExportState {
 
 // Posts a task to write the data in |data| to the file at |fileURL| and
 // executes |handler| when the writing is finished.
-- (void)writeData:(NSString*)data
+- (void)writeData:(NSData*)data
             toURL:(NSURL*)fileURL
           handler:(void (^)(WriteToURLStatus))handler;
 
@@ -75,7 +75,22 @@ enum class ExportState {
 
 @end
 
-/** Class handling all the operations necessary to export passwords.*/
+/**
+ * Class handling all the operations necessary to export passwords.
+ * In order to pass the exported data to the user-selected app, it stores
+ * a temporary file in tmp/passwords/<UUID>/, in the sandbox.
+ *
+ * The temporary file is removed from:
+ * - the UIActivityViewController's |completionWithItemsHandler| when the
+ *   selected app/extension signals completion
+ * - at browser startup
+ * - whenever a password is deleted from local storage.
+ *
+ * The last two deletion points remove the entire passwords/ directory.
+ * They are needed for cases in which the user-selected app/extension doesn't
+ * signal completion upon finishing to process the file, causing the file to
+ * persist longer than needed.
+ */
 @interface PasswordExporter : NSObject
 
 // The designated initializer. |reauthenticationModule| and |delegate| must
@@ -95,6 +110,9 @@ enum class ExportState {
 
 // Called when the user cancels the export operation.
 - (void)cancelExport;
+
+// Called to re-enable export functionality when the export UI flow finishes.
+- (void)resetExportState;
 
 // State of the export operation.
 @property(nonatomic, readonly, assign) ExportState exportState;

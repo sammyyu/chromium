@@ -34,7 +34,6 @@
 #include "headless/app/headless_shell_switches.h"
 #include "headless/lib/browser/headless_devtools.h"
 #include "headless/public/headless_devtools_target.h"
-#include "headless/public/util/deterministic_http_protocol_handler.h"
 #include "net/base/filename_util.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/io_buffer.h"
@@ -42,6 +41,7 @@
 #include "net/base/net_errors.h"
 #include "net/http/http_util.h"
 #include "net/socket/ssl_client_socket.h"
+#include "net/ssl/ssl_key_logger_impl.h"
 #include "services/network/public/cpp/network_switches.h"
 #include "ui/base/ui_base_switches.h"
 #include "ui/gfx/geometry/size.h"
@@ -164,8 +164,10 @@ void HeadlessShell::OnStart(HeadlessBrowser* browser) {
   // are created via DevTools later.
   base::FilePath ssl_keylog_file =
       GetSSLKeyLogFile(base::CommandLine::ForCurrentProcess());
-  if (!ssl_keylog_file.empty())
-    net::SSLClientSocket::SetSSLKeyLogFile(ssl_keylog_file);
+  if (!ssl_keylog_file.empty()) {
+    net::SSLClientSocket::SetSSLKeyLogger(
+        std::make_unique<net::SSLKeyLoggerImpl>(ssl_keylog_file));
+  }
 
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(::switches::kLang)) {
     context_builder.SetAcceptLanguage(
@@ -174,51 +176,29 @@ void HeadlessShell::OnStart(HeadlessBrowser* browser) {
   } else {
     context_builder.SetAcceptLanguage("en-US,en");
   }
-  DeterministicHttpProtocolHandler* http_handler = nullptr;
-  DeterministicHttpProtocolHandler* https_handler = nullptr;
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDeterministicFetch)) {
-    deterministic_dispatcher_ =
-        std::make_unique<DeterministicDispatcher>(browser_->BrowserIOThread());
-
-    ProtocolHandlerMap protocol_handlers;
-    protocol_handlers[url::kHttpScheme] =
-        std::make_unique<DeterministicHttpProtocolHandler>(
-            deterministic_dispatcher_.get(), browser->BrowserIOThread());
-    http_handler = static_cast<DeterministicHttpProtocolHandler*>(
-        protocol_handlers[url::kHttpScheme].get());
-    protocol_handlers[url::kHttpsScheme] =
-        std::make_unique<DeterministicHttpProtocolHandler>(
-            deterministic_dispatcher_.get(), browser->BrowserIOThread());
-    https_handler = static_cast<DeterministicHttpProtocolHandler*>(
-        protocol_handlers[url::kHttpsScheme].get());
-
-    context_builder.SetProtocolHandlers(std::move(protocol_handlers));
-  }
   browser_context_ = context_builder.Build();
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDeterministicFetch)) {
-    http_handler->SetHeadlessBrowserContext(browser_context_);
-    https_handler->SetHeadlessBrowserContext(browser_context_);
-  }
   browser_->SetDefaultBrowserContext(browser_context_);
 
   base::CommandLine::StringVector args =
       base::CommandLine::ForCurrentProcess()->GetArgs();
 
-  // TODO(alexclarke): Should we navigate to about:blank first if using
-  // virtual time?
-  if (args.empty())
+  // If no explicit URL is present, navigate to about:blank, unless we're being
+  // driven by debugger.
+  if (args.empty() && !base::CommandLine::ForCurrentProcess()->HasSwitch(
+                          switches::kRemoteDebuggingPipe)) {
 #if defined(OS_WIN)
     args.push_back(L"about:blank");
 #else
     args.push_back("about:blank");
 #endif
+  }
 
-  base::PostTaskAndReplyWithResult(
-      file_task_runner_.get(), FROM_HERE,
-      base::BindOnce(&ConvertArgumentsToURLs, args),
-      base::BindOnce(&HeadlessShell::OnGotURLs, weak_factory_.GetWeakPtr()));
+  if (!args.empty()) {
+    base::PostTaskAndReplyWithResult(
+        file_task_runner_.get(), FROM_HERE,
+        base::BindOnce(&ConvertArgumentsToURLs, args),
+        base::BindOnce(&HeadlessShell::OnGotURLs, weak_factory_.GetWeakPtr()));
+  }
 }
 
 void HeadlessShell::OnGotURLs(const std::vector<GURL>& urls) {
@@ -251,10 +231,6 @@ void HeadlessShell::Shutdown() {
       web_contents_->GetDevToolsTarget()->DetachClient(devtools_client_.get());
     }
   }
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDeterministicFetch)) {
-    devtools_client_->GetNetwork()->GetExperimental()->RemoveObserver(this);
-  }
   web_contents_->RemoveObserver(this);
   web_contents_ = nullptr;
   browser_context_->Close();
@@ -270,18 +246,6 @@ void HeadlessShell::DevToolsTargetReady() {
 
   devtools_client_->GetEmulation()->GetExperimental()->AddObserver(this);
 
-  if (base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kDeterministicFetch)) {
-    devtools_client_->GetNetwork()->GetExperimental()->AddObserver(this);
-    std::unique_ptr<headless::network::RequestPattern> match_all =
-        headless::network::RequestPattern::Builder().SetUrlPattern("*").Build();
-    std::vector<std::unique_ptr<headless::network::RequestPattern>> patterns;
-    patterns.push_back(std::move(match_all));
-    devtools_client_->GetNetwork()->GetExperimental()->SetRequestInterception(
-        network::SetRequestInterceptionParams::Builder()
-            .SetPatterns(std::move(patterns))
-            .Build());
-  }
   if (base::CommandLine::ForCurrentProcess()->HasSwitch(
           switches::kDefaultBackgroundColor)) {
     std::string color_hex =
@@ -394,22 +358,6 @@ void HeadlessShell::OnLoadEventFired(const page::LoadEventFiredParams& params) {
     return;
   }
   OnPageReady();
-}
-
-// network::Observer implementation:
-void HeadlessShell::OnRequestIntercepted(
-    const network::RequestInterceptedParams& params) {
-  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
-  if (params.GetIsNavigationRequest()) {
-    deterministic_dispatcher_->NavigationRequested(
-        std::make_unique<ShellNavigationRequest>(weak_factory_.GetWeakPtr(),
-                                                 params.GetInterceptionId()));
-    return;
-  }
-  devtools_client_->GetNetwork()->GetExperimental()->ContinueInterceptedRequest(
-      network::ContinueInterceptedRequestParams::Builder()
-          .SetInterceptionId(params.GetInterceptionId())
-          .Build());
 }
 
 void HeadlessShell::OnPageReady() {
@@ -606,24 +554,12 @@ bool HeadlessShell::RemoteDebuggingEnabled() const {
   const base::CommandLine& command_line =
       *base::CommandLine::ForCurrentProcess();
   return (command_line.HasSwitch(switches::kRemoteDebuggingPort) ||
-          command_line.HasSwitch(switches::kRemoteDebuggingSocketFd));
+          command_line.HasSwitch(switches::kRemoteDebuggingPipe));
 }
 
 bool ValidateCommandLine(const base::CommandLine& command_line) {
-#if !defined(OS_POSIX)
-  if (command_line.HasSwitch(switches::kRemoteDebuggingSocketFd)) {
-    LOG(ERROR) << "Remote-debugging-socket can't be set on non-Posix systems";
-    return false;
-  }
-#endif
-  if (command_line.HasSwitch(switches::kRemoteDebuggingPort) &&
-      command_line.HasSwitch(switches::kRemoteDebuggingSocketFd)) {
-    LOG(ERROR) << "Remote-debugging-port and remote-debugging-socket "
-               << "can't both be set.";
-    return false;
-  }
   if (!command_line.HasSwitch(switches::kRemoteDebuggingPort) &&
-      !command_line.HasSwitch(switches::kRemoteDebuggingSocketFd)) {
+      !command_line.HasSwitch(switches::kRemoteDebuggingPipe)) {
     if (command_line.GetArgs().size() <= 1)
       return true;
     LOG(ERROR) << "Open multiple tabs is only supported when "
@@ -714,7 +650,6 @@ int HeadlessShellMain(int argc, const char** argv) {
 
   if (command_line.HasSwitch(switches::kDeterministicMode)) {
     command_line.AppendSwitch(switches::kEnableBeginFrameControl);
-    command_line.AppendSwitch(switches::kDeterministicFetch);
 
     // Compositor flags
     command_line.AppendSwitch(::switches::kRunAllCompositorStagesBeforeDraw);
@@ -742,8 +677,7 @@ int HeadlessShellMain(int argc, const char** argv) {
         command_line.GetSwitchValuePath(switches::kCrashDumpsDir));
   }
 
-  // Enable devtools if requested, either by specifying a port (and optional
-  // address), or by specifying the fd of an already-open socket.
+  // Enable devtools if requested, by specifying a port (and optional address).
   if (command_line.HasSwitch(::switches::kRemoteDebuggingPort)) {
     std::string address = kUseLocalHostForDevToolsHttpServer;
     if (command_line.HasSwitch(switches::kRemoteDebuggingAddress)) {
@@ -766,17 +700,9 @@ int HeadlessShellMain(int argc, const char** argv) {
     const net::HostPortPair endpoint(address,
                                      base::checked_cast<uint16_t>(parsed_port));
     builder.EnableDevToolsServer(endpoint);
-  } else if (command_line.HasSwitch(switches::kRemoteDebuggingSocketFd)) {
-    int parsed_fd;
-    std::string fd_str =
-        command_line.GetSwitchValueASCII(switches::kRemoteDebuggingSocketFd);
-    if (!base::StringToInt(fd_str, &parsed_fd) ||
-        !base::IsValueInRangeForNumericType<size_t>(parsed_fd)) {
-      LOG(ERROR) << "Invalid devtools server socket fd";
-      return EXIT_FAILURE;
-    }
-    builder.EnableDevToolsServer(base::checked_cast<size_t>(parsed_fd));
   }
+  if (command_line.HasSwitch(::switches::kRemoteDebuggingPipe))
+    builder.EnableDevToolsPipe();
 
   if (command_line.HasSwitch(switches::kProxyServer)) {
     std::string proxy_server =
@@ -805,15 +731,6 @@ int HeadlessShellMain(int argc, const char** argv) {
     builder.SetUserDataDir(
         command_line.GetSwitchValuePath(switches::kUserDataDir));
     builder.SetIncognitoMode(false);
-  }
-
-  if (command_line.HasSwitch(::switches::kInitialVirtualTime)) {
-    double initial_time;
-    if (base::StringToDouble(
-            command_line.GetSwitchValueASCII(::switches::kInitialVirtualTime),
-            &initial_time)) {
-      builder.SetInitialVirtualTime(base::Time::FromDoubleT(initial_time));
-    }
   }
 
   if (command_line.HasSwitch(switches::kWindowSize)) {
@@ -852,6 +769,9 @@ int HeadlessShellMain(int argc, const char** argv) {
       return EXIT_FAILURE;
     }
   }
+
+  if (command_line.HasSwitch(switches::kBlockNewWebContents))
+    builder.SetBlockNewWebContents(true);
 
   return HeadlessBrowserMain(
       builder.Build(),

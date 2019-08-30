@@ -15,7 +15,6 @@
 #include "chrome/browser/ui/extensions/extension_action_view_controller.h"
 #include "chrome/browser/ui/views/extensions/extension_popup.h"
 #include "chrome/browser/ui/views/frame/browser_view.h"
-#include "chrome/browser/ui/views/toolbar/app_menu_button.h"
 #include "chrome/browser/ui/views/toolbar/browser_action_test_util_views.h"
 #include "chrome/browser/ui/views/toolbar/browser_actions_container.h"
 #include "chrome/browser/ui/views/toolbar/toolbar_action_view.h"
@@ -196,6 +195,19 @@ gfx::Size BrowserActionTestUtilViews::GetMinPopupSize() {
 
 gfx::Size BrowserActionTestUtilViews::GetMaxPopupSize() {
   return gfx::Size(ExtensionPopup::kMaxWidth, ExtensionPopup::kMaxHeight);
+}
+
+bool BrowserActionTestUtilViews::CanBeResized() {
+  BrowserActionsContainer* container =
+      BrowserView::GetBrowserViewForBrowser(browser_)
+          ->toolbar()
+          ->browser_actions();
+
+  // The container can only be resized if we can start a drag for the view.
+  DCHECK_LE(1u, container->num_toolbar_actions());
+  ToolbarActionView* action_view = container->GetToolbarActionViewAt(0);
+  gfx::Point point(action_view->x(), action_view->y());
+  return container->CanStartDragForView(action_view, point, point);
 }
 
 BrowserActionTestUtilViews::BrowserActionTestUtilViews(

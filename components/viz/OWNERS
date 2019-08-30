@@ -8,12 +8,18 @@
 # display / resources / quads / passes
 danakj@chromium.org
 enne@chromium.org
+ericrk@chromium.org
 piman@chromium.org
 vmpstr@chromium.org
 weiliangc@chromium.org
 
-# CopyOutputRequests/Results
+# CopyOutputRequests/Results and FrameSinkVideoCapture
 miu@chromium.org
+
+# renderers (GL/Skia/Software)
+weiliangc@chromium.org
+rjkroege@chromium.org
+ccameron@chromium.org
 
 # display_embedder / ozone
 reveman@chromium.org
@@ -28,6 +34,7 @@ samans@chromium.org
 
 # gpu
 danakj@chromium.org
+ericrk@chromium.org
 piman@chromium.org
 sadrul@chromium.org
 

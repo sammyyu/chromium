@@ -68,9 +68,9 @@ PrefService::PrefService(
     bool async)
     : pref_notifier_(std::move(pref_notifier)),
       pref_value_store_(std::move(pref_value_store)),
-      pref_registry_(std::move(pref_registry)),
       user_pref_store_(std::move(user_prefs)),
-      read_error_callback_(std::move(read_error_callback)) {
+      read_error_callback_(std::move(read_error_callback)),
+      pref_registry_(std::move(pref_registry)) {
   pref_notifier_->SetPrefService(this);
 
   DCHECK(pref_registry_);
@@ -276,6 +276,17 @@ bool PrefService::IsUserModifiablePreference(
   return pref && pref->IsUserModifiable();
 }
 
+const base::Value* PrefService::Get(const std::string& path) const {
+  DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
+
+  const base::Value* value = GetPreferenceValue(path);
+  if (!value) {
+    NOTREACHED() << "Trying to read an unregistered pref: " << path;
+    return nullptr;
+  }
+  return value;
+}
+
 const base::DictionaryValue* PrefService::GetDictionary(
     const std::string& path) const {
   DCHECK_CALLED_ON_VALID_SEQUENCE(sequence_checker_);
@@ -467,6 +478,14 @@ void PrefService::SetTime(const std::string& path, base::Time value) {
 base::Time PrefService::GetTime(const std::string& path) const {
   return base::Time::FromDeltaSinceWindowsEpoch(
       base::TimeDelta::FromMicroseconds(GetInt64(path)));
+}
+
+void PrefService::SetTimeDelta(const std::string& path, base::TimeDelta value) {
+  SetInt64(path, value.InMicroseconds());
+}
+
+base::TimeDelta PrefService::GetTimeDelta(const std::string& path) const {
+  return base::TimeDelta::FromMicroseconds(GetInt64(path));
 }
 
 base::Value* PrefService::GetMutableUserPref(const std::string& path,

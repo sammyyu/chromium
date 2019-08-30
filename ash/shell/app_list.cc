@@ -8,6 +8,7 @@
 #include <vector>
 
 #include "ash/app_list/app_list_controller_impl.h"
+#include "ash/app_list/app_list_view_delegate.h"
 #include "ash/app_list/model/app_list_item.h"
 #include "ash/app_list/model/app_list_item_list.h"
 #include "ash/app_list/model/app_list_model.h"
@@ -26,7 +27,6 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_util.h"
 #include "base/strings/utf_string_conversions.h"
-#include "ui/app_list/app_list_view_delegate.h"
 #include "ui/gfx/canvas.h"
 #include "ui/gfx/font_list.h"
 #include "ui/gfx/geometry/rect.h"
@@ -184,11 +184,6 @@ class ExampleSearchResult : public app_list::SearchResult {
 
   WindowTypeShelfItem::Type type() const { return type_; }
 
-  // app_list::SearchResult:
-  std::unique_ptr<SearchResult> Duplicate() const override {
-    return std::unique_ptr<SearchResult>();
-  }
-
  private:
   WindowTypeShelfItem::Type type_;
 
@@ -268,7 +263,7 @@ class ExampleAppListViewDelegate : public app_list::AppListViewDelegate {
     // Nothing needs to be done.
   }
 
-  void Dismiss() override {
+  void DismissAppList() override {
     DCHECK(ShellPort::HasInstance());
     Shell::Get()->app_list_controller()->DismissAppList();
   }
@@ -295,18 +290,26 @@ class ExampleAppListViewDelegate : public app_list::AppListViewDelegate {
     NOTIMPLEMENTED();
   }
 
+  void GetSearchResultContextMenuModel(
+      const std::string& result_id,
+      GetContextMenuModelCallback callback) override {
+    NOTIMPLEMENTED();
+  }
+
   void ContextMenuItemSelected(const std::string& id,
                                int command_id,
                                int event_flags) override {
     NOTIMPLEMENTED();
   }
 
-  void AddObserver(app_list::AppListViewDelegateObserver* observer) override {
+  void ShowWallpaperContextMenu(const gfx::Point& onscreen_location,
+                                ui::MenuSourceType source_type) override {
     NOTIMPLEMENTED();
   }
 
-  void RemoveObserver(
-      app_list::AppListViewDelegateObserver* observer) override {
+  void SearchResultContextMenuItemSelected(const std::string& result_id,
+                                           int command_id,
+                                           int event_flags) override {
     NOTIMPLEMENTED();
   }
 

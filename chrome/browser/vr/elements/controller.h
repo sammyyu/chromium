@@ -20,7 +20,10 @@ class Controller : public UiElement {
   ~Controller() override;
 
   void set_local_transform(const gfx::Transform& transform) {
-    local_transform_ = transform;
+    if (transform != local_transform_) {
+      set_world_space_transform_dirty();
+      local_transform_ = transform;
+    }
   }
 
   class Renderer : public BaseRenderer {

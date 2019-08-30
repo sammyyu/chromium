@@ -11,9 +11,17 @@ import("//mojo/public/tools/bindings/mojom.gni")
 # TODO(crbug.com/731689): Assert that extensions are enabled.
 
 source_set("common_constants") {
+  if (is_chromecast) {
+    defines = [ "IS_CHROMECAST" ]
+  }
+
   sources = [
     "constants.cc",
     "constants.h",
+  ]
+
+  deps = [
+    "//base",
   ]
 
   # TODO(jschuh): crbug.com/167187 fix size_t to int truncations.
@@ -34,6 +42,7 @@ if (enable_extensions) {
 
     public_deps = [
       "//content/public/common:interfaces",
+      "//extensions/common/api:mojom",
       "//mojo/public/mojom/base",
       "//ui/gfx/geometry/mojo",
       "//url/mojom:url_mojom_gurl",
@@ -175,6 +184,8 @@ if (enable_extensions) {
       "manifest_handler_helpers.h",
       "manifest_handlers/app_isolation_info.cc",
       "manifest_handlers/app_isolation_info.h",
+      "manifest_handlers/automation.cc",
+      "manifest_handlers/automation.h",
       "manifest_handlers/background_info.cc",
       "manifest_handlers/background_info.h",
       "manifest_handlers/content_capabilities_handler.cc",
@@ -304,11 +315,14 @@ if (enable_extensions) {
       "//chrome:resources",
       "//components/crx_file",
       "//components/nacl/common:buildflags",
+      "//components/url_formatter",
       "//components/url_matcher",
+      "//components/version_info",
       "//crypto",
       "//device/bluetooth",
       "//device/usb",
       "//device/usb/public/cpp",
+      "//device/usb/public/mojom",
       "//extensions:extensions_resources",
       "//extensions/common/api",
       "//extensions/strings",
@@ -360,6 +374,7 @@ if (enable_extensions) {
       "api/declarative_net_request/dnr_manifest_unittest.cc",
       "api/printer_provider/usb_printer_manifest_unittest.cc",
       "api/sockets/sockets_manifest_permission_unittest.cc",
+      "component_extension_url_pattern_unittest.cc",
       "csp_validator_unittest.cc",
       "event_filter_unittest.cc",
       "extension_builder_unittest.cc",
@@ -369,6 +384,7 @@ if (enable_extensions) {
       "extension_resource_path_normalizer_unittest.cc",
       "extension_resource_unittest.cc",
       "extension_set_unittest.cc",
+      "extension_unittest.cc",
       "features/complex_feature_unittest.cc",
       "features/feature_provider_unittest.cc",
       "features/simple_feature_unittest.cc",

@@ -27,6 +27,10 @@ bool RenderWidgetHostDelegate::PreHandleGestureEvent(
   return false;
 }
 
+double RenderWidgetHostDelegate::GetPendingPageZoomLevel() const {
+  return 0.0;
+}
+
 BrowserAccessibilityManager*
     RenderWidgetHostDelegate::GetRootBrowserAccessibilityManager() {
   return nullptr;
@@ -74,6 +78,15 @@ RenderWidgetHostImpl* RenderWidgetHostDelegate::GetMouseLockWidget() {
   return nullptr;
 }
 
+bool RenderWidgetHostDelegate::RequestKeyboardLock(RenderWidgetHostImpl* host,
+                                                   bool esc_key_locked) {
+  return false;
+}
+
+RenderWidgetHostImpl* RenderWidgetHostDelegate::GetKeyboardLockWidget() {
+  return nullptr;
+}
+
 TextInputManager* RenderWidgetHostDelegate::GetTextInputManager() {
   return nullptr;
 }
@@ -105,9 +118,10 @@ bool RenderWidgetHostDelegate::AddDomainInfoToRapporSample(
   return false;
 }
 
-void RenderWidgetHostDelegate::UpdateUrlForUkmSource(
-    ukm::UkmRecorder* service,
-    ukm::SourceId ukm_source_id) {}
+ukm::SourceId RenderWidgetHostDelegate::GetUkmSourceIdForLastCommittedSource()
+    const {
+  return ukm::kInvalidSourceId;
+}
 
 gfx::Size RenderWidgetHostDelegate::GetAutoResizeSize() {
   return gfx::Size();

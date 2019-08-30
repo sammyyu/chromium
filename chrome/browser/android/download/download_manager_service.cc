@@ -15,16 +15,19 @@
 #include "base/time/time.h"
 #include "chrome/browser/android/chrome_feature_list.h"
 #include "chrome/browser/android/download/download_controller.h"
+#include "chrome/browser/chrome_notification_types.h"
 #include "chrome/browser/download/download_core_service.h"
 #include "chrome/browser/download/download_core_service_factory.h"
 #include "chrome/browser/profiles/profile_manager.h"
 #include "components/download/public/common/download_item.h"
 #include "content/public/browser/browser_context.h"
 #include "content/public/browser/download_item_utils.h"
+#include "content/public/browser/notification_service.h"
 #include "jni/DownloadInfo_jni.h"
 #include "jni/DownloadItem_jni.h"
 #include "jni/DownloadManagerService_jni.h"
-#include "third_party/WebKit/public/common/mime_util/mime_util.h"
+#include "services/service_manager/public/cpp/service_context.h"
+#include "third_party/blink/public/common/mime_util/mime_util.h"
 
 using base::android::JavaParamRef;
 using base::android::ConvertJavaStringToUTF8;
@@ -53,6 +56,21 @@ ScopedJavaLocalRef<jobject> JNI_DownloadManagerService_CreateJavaDownloadItem(
       item->GetStartTime().ToJavaTime(), item->GetFileExternallyRemoved());
 }
 
+class ServiceImpl : public service_manager::Service {
+ public:
+  ServiceImpl() = default;
+  ~ServiceImpl() override = default;
+
+ private:
+  // service_manager::Service:
+  void OnStart() override {
+    DownloadManagerService::GetInstance()->NotifyServiceStarted(
+        context()->connector()->Clone());
+  }
+
+  DISALLOW_COPY_AND_ASSIGN(ServiceImpl);
+};
+
 }  // namespace
 
 // static
@@ -68,9 +86,10 @@ void DownloadManagerService::OnDownloadCanceled(
   bool has_no_external_storage =
       (reason == DownloadController::CANCEL_REASON_NO_EXTERNAL_STORAGE);
   JNIEnv* env = base::android::AttachCurrentThread();
-  ScopedJavaLocalRef<jstring> jname =
-      ConvertUTF8ToJavaString(env, download->GetURL().ExtractFileName());
-  Java_DownloadManagerService_onDownloadItemCanceled(env, jname,
+
+  ScopedJavaLocalRef<jobject> j_item =
+      JNI_DownloadManagerService_CreateJavaDownloadItem(env, download);
+  Java_DownloadManagerService_onDownloadItemCanceled(env, j_item,
                                                      has_no_external_storage);
   DownloadController::RecordDownloadCancelReason(reason);
 }
@@ -102,21 +121,23 @@ ScopedJavaLocalRef<jobject> DownloadManagerService::CreateJavaDownloadInfo(
   bool time_remaining_known = item->TimeRemaining(&time_delta);
   std::string original_url = item->GetOriginalUrl().SchemeIs(url::kDataScheme)
       ? std::string() : item->GetOriginalUrl().spec();
+  content::BrowserContext* browser_context =
+      content::DownloadItemUtils::GetBrowserContext(item);
   return Java_DownloadInfo_createDownloadInfo(
       env, ConvertUTF8ToJavaString(env, item->GetGuid()),
       ConvertUTF8ToJavaString(env, item->GetFileNameToReportUser().value()),
       ConvertUTF8ToJavaString(env, item->GetTargetFilePath().value()),
       ConvertUTF8ToJavaString(env, item->GetTabUrl().spec()),
       ConvertUTF8ToJavaString(env, item->GetMimeType()),
-      item->GetReceivedBytes(),
-      content::DownloadItemUtils::GetBrowserContext(item)->IsOffTheRecord(),
+      item->GetReceivedBytes(), item->GetTotalBytes(),
+      browser_context ? browser_context->IsOffTheRecord() : false,
       item->GetState(), item->PercentComplete(), item->IsPaused(),
-      has_user_gesture, item->CanResume(),
+      has_user_gesture, item->CanResume(), item->IsParallelDownload(),
       ConvertUTF8ToJavaString(env, original_url),
       ConvertUTF8ToJavaString(env, item->GetReferrerUrl().spec()),
       time_remaining_known ? time_delta.InMilliseconds()
                            : kUnknownRemainingTime,
-      item->GetLastAccessTime().ToJavaTime());
+      item->GetLastAccessTime().ToJavaTime(), item->IsDangerous());
 }
 
 static jlong JNI_DownloadManagerService_Init(
@@ -140,10 +161,79 @@ DownloadManagerService::DownloadManagerService()
 
 DownloadManagerService::~DownloadManagerService() {}
 
+std::unique_ptr<service_manager::Service>
+DownloadManagerService::CreateServiceManagerServiceInstance() {
+  return std::make_unique<ServiceImpl>();
+}
+
+void DownloadManagerService::NotifyServiceStarted(
+    std::unique_ptr<service_manager::Connector> connector) {
+  // TODO: Additional initialization, e.g. connect to Network Service using
+  // |connector| if the minimal download manager path is enabled by flag.
+}
+
 void DownloadManagerService::Init(
     JNIEnv* env,
     jobject obj) {
+  registrar_.Add(this, chrome::NOTIFICATION_PROFILE_CREATED,
+                 content::NotificationService::AllSources());
   java_ref_.Reset(env, obj);
+}
+
+void DownloadManagerService::Observe(
+    int type,
+    const content::NotificationSource& source,
+    const content::NotificationDetails& details) {
+  switch (type) {
+    case chrome::NOTIFICATION_PROFILE_CREATED: {
+      Profile* profile = content::Source<Profile>(source).ptr();
+      content::DownloadManager* manager =
+          content::BrowserContext::GetDownloadManager(profile);
+      if (!manager)
+        break;
+
+      auto& notifier = profile->IsOffTheRecord() ? off_the_record_notifier_
+                                                 : original_notifier_;
+
+      // Update notifiers to monitor any newly created DownloadManagers.
+      if (!notifier || notifier->GetManager() != manager) {
+        notifier =
+            std::make_unique<download::AllDownloadItemNotifier>(manager, this);
+      }
+    } break;
+    default:
+      NOTREACHED();
+  }
+}
+
+void DownloadManagerService::OpenDownload(download::DownloadItem* download,
+                                          int source) {
+  JNIEnv* env = base::android::AttachCurrentThread();
+  ScopedJavaLocalRef<jobject> j_item =
+      JNI_DownloadManagerService_CreateJavaDownloadItem(env, download);
+
+  Java_DownloadManagerService_openDownloadItem(env, java_ref_, j_item, source);
+}
+
+void DownloadManagerService::OpenDownload(
+    JNIEnv* env,
+    jobject obj,
+    const JavaParamRef<jstring>& jdownload_guid,
+    bool is_off_the_record,
+    jint source) {
+  if (!is_history_query_complete_)
+    return;
+
+  std::string download_guid = ConvertJavaStringToUTF8(env, jdownload_guid);
+  content::DownloadManager* manager = GetDownloadManager(is_off_the_record);
+  if (!manager)
+    return;
+
+  download::DownloadItem* item = manager->GetDownloadByGuid(download_guid);
+  if (!item)
+    return;
+
+  OpenDownload(item, source);
 }
 
 void DownloadManagerService::ResumeDownload(

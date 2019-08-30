@@ -21,7 +21,7 @@
 #if defined(OS_CHROMEOS)
 #include "chrome/browser/ui/ash/multi_user/multi_user_util.h"
 #include "chrome/browser/ui/ash/multi_user/multi_user_window_manager.h"
-#include "components/signin/core/account_id/account_id.h"
+#include "components/account_id/account_id.h"
 #endif
 
 using content::WebContents;
@@ -184,9 +184,9 @@ Browser* FindBrowserWithProfile(Profile* profile) {
   return FindBrowserWithTabbedOrAnyType(profile, false, false);
 }
 
-Browser* FindBrowserWithID(SessionID::id_type desired_id) {
+Browser* FindBrowserWithID(SessionID desired_id) {
   for (auto* browser : *BrowserList::GetInstance()) {
-    if (browser->session_id().id() == desired_id)
+    if (browser->session_id() == desired_id)
       return browser;
   }
   return NULL;

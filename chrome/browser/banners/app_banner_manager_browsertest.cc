@@ -9,11 +9,10 @@
 #include "base/callback.h"
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/strings/string16.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "chrome/browser/banners/app_banner_manager.h"
@@ -154,7 +153,8 @@ class AppBannerManagerTest : public AppBannerManager {
 class AppBannerManagerBrowserTest : public InProcessBrowserTest {
  public:
   void SetUpOnMainThread() override {
-    feature_list_.InitAndDisableFeature(features::kExperimentalAppBanners);
+    feature_list_.InitWithFeatures({}, {features::kExperimentalAppBanners,
+                                        features::kDesktopPWAWindowing});
     AppBannerSettingsHelper::SetTotalEngagementToTrigger(10);
     SiteEngagementScore::SetParamValuesForTesting();
     ASSERT_TRUE(embedded_test_server()->Start());

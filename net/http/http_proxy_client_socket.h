@@ -14,6 +14,7 @@
 #include "base/memory/ref_counted.h"
 #include "net/base/completion_callback.h"
 #include "net/base/completion_once_callback.h"
+#include "net/base/completion_repeating_callback.h"
 #include "net/base/host_port_pair.h"
 #include "net/base/load_timing_info.h"
 #include "net/base/net_export.h"
@@ -46,7 +47,8 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocket : public ProxyClientSocket {
                         bool tunnel,
                         bool using_spdy,
                         NextProto negotiated_protocol,
-                        bool is_https_proxy);
+                        bool is_https_proxy,
+                        const NetworkTrafficAnnotationTag& traffic_annotation);
 
   // On destruction Disconnect() is called.
   ~HttpProxyClientSocket() override;
@@ -60,13 +62,11 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocket : public ProxyClientSocket {
   NextProto GetProxyNegotiatedProtocol() const override;
 
   // StreamSocket implementation.
-  int Connect(const CompletionCallback& callback) override;
+  int Connect(CompletionOnceCallback callback) override;
   void Disconnect() override;
   bool IsConnected() const override;
   bool IsConnectedAndIdle() const override;
   const NetLogWithSource& NetLog() const override;
-  void SetSubresourceSpeculation() override;
-  void SetOmniboxSpeculation() override;
   bool WasEverUsed() const override;
   bool WasAlpnNegotiated() const override;
   NextProto GetNegotiatedProtocol() const override;
@@ -80,10 +80,10 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocket : public ProxyClientSocket {
   // Socket implementation.
   int Read(IOBuffer* buf,
            int buf_len,
-           const CompletionCallback& callback) override;
+           CompletionOnceCallback callback) override;
   int Write(IOBuffer* buf,
             int buf_len,
-            const CompletionCallback& callback,
+            CompletionOnceCallback callback,
             const NetworkTrafficAnnotationTag& traffic_annotation) override;
   int SetReceiveBufferSize(int32_t size) override;
   int SetSendBufferSize(int32_t size) override;
@@ -112,8 +112,6 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocket : public ProxyClientSocket {
   int PrepareForAuthRestart();
   int DidDrainBodyForAuthRestart();
 
-  void LogBlockedTunnelResponse() const;
-
   void DoCallback(int result);
   void OnIOComplete(int result);
 
@@ -127,7 +125,7 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocket : public ProxyClientSocket {
   int DoDrainBody();
   int DoDrainBodyComplete(int result);
 
-  CompletionCallback io_callback_;
+  CompletionRepeatingCallback io_callback_;
   State next_state_;
 
   // Stores the callback provided by the caller of async operations.
@@ -161,6 +159,9 @@ class NET_EXPORT_PRIVATE HttpProxyClientSocket : public ProxyClientSocket {
   // Used only for redirects.
   bool redirect_has_load_timing_info_;
   LoadTimingInfo redirect_load_timing_info_;
+
+  // Network traffic annotation for handshaking and setup.
+  const NetworkTrafficAnnotationTag traffic_annotation_;
 
   const NetLogWithSource net_log_;
 

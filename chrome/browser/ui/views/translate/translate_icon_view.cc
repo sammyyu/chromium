@@ -19,11 +19,10 @@
 #include "ui/base/resource/resource_bundle.h"
 
 TranslateIconView::TranslateIconView(CommandUpdater* command_updater,
-                                     BubbleIconView::Delegate* delegate)
-    : BubbleIconView(command_updater, IDC_TRANSLATE_PAGE, delegate) {
+                                     PageActionIconView::Delegate* delegate)
+    : PageActionIconView(command_updater, IDC_TRANSLATE_PAGE, delegate) {
   DCHECK(delegate);
   set_id(VIEW_ID_TRANSLATE_BUTTON);
-  SetTooltipText(l10n_util::GetStringUTF16(IDS_TOOLTIP_TRANSLATE));
 }
 
 TranslateIconView::~TranslateIconView() {}
@@ -32,7 +31,7 @@ views::BubbleDialogDelegateView* TranslateIconView::GetBubble() const {
   return TranslateBubbleView::GetCurrentBubble();
 }
 
-bool TranslateIconView::Refresh() {
+bool TranslateIconView::Update() {
   if (!GetWebContents())
     return false;
 
@@ -52,7 +51,7 @@ bool TranslateIconView::Refresh() {
 }
 
 void TranslateIconView::OnExecuting(
-    BubbleIconView::ExecuteSource execute_source) {}
+    PageActionIconView::ExecuteSource execute_source) {}
 
 void TranslateIconView::OnPressed(bool activated) {
   translate::ReportUiAction(activated
@@ -62,4 +61,8 @@ void TranslateIconView::OnPressed(bool activated) {
 
 const gfx::VectorIcon& TranslateIconView::GetVectorIcon() const {
   return kTranslateIcon;
+}
+
+base::string16 TranslateIconView::GetTextForTooltipAndAccessibleName() const {
+  return l10n_util::GetStringUTF16(IDS_TOOLTIP_TRANSLATE);
 }

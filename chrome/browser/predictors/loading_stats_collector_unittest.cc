@@ -6,7 +6,7 @@
 
 #include <vector>
 
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "chrome/browser/predictors/loading_test_util.h"
 #include "chrome/browser/predictors/preconnect_manager.h"
 #include "chrome/test/base/testing_profile.h"
@@ -81,10 +81,13 @@ void LoadingStatsCollectorTest::TestRedirectStatusHistogram(
       .WillOnce(DoAll(SetArgPointee<1>(prediction), Return(true)));
 
   // Navigation simulation.
-  URLRequestSummary script = CreateURLRequestSummary(
-      1, navigation_url, script_url, content::RESOURCE_TYPE_SCRIPT);
+  std::vector<content::mojom::ResourceLoadInfoPtr> resources;
+  resources.push_back(
+      CreateResourceLoadInfoWithRedirects({initial_url, navigation_url}));
+  resources.push_back(
+      CreateResourceLoadInfo(script_url, content::RESOURCE_TYPE_SCRIPT));
   PageRequestSummary summary =
-      CreatePageRequestSummary(navigation_url, initial_url, {script});
+      CreatePageRequestSummary(navigation_url, initial_url, resources);
 
   stats_collector_->RecordPageRequestSummary(summary);
 
@@ -113,12 +116,14 @@ TEST_F(LoadingStatsCollectorTest, TestPreconnectPrecisionRecallHistograms) {
 
   // Simulate a page load with 2 resources, one we know, one we don't, plus we
   // know the main frame origin.
-  URLRequestSummary script = CreateURLRequestSummary(
-      1, main_frame_url, gen(1), content::RESOURCE_TYPE_SCRIPT);
-  URLRequestSummary new_script = CreateURLRequestSummary(
-      1, main_frame_url, gen(100), content::RESOURCE_TYPE_SCRIPT);
-  PageRequestSummary summary = CreatePageRequestSummary(
-      main_frame_url, main_frame_url, {script, new_script});
+  std::vector<content::mojom::ResourceLoadInfoPtr> resources;
+  resources.push_back(CreateResourceLoadInfo(main_frame_url));
+  resources.push_back(
+      CreateResourceLoadInfo(gen(1), content::RESOURCE_TYPE_SCRIPT));
+  resources.push_back(
+      CreateResourceLoadInfo(gen(100), content::RESOURCE_TYPE_SCRIPT));
+  PageRequestSummary summary =
+      CreatePageRequestSummary(main_frame_url, main_frame_url, resources);
 
   stats_collector_->RecordPageRequestSummary(summary);
 
@@ -183,14 +188,16 @@ TEST_F(LoadingStatsCollectorTest, TestPreconnectHistograms) {
 
   {
     // Simulate a page load with 3 origins.
-    URLRequestSummary script1 = CreateURLRequestSummary(
-        1, main_frame_url, gen(1), content::RESOURCE_TYPE_SCRIPT);
-    URLRequestSummary script2 = CreateURLRequestSummary(
-        1, main_frame_url, gen(2), content::RESOURCE_TYPE_SCRIPT);
-    URLRequestSummary script100 = CreateURLRequestSummary(
-        1, main_frame_url, gen(100), content::RESOURCE_TYPE_SCRIPT);
-    PageRequestSummary summary = CreatePageRequestSummary(
-        main_frame_url, main_frame_url, {script1, script2, script100});
+    std::vector<content::mojom::ResourceLoadInfoPtr> resources;
+    resources.push_back(CreateResourceLoadInfo(main_frame_url));
+    resources.push_back(
+        CreateResourceLoadInfo(gen(1), content::RESOURCE_TYPE_SCRIPT));
+    resources.push_back(
+        CreateResourceLoadInfo(gen(2), content::RESOURCE_TYPE_SCRIPT));
+    resources.push_back(
+        CreateResourceLoadInfo(gen(100), content::RESOURCE_TYPE_SCRIPT));
+    PageRequestSummary summary =
+        CreatePageRequestSummary(main_frame_url, main_frame_url, resources);
 
     stats_collector_->RecordPageRequestSummary(summary);
   }
@@ -216,11 +223,12 @@ TEST_F(LoadingStatsCollectorTest, TestPreconnectHistogramsEmpty) {
               PredictPreconnectOrigins(GURL(main_frame_url), _))
       .WillOnce(Return(false));
 
-  URLRequestSummary script = CreateURLRequestSummary(
-      1, main_frame_url, "http://cdn.google.com/script.js",
-      content::RESOURCE_TYPE_SCRIPT);
+  std::vector<content::mojom::ResourceLoadInfoPtr> resources;
+  resources.push_back(CreateResourceLoadInfo(main_frame_url));
+  resources.push_back(CreateResourceLoadInfo("http://cdn.google.com/script.js",
+                                             content::RESOURCE_TYPE_SCRIPT));
   PageRequestSummary summary =
-      CreatePageRequestSummary(main_frame_url, main_frame_url, {script});
+      CreatePageRequestSummary(main_frame_url, main_frame_url, resources);
   stats_collector_->RecordPageRequestSummary(summary);
 
   // No histograms should be recorded.
@@ -263,14 +271,16 @@ TEST_F(LoadingStatsCollectorTest, TestPreconnectHistogramsPreresolvesOnly) {
 
   {
     // Simulate a page load with 3 origins.
-    URLRequestSummary script1 = CreateURLRequestSummary(
-        1, main_frame_url, gen(1), content::RESOURCE_TYPE_SCRIPT);
-    URLRequestSummary script2 = CreateURLRequestSummary(
-        1, main_frame_url, gen(2), content::RESOURCE_TYPE_SCRIPT);
-    URLRequestSummary script100 = CreateURLRequestSummary(
-        1, main_frame_url, gen(100), content::RESOURCE_TYPE_SCRIPT);
-    PageRequestSummary summary = CreatePageRequestSummary(
-        main_frame_url, main_frame_url, {script1, script2, script100});
+    std::vector<content::mojom::ResourceLoadInfoPtr> resources;
+    resources.push_back(CreateResourceLoadInfo(main_frame_url));
+    resources.push_back(
+        CreateResourceLoadInfo(gen(1), content::RESOURCE_TYPE_SCRIPT));
+    resources.push_back(
+        CreateResourceLoadInfo(gen(2), content::RESOURCE_TYPE_SCRIPT));
+    resources.push_back(
+        CreateResourceLoadInfo(gen(100), content::RESOURCE_TYPE_SCRIPT));
+    PageRequestSummary summary =
+        CreatePageRequestSummary(main_frame_url, main_frame_url, resources);
 
     stats_collector_->RecordPageRequestSummary(summary);
   }

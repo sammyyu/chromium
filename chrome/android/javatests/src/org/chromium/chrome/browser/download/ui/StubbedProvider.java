@@ -7,6 +7,7 @@ package org.chromium.chrome.browser.download.ui;
 import static junit.framework.Assert.assertEquals;
 import static junit.framework.Assert.assertNull;
 
+import android.os.Environment;
 import android.os.Handler;
 import android.os.Looper;
 
@@ -14,6 +15,7 @@ import org.chromium.base.Callback;
 import org.chromium.base.test.util.CallbackHelper;
 import org.chromium.chrome.browser.download.DownloadInfo;
 import org.chromium.chrome.browser.download.DownloadItem;
+import org.chromium.chrome.browser.download.DownloadManagerService.DownloadObserver;
 import org.chromium.chrome.browser.widget.ThumbnailProvider;
 import org.chromium.chrome.browser.widget.selection.SelectionDelegate;
 import org.chromium.components.download.DownloadState;
@@ -44,19 +46,19 @@ public class StubbedProvider implements BackendProvider {
 
         public final List<DownloadItem> regularItems = new ArrayList<>();
         public final List<DownloadItem> offTheRecordItems = new ArrayList<>();
-        private DownloadHistoryAdapter mAdapter;
+        private DownloadObserver mObserver;
 
         @Override
-        public void addDownloadHistoryAdapter(DownloadHistoryAdapter adapter) {
+        public void addDownloadObserver(DownloadObserver observer) {
             addCallback.notifyCalled();
-            assertNull(mAdapter);
-            mAdapter = adapter;
+            assertNull(mObserver);
+            mObserver = observer;
         }
 
         @Override
-        public void removeDownloadHistoryAdapter(DownloadHistoryAdapter adapter) {
+        public void removeDownloadObserver(DownloadObserver observer) {
             removeCallback.notifyCalled();
-            mAdapter = null;
+            mObserver = null;
         }
 
         @Override
@@ -64,7 +66,7 @@ public class StubbedProvider implements BackendProvider {
             mHandler.post(new Runnable() {
                 @Override
                 public void run() {
-                    mAdapter.onAllDownloadsRetrieved(
+                    mObserver.onAllDownloadsRetrieved(
                             isOffTheRecord ? offTheRecordItems : regularItems, isOffTheRecord);
                 }
             });
@@ -84,7 +86,7 @@ public class StubbedProvider implements BackendProvider {
             mHandler.post(new Runnable() {
                 @Override
                 public void run() {
-                    mAdapter.onDownloadItemRemoved(guid, isOffTheRecord);
+                    mObserver.onDownloadItemRemoved(guid, isOffTheRecord);
                     removeDownloadCallback.notifyCalled();
                 }
             });
@@ -296,13 +298,15 @@ public class StubbedProvider implements BackendProvider {
                     .setDownloadGuid("sixth_guid")
                     .setMimeType("audio/mp3");
         } else if (which == 6) {
-            builder = new DownloadInfo.Builder()
-                    .setUrl("https://sigh.com")
-                    .setBytesReceived(ONE_GIGABYTE)
-                    .setFileName("huge_image.png")
-                    .setFilePath("/storage/fake_path/Downloads/huge_image.png")
-                    .setDownloadGuid("seventh_guid")
-                    .setMimeType("image/png");
+            builder =
+                    new DownloadInfo.Builder()
+                            .setUrl("https://sigh.com")
+                            .setBytesReceived(ONE_GIGABYTE)
+                            .setFileName("huge_image.png")
+                            .setFilePath(Environment.getExternalStorageDirectory().getAbsolutePath()
+                                    + "/fake_path/Downloads/huge_image.png")
+                            .setDownloadGuid("seventh_guid")
+                            .setMimeType("image/png");
         } else if (which == 7) {
             builder = new DownloadInfo.Builder()
                     .setUrl("https://sleepy.com")

@@ -22,7 +22,7 @@
 #include "media/base/timestamp_constants.h"
 #include "media/filters/ffmpeg_demuxer.h"
 #include "media/filters/file_data_source.h"
-#include "media/media_features.h"
+#include "media/media_buildflags.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "testing/perf/perf_test.h"
 
@@ -40,9 +40,6 @@ class DemuxerHostImpl : public media::DemuxerHost {
       const Ranges<base::TimeDelta>& ranges) override {}
   void SetDuration(base::TimeDelta duration) override {}
   void OnDemuxerError(media::PipelineStatus error) override {}
-  void AddTextStream(media::DemuxerStream* text_stream,
-                     const media::TextTrackConfig& config) override {}
-  void RemoveTextStream(media::DemuxerStream* text_stream) override {}
 
  private:
   DISALLOW_COPY_AND_ASSIGN(DemuxerHostImpl);
@@ -88,7 +85,7 @@ class StreamReader {
                   bool* end_of_stream,
                   base::TimeDelta* timestamp,
                   media::DemuxerStream::Status status,
-                  const scoped_refptr<media::DecoderBuffer>& buffer);
+                  scoped_refptr<DecoderBuffer> buffer);
   int GetNextStreamIndexToRead();
 
   Streams streams_;
@@ -146,9 +143,9 @@ void StreamReader::OnReadDone(
     bool* end_of_stream,
     base::TimeDelta* timestamp,
     media::DemuxerStream::Status status,
-    const scoped_refptr<media::DecoderBuffer>& buffer) {
+    scoped_refptr<DecoderBuffer> buffer) {
   CHECK_EQ(status, media::DemuxerStream::kOk);
-  CHECK(buffer.get());
+  CHECK(buffer);
   *end_of_stream = buffer->end_of_stream();
   *timestamp = *end_of_stream ? media::kNoTimestamp : buffer->timestamp();
   task_runner->PostTask(FROM_HERE, quit_when_idle_closure);
@@ -185,7 +182,7 @@ static void RunDemuxerBenchmark(const std::string& filename) {
     ASSERT_TRUE(data_source.Initialize(file_path));
 
     Demuxer::EncryptedMediaInitDataCB encrypted_media_init_data_cb =
-        base::Bind(&OnEncryptedMediaInitData);
+        base::BindRepeating(&OnEncryptedMediaInitData);
     Demuxer::MediaTracksUpdatedCB tracks_updated_cb =
         base::Bind(&OnMediaTracksUpdated);
     FFmpegDemuxer demuxer(base::ThreadTaskRunnerHandle::Get(), &data_source,
@@ -194,9 +191,8 @@ static void RunDemuxerBenchmark(const std::string& filename) {
 
     {
       base::RunLoop run_loop;
-      demuxer.Initialize(
-          &demuxer_host,
-          base::Bind(&QuitLoopWithStatus, run_loop.QuitClosure()), false);
+      demuxer.Initialize(&demuxer_host, base::Bind(&QuitLoopWithStatus,
+                                                   run_loop.QuitClosure()));
       run_loop.Run();
     }
 

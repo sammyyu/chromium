@@ -18,7 +18,7 @@
 #include "base/optional.h"
 #include "base/synchronization/waitable_event.h"
 #include "base/threading/thread_checker.h"
-#include "net/base/completion_callback.h"
+#include "net/base/completion_once_callback.h"
 #include "net/base/load_states.h"
 #include "net/base/net_export.h"
 #include "net/base/network_change_notifier.h"
@@ -151,7 +151,7 @@ class NET_EXPORT ProxyResolutionService
   int ResolveProxy(const GURL& url,
                    const std::string& method,
                    ProxyInfo* results,
-                   const CompletionCallback& callback,
+                   CompletionOnceCallback callback,
                    Request** request,
                    ProxyDelegate* proxy_delegate,
                    const NetLogWithSource& net_log);
@@ -236,9 +236,9 @@ class NET_EXPORT ProxyResolutionService
   // to downloading and testing the PAC files.
   void ForceReloadProxyConfig();
 
-  // Same as CreateProxyServiceUsingV8ProxyResolver, except it uses system
-  // libraries for evaluating the PAC script if available, otherwise skips
-  // proxy autoconfig.
+  // Same as CreateProxyResolutionServiceUsingV8ProxyResolver, except it uses
+  // system libraries for evaluating the PAC script if available, otherwise
+  // skips proxy autoconfig.
   static std::unique_ptr<ProxyResolutionService> CreateUsingSystemProxyResolver(
       std::unique_ptr<ProxyConfigService> proxy_config_service,
       NetLog* net_log);
@@ -272,9 +272,14 @@ class NET_EXPORT ProxyResolutionService
       const NetworkTrafficAnnotationTag& traffic_annotation);
 
   // Creates a config service appropriate for this platform that fetches the
-  // system proxy settings.
+  // system proxy settings. |main_task_runner| is the thread where the consumer
+  // of the ProxyConfigService will live.
+  //
+  // TODO(mmenke): Should this be a member of ProxyConfigService?
+  // The ProxyResolutionService may not even be in the same process as the
+  // system ProxyConfigService.
   static std::unique_ptr<ProxyConfigService> CreateSystemProxyConfigService(
-      const scoped_refptr<base::SequencedTaskRunner>& io_task_runner);
+      const scoped_refptr<base::SequencedTaskRunner>& main_task_runner);
 
   // This method should only be used by unit tests.
   void set_stall_proxy_auto_config_delay(base::TimeDelta delay) {
@@ -293,14 +298,20 @@ class NET_EXPORT ProxyResolutionService
   void set_quick_check_enabled(bool value) {
     quick_check_enabled_ = value;
   }
+  bool quick_check_enabled_for_testing() const { return quick_check_enabled_; }
 
   void set_sanitize_url_policy(SanitizeUrlPolicy policy) {
     sanitize_url_policy_ = policy;
   }
+  SanitizeUrlPolicy sanitize_url_policy_for_testing() const {
+    return sanitize_url_policy_;
+  }
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(ProxyServiceTest, UpdateConfigAfterFailedAutodetect);
-  FRIEND_TEST_ALL_PREFIXES(ProxyServiceTest, UpdateConfigFromPACToDirect);
+  FRIEND_TEST_ALL_PREFIXES(ProxyResolutionServiceTest,
+                           UpdateConfigAfterFailedAutodetect);
+  FRIEND_TEST_ALL_PREFIXES(ProxyResolutionServiceTest,
+                           UpdateConfigFromPACToDirect);
   friend class Request;
   class InitProxyResolver;
   class PacFileDeciderPoller;
@@ -343,7 +354,7 @@ class NET_EXPORT ProxyResolutionService
   int ResolveProxyHelper(const GURL& url,
                          const std::string& method,
                          ProxyInfo* results,
-                         const CompletionCallback& callback,
+                         CompletionOnceCallback callback,
                          Request** request,
                          ProxyDelegate* proxy_delegate,
                          const NetLogWithSource& net_log);

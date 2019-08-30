@@ -4,11 +4,11 @@
 
 #import "ios/web/public/test/web_test_with_web_state.h"
 
+#include "base/message_loop/message_loop_current.h"
 #include "base/run_loop.h"
 #include "base/scoped_observer.h"
 #include "base/strings/sys_string_conversions.h"
 #import "base/test/ios/wait_util.h"
-#import "ios/testing/wait_util.h"
 #import "ios/web/navigation/navigation_manager_impl.h"
 #import "ios/web/public/web_client.h"
 #include "ios/web/public/web_state/url_verification_constants.h"
@@ -20,9 +20,9 @@
 #error "This file requires ARC support."
 #endif
 
-using testing::WaitUntilConditionOrTimeout;
-using testing::kWaitForJSCompletionTimeout;
-using testing::kWaitForPageLoadTimeout;
+using base::test::ios::WaitUntilConditionOrTimeout;
+using base::test::ios::kWaitForJSCompletionTimeout;
+using base::test::ios::kWaitForPageLoadTimeout;
 
 namespace {
 // Returns CRWWebController for the given |web_state|.
@@ -62,7 +62,7 @@ void WebTestWithWebState::AddPendingItem(const GURL& url,
   GetWebController(web_state())
       .webStateImpl->GetNavigationManagerImpl()
       .AddPendingItem(url, Referrer(), transition,
-                      web::NavigationInitiationType::USER_INITIATED,
+                      web::NavigationInitiationType::BROWSER_INITIATED,
                       web::NavigationManager::UserAgentOverrideOption::INHERIT);
 }
 
@@ -148,7 +148,7 @@ void WebTestWithWebState::WaitForBackgroundTasks() {
   // Because tasks can add new tasks to either queue, the loop continues until
   // the first pass where no activity is seen from either queue.
   bool activitySeen = false;
-  base::MessageLoop* messageLoop = base::MessageLoop::current();
+  base::MessageLoopCurrent messageLoop = base::MessageLoopCurrent::Get();
   messageLoop->AddTaskObserver(this);
   do {
     activitySeen = false;
@@ -171,7 +171,7 @@ void WebTestWithWebState::WaitForBackgroundTasks() {
 
 void WebTestWithWebState::WaitForCondition(ConditionBlock condition) {
   base::test::ios::WaitUntilCondition(condition, true,
-                                      base::TimeDelta::FromSeconds(10));
+                                      base::TimeDelta::FromSeconds(1000));
 }
 
 id WebTestWithWebState::ExecuteJavaScript(NSString* script) {

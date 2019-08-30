@@ -7,7 +7,7 @@ module media_router.mojom;
 import "chrome/common/media_router/mojo/media_controller.mojom";
 import "chrome/common/media_router/mojo/media_status.mojom";
 import "media/mojo/interfaces/mirror_service_remoting.mojom";
-import "mojo/common/time.mojom";
+import "mojo/public/mojom/base/time.mojom";
 import "net/interfaces/ip_address.mojom";
 import "net/interfaces/ip_endpoint.mojom";
 import "url/mojom/origin.mojom";
@@ -150,8 +150,13 @@ struct Issue {
   };
 
   // If set, the ID of the route to which this issue pertains.
-  // If not set (default), then this is a global issue.
-  string? route_id;
+  // If this is an empty string (default), then this is a global issue.
+  string route_id;
+
+  // The ID of the sink associated with this issue.
+  // If this is an empty string (default), then this is a global issue.
+  // TODO(https://crbug.com/554646): Associate all issues with sinks.
+  string sink_id;
 
   Severity severity;
 
@@ -199,7 +204,7 @@ struct SinkSearchCriteria {
 // - RouteRequestResult::ResultCode in route_request_result.h
 // - MediaRouteProviderResult enum in tools/metrics/histograms.xml.
 // - mr.RouteRequestResultCode in route_request_error.js
-// - RouteRequestResultCodeFromMojo in media_router_type_converters.cc
+// - media_router_struct_traits.h
 enum RouteRequestResultCode {
   UNKNOWN_ERROR,
   OK,
@@ -209,7 +214,8 @@ enum RouteRequestResultCode {
   INVALID_ORIGIN,
   INCOGNITO_MISMATCH,
   NO_SUPPORTED_PROVIDER,
-  CANCELLED
+  CANCELLED,
+  ROUTE_ALREADY_EXISTS
 // New values must be added here.
 };
 
@@ -227,6 +233,9 @@ struct MediaRouteProviderConfig {
 
   // If the MRP should enable Cast sink query.
   bool enable_cast_sink_query;
+
+  // If the Views dialog is being used.
+  bool use_views_dialog;
 };
 
 // Modeled after the MediaRouter interface defined in
@@ -247,7 +256,8 @@ interface MediaRouteProvider {
   enum Id {
     EXTENSION,
     WIRED_DISPLAY,
-    CAST
+    CAST,
+    DIAL
   };
 
   // Creates a media route from |media_source| to the sink given by |sink_id|.
@@ -276,7 +286,7 @@ interface MediaRouteProvider {
               string original_presentation_id,
               url.mojom.Origin origin,
               int32 tab_id,
-              mojo.common.mojom.TimeDelta timeout,
+              mojo_base.mojom.TimeDelta timeout,
               bool incognito) =>
                   (MediaRoute? route,
                    string? error_text,
@@ -304,7 +314,7 @@ interface MediaRouteProvider {
             string presentation_id,
             url.mojom.Origin origin,
             int32 tab_id,
-            mojo.common.mojom.TimeDelta timeout,
+            mojo_base.mojom.TimeDelta timeout,
             bool incognito) =>
                 (MediaRoute? route,
                  string? error_text,
@@ -338,7 +348,7 @@ interface MediaRouteProvider {
                         string presentation_id,
                         url.mojom.Origin origin,
                         int32 tab_id,
-                        mojo.common.mojom.TimeDelta timeout,
+                        mojo_base.mojom.TimeDelta timeout,
                         bool incognito) =>
                             (MediaRoute? route,
                              string? error_text,
@@ -412,7 +422,13 @@ interface MediaRouteProvider {
   // already a firewall rule for mDNS.
   EnableMdnsDiscovery();
 
-  // Updates media sinks capable of displaying |media_source|.
+  // Requests the MediaRouteProvider to update the list of media sinks capable
+  // of displaying |media_source|. This call is made when a user gesture is
+  // detected, so MediaRouteProvider may treat this as a signal to take actions
+  // to become more responsive, e.g., initiate a one-off round of device
+  // discovery.
+  // TODO(https://crbug.com/698940): Rename this to OnUserGesture and remove the
+  // |media_source| parameter.
   UpdateMediaSinks(string media_source);
 
   // Indicates that the Media Router is interested in finding a sink that
@@ -465,7 +481,7 @@ interface MediaRouter {
     AVAILABLE
   };
 
-  // Keep in sync with content/public/common/presentation_info.h.
+  // TODO(crbug.com/831416): Remove and use presentation.mojom type instead.
   enum PresentationConnectionState {
     CONNECTING,
     CONNECTED,
@@ -473,7 +489,7 @@ interface MediaRouter {
     TERMINATED
   };
 
-  // Keep in sync with content/public/common/presentation_info.h.
+  // TODO(crbug.com/831416): Remove and use presentation.mojom type instead.
   enum PresentationConnectionCloseReason {
     CONNECTION_ERROR,
     CLOSED,

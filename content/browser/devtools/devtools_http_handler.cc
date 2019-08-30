@@ -279,7 +279,7 @@ void StartServerOnHandlerThread(
     fflush(stderr);
 
     // Write this port to a well-known file in the profile directory
-    // so Telemetry can pick it up.
+    // so Telemetry, ChromeDriver, etc. can pick it up.
     if (!output_directory.empty()) {
       base::FilePath path =
           output_directory.Append(kDevToolsActivePortFileName);
@@ -291,7 +291,10 @@ void StartServerOnHandlerThread(
       }
     }
   } else {
-    LOG(ERROR) << "Cannot start http server for devtools. Stop devtools.";
+#if !defined(OS_ANDROID)
+    // Android uses UNIX domain sockets which don't have an IP address.
+    LOG(ERROR) << "Cannot start http server for devtools.";
+#endif
   }
 
   BrowserThread::PostTask(
@@ -371,6 +374,10 @@ static bool TimeComparator(scoped_refptr<DevToolsAgentHost> host1,
 // DevToolsHttpHandler -------------------------------------------------------
 
 DevToolsHttpHandler::~DevToolsHttpHandler() {
+  // Disconnecting sessions might lead to the last minute messages generated
+  // by the targets. It is essential that this happens before we issue delete
+  // soon for the server wrapper.
+  connection_to_client_.clear();
   TerminateOnUI(std::move(thread_), std::move(server_wrapper_),
                 std::move(socket_factory_));
 }

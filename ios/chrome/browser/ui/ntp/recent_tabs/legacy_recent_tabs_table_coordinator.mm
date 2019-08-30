@@ -6,7 +6,7 @@
 
 #include "base/logging.h"
 #import "ios/chrome/browser/ui/ntp/recent_tabs/legacy_recent_tabs_table_view_controller.h"
-#import "ios/chrome/browser/ui/ntp/recent_tabs/recent_tabs_mediator.h"
+#import "ios/chrome/browser/ui/recent_tabs/recent_tabs_mediator.h"
 
 #if !defined(__has_feature) || !__has_feature(objc_arc)
 #error "This file requires ARC support."
@@ -53,7 +53,7 @@
 - (void)start {
   _tableViewController.handsetCommandHandler = self.handsetCommandHandler;
   [self.mediator initObservers];
-  [self.mediator reloadSessions];
+  [self.mediator configureConsumer];
 }
 
 - (void)stop {

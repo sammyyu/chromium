@@ -9,16 +9,31 @@
 #include "base/callback.h"
 #include "base/logging.h"
 #include "base/macros.h"
+#include "base/metrics/histogram_macros.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
 #include "base/threading/thread_restrictions.h"
-#include "components/signin/core/account_id/account_id.h"
+#include "components/account_id/account_id.h"
 #include "components/user_manager/user_manager.h"
 #include "google_apis/gaia/gaia_auth_util.h"
 
 namespace user_manager {
 
 namespace {
+
+// Must be in sync with histogram enum UserTypeChanged in enums.xml.
+// The values must never be changed (only new ones can be added) as they
+// are stored in UMA logs.
+enum class UserTypeChangeHistogram {
+  UNKNOWN_FATAL = 0,
+  REGULAR_TO_CHILD = 1,
+  CHILD_TO_REGULAR = 2,
+  COUNT,  // Not a value, just a count of other values.
+};
+void UMAUserTypeChanged(const UserTypeChangeHistogram value) {
+  UMA_HISTOGRAM_ENUMERATION("UserManager.UserTypeChanged", value,
+                            UserTypeChangeHistogram::COUNT);
+}
 
 // Returns account name portion of an email.
 std::string GetUserName(const std::string& email) {
@@ -168,6 +183,7 @@ const AccountId& User::GetAccountId() const {
 }
 
 void User::UpdateType(UserType user_type) {
+  UMAUserTypeChanged(UserTypeChangeHistogram::UNKNOWN_FATAL);
   LOG(FATAL) << "Unsupported user type change " << GetType() << "=>"
              << user_type;
 }
@@ -184,6 +200,10 @@ bool User::IsSupervised() const {
   UserType type = GetType();
   return  type == USER_TYPE_SUPERVISED ||
           type == USER_TYPE_CHILD;
+}
+
+bool User::IsChild() const {
+  return GetType() == USER_TYPE_CHILD;
 }
 
 std::string User::GetAccountName(bool use_display_email) const {
@@ -345,6 +365,8 @@ void RegularUser::UpdateType(UserType user_type) {
     LOG(WARNING) << "User type has changed: " << current_type
                  << " (is_child=" << old_is_child << ") => " << user_type
                  << " (is_child=" << is_child_ << ")";
+    UMAUserTypeChanged(is_child_ ? UserTypeChangeHistogram::REGULAR_TO_CHILD
+                                 : UserTypeChangeHistogram::CHILD_TO_REGULAR);
     return;
   }
   // Fail with LOG(FATAL).

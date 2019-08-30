@@ -4,7 +4,7 @@
 
 module data_decoder.mojom;
 
-import "mojo/common/time.mojom";
+import "mojo/public/mojom/base/time.mojom";
 import "skia/public/interfaces/bitmap.mojom";
 import "ui/gfx/geometry/mojo/geometry.mojom";
 
@@ -15,8 +15,10 @@ enum ImageCodec {
 };
 
 struct AnimationFrame {
-  skia.mojom.Bitmap bitmap;
-  mojo.common.mojom.TimeDelta duration;
+  // TODO(https://crbug.com/838706): Cnonsider replacing individual Bitmap
+  // structs with a new type that uses a single BigBuffer for all frame data.
+  skia.mojom.InlineBitmap bitmap;
+  mojo_base.mojom.TimeDelta duration;
 };
 
 interface ImageDecoder {

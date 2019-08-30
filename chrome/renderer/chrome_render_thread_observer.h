@@ -35,6 +35,7 @@ class ChromeRenderThreadObserver : public content::RenderThreadObserver,
   ~ChromeRenderThreadObserver() override;
 
   static bool is_incognito_process() { return is_incognito_process_; }
+  static bool is_signed_in() { return is_signed_in_; }
 
   // Returns a pointer to the content setting rules owned by
   // |ChromeRenderThreadObserver|.
@@ -44,18 +45,16 @@ class ChromeRenderThreadObserver : public content::RenderThreadObserver,
     return visited_link_slave_.get();
   }
 
-  bool is_online() { return online_; }
-
  private:
   // content::RenderThreadObserver:
   void RegisterMojoInterfaces(
       blink::AssociatedInterfaceRegistry* associated_interfaces) override;
   void UnregisterMojoInterfaces(
       blink::AssociatedInterfaceRegistry* associated_interfaces) override;
-  void NetworkStateChanged(bool online) override;
 
   // chrome::mojom::RendererConfiguration:
   void SetInitialConfiguration(bool is_incognito_process) override;
+  void SetIsSignedIn(bool is_signed_in) override;
   void SetContentSettingRules(
       const RendererContentSettingRules& rules) override;
   void SetFieldTrialGroup(const std::string& trial_name,
@@ -64,10 +63,8 @@ class ChromeRenderThreadObserver : public content::RenderThreadObserver,
   void OnRendererConfigurationAssociatedRequest(
       chrome::mojom::RendererConfigurationAssociatedRequest request);
 
-  // Is the browser online? The a priori assumption.
-  bool online_ = true;
-
   static bool is_incognito_process_;
+  static bool is_signed_in_;
   std::unique_ptr<content::ResourceDispatcherDelegate> resource_delegate_;
   RendererContentSettingRules content_setting_rules_;
 

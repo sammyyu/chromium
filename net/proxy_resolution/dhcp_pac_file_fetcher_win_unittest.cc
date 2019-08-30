@@ -10,12 +10,13 @@
 #include "base/bind_helpers.h"
 #include "base/rand_util.h"
 #include "base/run_loop.h"
+#include "base/test/scoped_task_environment.h"
 #include "base/test/test_timeouts.h"
 #include "base/threading/platform_thread.h"
 #include "base/timer/elapsed_timer.h"
-#include "net/base/completion_callback.h"
 #include "net/proxy_resolution/dhcp_pac_file_adapter_fetcher_win.h"
 #include "net/test/gtest_util.h"
+#include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "net/url_request/url_request_test_util.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
@@ -59,7 +60,7 @@ class RealFetchTester {
     int result = fetcher_->Fetch(
         &pac_text_,
         base::Bind(&RealFetchTester::OnCompletion, base::Unretained(this)),
-        NetLogWithSource());
+        NetLogWithSource(), TRAFFIC_ANNOTATION_FOR_TESTS);
     if (result != ERR_IO_PENDING)
       finished_ = true;
   }
@@ -104,7 +105,7 @@ class RealFetchTester {
   // Attempts to give worker threads time to finish.  This is currently
   // very simplistic as completion (via completion callback or cancellation)
   // immediately "detaches" any worker threads, so the best we can do is give
-  // them a little time.  If we start running into Valgrind leaks, we can
+  // them a little time.  If we start running into memory leaks, we can
   // do something a bit more clever to track worker threads even when the
   // DhcpPacFileFetcherWin state machine has finished.
   void FinishTestAllowCleanup() {
@@ -121,6 +122,8 @@ class RealFetchTester {
 };
 
 TEST(DhcpPacFileFetcherWin, RealFetch) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   // This tests a call to Fetch() with no stubbing out of dependencies.
   //
   // We don't make assumptions about the environment this unit test is
@@ -137,13 +140,15 @@ TEST(DhcpPacFileFetcherWin, RealFetch) {
 }
 
 TEST(DhcpPacFileFetcherWin, RealFetchWithCancel) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   // Does a Fetch() with an immediate cancel.  As before, just
   // exercises the code without stubbing out dependencies.
   RealFetchTester fetcher;
   fetcher.RunTestWithCancel();
   base::RunLoop().RunUntilIdle();
 
-  // Attempt to avoid Valgrind leak reports in case worker thread is
+  // Attempt to avoid memory leak reports in case worker thread is
   // still running.
   fetcher.FinishTestAllowCleanup();
 }
@@ -187,6 +192,8 @@ class DelayingDhcpPacFileFetcherWin : public DhcpPacFileFetcherWin {
 };
 
 TEST(DhcpPacFileFetcherWin, RealFetchWithDeferredCancel) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   // Does a Fetch() with a slightly delayed cancel.  As before, just
   // exercises the code without stubbing out dependencies, but
   // introduces a guaranteed 20 ms delay on the worker threads so that
@@ -213,8 +220,9 @@ class DummyDhcpPacFileAdapterFetcher : public DhcpPacFileAdapterFetcher {
         fetch_delay_ms_(1) {}
 
   void Fetch(const std::string& adapter_name,
-             const CompletionCallback& callback) override {
-    callback_ = callback;
+             CompletionOnceCallback callback,
+             const NetworkTrafficAnnotationTag traffic_annotation) override {
+    callback_ = std::move(callback);
     timer_.Start(FROM_HERE, base::TimeDelta::FromMilliseconds(fetch_delay_ms_),
                  this, &DummyDhcpPacFileAdapterFetcher::OnTimer);
   }
@@ -235,9 +243,7 @@ class DummyDhcpPacFileAdapterFetcher : public DhcpPacFileAdapterFetcher {
     return pac_script_;
   }
 
-  void OnTimer() {
-    callback_.Run(result_);
-  }
+  void OnTimer() { std::move(callback_).Run(result_); }
 
   void Configure(bool did_finish,
                  int result,
@@ -254,7 +260,7 @@ class DummyDhcpPacFileAdapterFetcher : public DhcpPacFileAdapterFetcher {
   int result_;
   base::string16 pac_script_;
   int fetch_delay_ms_;
-  CompletionCallback callback_;
+  CompletionOnceCallback callback_;
   base::OneShotTimer timer_;
 };
 
@@ -380,7 +386,7 @@ class FetcherClient {
     int result = fetcher_.Fetch(
         &pac_text_,
         base::Bind(&FetcherClient::OnCompletion, base::Unretained(this)),
-        NetLogWithSource());
+        NetLogWithSource(), TRAFFIC_ANNOTATION_FOR_TESTS);
     ASSERT_THAT(result, IsError(ERR_IO_PENDING));
   }
 
@@ -388,7 +394,7 @@ class FetcherClient {
     int result = fetcher_.Fetch(
         &pac_text_,
         base::Bind(&FetcherClient::OnCompletion, base::Unretained(this)),
-        NetLogWithSource());
+        NetLogWithSource(), TRAFFIC_ANNOTATION_FOR_TESTS);
     if (result != ERR_IO_PENDING)
       result_ = result;
     return result;
@@ -447,6 +453,8 @@ void TestNormalCaseURLConfiguredOneAdapter(FetcherClient* client) {
 }
 
 TEST(DhcpPacFileFetcherWin, NormalCaseURLConfiguredOneAdapter) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   FetcherClient client;
   TestNormalCaseURLConfiguredOneAdapter(&client);
 }
@@ -466,6 +474,8 @@ void TestNormalCaseURLConfiguredMultipleAdapters(FetcherClient* client) {
 }
 
 TEST(DhcpPacFileFetcherWin, NormalCaseURLConfiguredMultipleAdapters) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   FetcherClient client;
   TestNormalCaseURLConfiguredMultipleAdapters(&client);
 }
@@ -489,6 +499,8 @@ void TestNormalCaseURLConfiguredMultipleAdaptersWithTimeout(
 
 TEST(DhcpPacFileFetcherWin,
      NormalCaseURLConfiguredMultipleAdaptersWithTimeout) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   FetcherClient client;
   TestNormalCaseURLConfiguredMultipleAdaptersWithTimeout(&client);
 }
@@ -518,6 +530,8 @@ void TestFailureCaseURLConfiguredMultipleAdaptersWithTimeout(
 
 TEST(DhcpPacFileFetcherWin,
      FailureCaseURLConfiguredMultipleAdaptersWithTimeout) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   FetcherClient client;
   TestFailureCaseURLConfiguredMultipleAdaptersWithTimeout(&client);
 }
@@ -542,6 +556,8 @@ void TestFailureCaseNoURLConfigured(FetcherClient* client) {
 }
 
 TEST(DhcpPacFileFetcherWin, FailureCaseNoURLConfigured) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   FetcherClient client;
   TestFailureCaseNoURLConfigured(&client);
 }
@@ -555,6 +571,8 @@ void TestFailureCaseNoDhcpAdapters(FetcherClient* client) {
 }
 
 TEST(DhcpPacFileFetcherWin, FailureCaseNoDhcpAdapters) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   FetcherClient client;
   TestFailureCaseNoDhcpAdapters(&client);
 }
@@ -590,6 +608,8 @@ void TestShortCircuitLessPreferredAdapters(FetcherClient* client) {
 }
 
 TEST(DhcpPacFileFetcherWin, ShortCircuitLessPreferredAdapters) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   FetcherClient client;
   TestShortCircuitLessPreferredAdapters(&client);
 }
@@ -609,11 +629,15 @@ void TestImmediateCancel(FetcherClient* client) {
 // Regression test to check that when we cancel immediately, no
 // adapter fetchers get created.
 TEST(DhcpPacFileFetcherWin, ImmediateCancel) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   FetcherClient client;
   TestImmediateCancel(&client);
 }
 
 TEST(DhcpPacFileFetcherWin, ReuseFetcher) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   FetcherClient client;
 
   // The PacFileFetcher interface stipulates that only a single
@@ -635,9 +659,7 @@ TEST(DhcpPacFileFetcherWin, ReuseFetcher) {
   test_functions.push_back(TestShortCircuitLessPreferredAdapters);
   test_functions.push_back(TestImmediateCancel);
 
-  std::random_shuffle(test_functions.begin(),
-                      test_functions.end(),
-                      base::RandGenerator);
+  base::RandomShuffle(test_functions.begin(), test_functions.end());
   for (TestVector::const_iterator it = test_functions.begin();
        it != test_functions.end();
        ++it) {
@@ -651,6 +673,8 @@ TEST(DhcpPacFileFetcherWin, ReuseFetcher) {
 }
 
 TEST(DhcpPacFileFetcherWin, OnShutdown) {
+  base::test::ScopedTaskEnvironment scoped_task_environment;
+
   FetcherClient client;
   TestURLRequestContext context;
   std::unique_ptr<DummyDhcpPacFileAdapterFetcher> adapter_fetcher(

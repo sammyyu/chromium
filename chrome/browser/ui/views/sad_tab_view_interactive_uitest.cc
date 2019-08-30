@@ -4,6 +4,7 @@
 
 #include "chrome/browser/ui/views/sad_tab_view.h"
 
+#include "build/build_config.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_commands.h"
 #include "chrome/browser/ui/sad_tab.h"
@@ -13,10 +14,12 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/interactive_test_utils.h"
 #include "chrome/test/base/ui_test_utils.h"
+#include "chrome/test/views/scoped_macviews_browser_mode.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/render_process_host.h"
 #include "content/public/common/result_codes.h"
 #include "content/public/test/browser_test_utils.h"
+#include "ui/base/material_design/material_design_controller.h"
 #include "ui/views/controls/button/blue_button.h"
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/widget/widget.h"
@@ -80,10 +83,10 @@ class SadTabViewInteractiveUITest : public InProcessBrowserTest {
 
   const char* ActionButtonClassName() {
 #if defined(OS_CHROMEOS)
-    return views::BlueButton::kViewClassName;
-#else
-    return views::LabelButton::kViewClassName;
+    if (!ui::MaterialDesignController::IsSecondaryUiMaterial())
+      return views::BlueButton::kViewClassName;
 #endif
+    return views::LabelButton::kViewClassName;
   }
 
   bool IsFocusedViewInsideViewClass(const char* view_class) {
@@ -126,11 +129,19 @@ class SadTabViewInteractiveUITest : public InProcessBrowserTest {
   }
 
  private:
+  test::ScopedMacViewsBrowserMode views_mode_{true};
+
   DISALLOW_COPY_AND_ASSIGN(SadTabViewInteractiveUITest);
 };
 
+#if defined(OS_MACOSX)
+// Focusing or input is not completely working on Mac: http://crbug.com/824418
+#define MAYBE_SadTabKeyboardAccessibility DISABLED_SadTabKeyboardAccessibility
+#else
+#define MAYBE_SadTabKeyboardAccessibility SadTabKeyboardAccessibility
+#endif
 IN_PROC_BROWSER_TEST_F(SadTabViewInteractiveUITest,
-                       SadTabKeyboardAccessibility) {
+                       MAYBE_SadTabKeyboardAccessibility) {
   ASSERT_TRUE(embedded_test_server()->Start());
   GURL url(embedded_test_server()->GetURL("/links.html"));
   ui_test_utils::NavigateToURL(browser(), url);
@@ -164,7 +175,17 @@ IN_PROC_BROWSER_TEST_F(SadTabViewInteractiveUITest,
   ASSERT_TRUE(IsFocusedViewInsideBrowserToolbar());
 }
 
-IN_PROC_BROWSER_TEST_F(SadTabViewInteractiveUITest, ReloadMultipleSadTabs) {
+#if defined(OS_MACOSX)
+// Focusing or input is not completely working on Mac: http://crbug.com/824418
+#define MAYBE_ReloadMultipleSadTabs DISABLED_ReloadMultipleSadTabs
+#elif defined(OS_WIN) && defined(OFFICIAL_BUILD)
+// Test seems to fail only in official Windows builds: http://crbug.com/848049
+#define MAYBE_ReloadMultipleSadTabs DISABLED_ReloadMultipleSadTabs
+#else
+#define MAYBE_ReloadMultipleSadTabs ReloadMultipleSadTabs
+#endif
+IN_PROC_BROWSER_TEST_F(SadTabViewInteractiveUITest,
+                       MAYBE_ReloadMultipleSadTabs) {
   ASSERT_TRUE(embedded_test_server()->Start());
   GURL url(embedded_test_server()->GetURL("/links.html"));
   ui_test_utils::NavigateToURL(browser(), url);

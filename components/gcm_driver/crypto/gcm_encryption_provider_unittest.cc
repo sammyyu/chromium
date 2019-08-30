@@ -19,7 +19,7 @@
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_util.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "components/gcm_driver/common/gcm_messages.h"
 #include "components/gcm_driver/crypto/gcm_decryption_result.h"
 #include "components/gcm_driver/crypto/gcm_key_store.h"
@@ -305,7 +305,7 @@ TEST_F(GCMEncryptionProviderTest, VerifiesKeyRemovalGCMRegistration) {
   // non-InstanceID GCM registration.
 
   // Non-InstanceID callers pass an empty string for authorized_entity.
-  std::string authorized_entity_gcm = "";
+  std::string authorized_entity_gcm;
   std::string authorized_entity_1 = kExampleAuthorizedEntity + std::string("1");
   std::string authorized_entity_2 = kExampleAuthorizedEntity + std::string("2");
 
@@ -361,7 +361,7 @@ TEST_F(GCMEncryptionProviderTest, VerifiesKeyRemovalInstanceIDToken) {
   // affect an InstanceID token.
 
   // Non-InstanceID callers pass an empty string for authorized_entity.
-  std::string authorized_entity_gcm = "";
+  std::string authorized_entity_gcm;
   std::string authorized_entity_1 = kExampleAuthorizedEntity + std::string("1");
   std::string authorized_entity_2 = kExampleAuthorizedEntity + std::string("2");
 

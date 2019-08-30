@@ -12,10 +12,7 @@ Polymer({
 
   properties: {
     /** @type {Array<!print_preview.Destination>} */
-    destinations: {
-      type: Array,
-      observer: 'destinationsChanged_',
-    },
+    destinations: Array,
 
     /** @type {boolean} */
     hasActionLink: {
@@ -57,17 +54,28 @@ Polymer({
     },
   },
 
+  observers: [
+    'destinationsChanged_(destinations.*)',
+  ],
+
   /** @private {boolean} */
   newDestinations_: false,
+
+  /** @private {boolean} */
+  initializedDestinations_: false,
+
+  /** @private {!Array<!Node>} */
+  highlights_: [],
 
   /**
    * @param {!Array<!print_preview.Destination>} current
    * @param {?Array<!print_preview.Destination>} previous
    * @private
    */
-  destinationsChanged_: function(current, previous) {
-    if (previous == undefined) {
+  destinationsChanged_: function() {
+    if (!this.initializedDestinations_) {
       this.matchingDestinationsCount_ = this.destinations.length;
+      this.initializedDestinations_ = true;
     } else {
       this.newDestinations_ = true;
     }
@@ -86,6 +94,9 @@ Polymer({
     if (!this.destinations)
       return;
 
+    cr.search_highlight_utils.removeHighlights(this.highlights_);
+    this.highlights_ = [];
+
     const listItems =
         this.shadowRoot.querySelectorAll('print-preview-destination-list-item');
 
@@ -95,7 +106,7 @@ Polymer({
           !!this.searchQuery && !item.destination.matches(this.searchQuery);
       if (!item.hidden) {
         matchCount++;
-        item.update();
+        this.highlights_.push.apply(this.highlights_, item.update().highlights);
       }
     });
 
@@ -129,10 +140,7 @@ Polymer({
    * @private
    */
   onDestinationSelected_: function(e) {
-    this.fire(
-        'destination-selected',
-        /** @type {PrintPreviewDestinationListItemElement} */
-        (e.target).destination);
+    this.fire('destination-selected', e.target);
   },
 });
 })();

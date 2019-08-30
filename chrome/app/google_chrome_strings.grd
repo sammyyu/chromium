@@ -162,6 +162,9 @@ chromium_strings.grd. -->
       <message name="IDS_SHORT_PRODUCT_LOGO_ALT_TEXT" desc="Alt text for the Chrome logo image.">
         Chrome logo
       </message>
+      <message name="IDS_PRODUCT_LOGO_ENTERPRISE_ALT_TEXT" desc="Alt text for the Chrome Enterprise logo image.">
+        Chrome Enterprise logo
+      </message>
       <if expr="is_win">
         <message name="IDS_SHORTCUT_NEW_WINDOW" desc="The text label of the New window shortcut context menu entry as of Windows 8">
           New window
@@ -219,14 +222,11 @@ chromium_strings.grd. -->
         Copyright <ph name="YEAR">{0,date,y}<ex>2016</ex></ph> Google Inc. All rights reserved.
       </message>
       <if expr="chromeos">
-        <message name="IDS_ABOUT_VERSION_LICENSE_EULA" desc="The label below the copyright message, containing the URLs.">
-          Chrome open source licenses
-        </message>
         <message name="IDS_ABOUT_CROS_VERSION_LICENSE" desc="Additional text displayed beneath the Chromium open source URLs for Chrome OS.">
           Chrome OS is made possible by additional <ph name="BEGIN_LINK_CROS_OSS">&lt;a target="_blank" href="$1"&gt;</ph>open source software<ph name="END_LINK_CROS_OSS">&lt;/a&gt;</ph>.
         </message>
-        <message name="IDS_ABOUT_CROS_VERSION_LICENSE_EULA"  desc="Additional text displayed beneath the Chromium open source URLs for Chrome OS.">
-          Chrome OS open source licenses
+        <message name="IDS_ABOUT_CROS_WITH_LINUX_VERSION_LICENSE" desc="Additional text displayed beneath the Chromium open source URLs for Chrome OS when Crostini is installed.">
+          Chrome OS is made possible by additional <ph name="BEGIN_LINK_CROS_OSS">&lt;a target="_blank" href="$1"&gt;</ph>open source software<ph name="END_LINK_CROS_OSS">&lt;/a&gt;</ph>, as is Linux (Beta).
         </message>
         <message name="IDS_ABOUT_TERMS_OF_SERVICE" desc="The terms of service label in the About box.">
           Google Chrome OS <ph name="TERMS_OF_SERVICE_LINK">&lt;a target="_blank" href="$1"&gt;</ph>Terms of Service<ph name="END_TERMS_OF_SERVICE_LINK">&lt;/a&gt;</ph>
@@ -272,30 +272,8 @@ chromium_strings.grd. -->
         Make Google Chrome the default browser
       </message>
       <if expr="chromeos">
-        <message name="IDS_NEW_TAB_CHROME_WELCOME_PAGE_TITLE"
-                 desc="Title for the hard-coded thumbnail that represents the Google Chrome Welcome page.  This is used on the NTP when there aren't enough thumbnails to show.">
-          Get Started with Chrome OS
-        </message>
-      </if>
-      <if expr="not chromeos">
-        <message name="IDS_NEW_TAB_CHROME_WELCOME_PAGE_TITLE"
-                 desc="Title for the hard-coded thumbnail that represents the Google Chrome OS Welcome page. This is used on the NTP when there aren't enough thumbnails to show.">
-          Welcome to Google Chrome
-        </message>
-      </if>
-      <if expr="chromeos">
         <message name="IDS_EXTERNAL_PROTOCOL_TITLE" desc="External Protocol Dialog Title">
           Google Chrome OS can't open this page.
-        </message>
-      </if>
-      <if expr="not chromeos">
-        <message name="IDS_OPTIONS_RELAUNCH_REQUIRED" desc="The message displayed for an option that requires a relaunch to take effect. This appears in a message box if an option is changed that requires a relaunch.">
-          Please close all Google Chrome windows and relaunch it for this change to take effect.
-        </message>
-      </if>
-      <if expr="chromeos">
-        <message name="IDS_OPTIONS_RELAUNCH_REQUIRED" desc="The message displayed for an option that requires a relaunch to take effect. This appears in a message box if an option is changed that requires a relaunch.">
-          Please sign out and sign in again for this change to take effect.
         </message>
       </if>
       <if expr="use_titlecase">
@@ -308,15 +286,6 @@ chromium_strings.grd. -->
           Let Google Chrome run in the background
         </message>
       </if>
-      <message name="IDS_OPTIONS_SYSTEM_ENABLE_BACKGROUND_MODE" desc="The label of the check-box that enables background mode">
-        Continue running background apps when Google Chrome is closed
-      </message>
-      <message name="IDS_OPTIONS_SYSTEM_ENABLE_HARDWARE_ACCELERATION_MODE" desc="The label of the check-box that enables hardware acceleration mode">
-        Use hardware acceleration when available
-      </message>
-      <message name="IDS_OPTIONS_SYSTEM_ENABLE_HARDWARE_ACCELERATION_MODE_RESTART" desc="The restart string after changing hardware acceleration mode">
-        (requires Chrome <ph name="BEGIN_BUTTON">&lt;a is="action-link" role="button" id="gpu-mode-reset-restart-button" class="standalone-action-link"&gt;</ph>restart<ph name="END_BUTTON">&lt;/a&gt;</ph>)
-      </message>
       <message name="IDS_CANT_WRITE_USER_DIRECTORY_SUMMARY" desc="Summary of problem displayed in dialog when we can't create a directory for this user.">
 Google Chrome cannot read and write to its data directory:
 
@@ -352,11 +321,8 @@ Google Chrome is unable to recover your settings.
         </message>
       </if>
       <!-- Password generation strings -->
-      <message name="IDS_PASSWORD_GENERATION_PROMPT" desc="Autofill dropdown text describing password generation. The link text is a separate string in the translation console and appears here as placeholder text.">
-        Chrome will save this password with <ph name="SAVED_PASSWORD_LINK">$1<ex>Google Smart Lock</ex></ph>. You don’t have to remember it.
-      </message>
-      <message name="IDS_PASSWORD_GENERATION_SUGGESTION" desc="Text shown next to a generated password describing it as a suggestion.">
-        Use a strong password generated by Chrome
+      <message name="IDS_PASSWORD_GENERATION_PROMPT" desc="Autofill dropdown text describing password generation.">
+        Chrome will save this password in your Google Account. You won’t have to remember it.
       </message>
       <message name="IDS_PASSWORD_MANAGER_TITLE_BRAND" desc="The product name used in the title of the password bubble.">
         Google Chrome
@@ -452,16 +418,6 @@ Google Chrome is unable to recover your settings.
         </message>
         <message name="IDS_TRY_TOAST_HEADING_SKYPE" desc="Top line of the try-chrome-again dialog">
           Google Chrome lets you click a phone number on the web and call it with Skype!
-        </message>
-        <!-- about:conflicts strings -->
-        <message name="IDS_CONFLICTS_CHECK_PAGE_TITLE_LONG" desc="The long title on the compatibility page">
-          Modules loaded into Google Chrome
-        </message>
-        <message name="IDS_CONFLICTS_CHECK_WARNING_CONFIRMED" desc="Warning label on the compatibility page">
-          This module is known to conflict with Google Chrome.
-        </message>
-        <message name="IDS_CONFLICTS_CHECK_WARNING_SUSPECTED" desc="Warning label on the compatibility page">
-          A module with the same name has been known to conflict with Google Chrome.
         </message>
       </if>
 
@@ -789,12 +745,6 @@ Signing in anyway will merge Chrome information like bookmarks, history, and oth
         </message>
       </if>
 
-      <if expr="is_macosx">
-        <message name="IDS_OPTIONS_PASSWORDS_MAC_WARNING" desc="The warning for OS X that passwords are shared across profiles in the keychain.">
-          On Mac, passwords may be saved to your Keychain and accessed or synced by other Chrome users sharing this OS X account.
-        </message>
-      </if>
-
       <message name="IDS_AUTOFILL_DIALOG_SAVE_LOCALLY_CHECKBOX" desc="Checkbox that controls whether info the user types into the autofill dialog is saved by chrome.">
         Save details in Chrome
       </message>
@@ -853,13 +803,6 @@ Signing in anyway will merge Chrome information like bookmarks, history, and oth
         </message>
         <message name="IDS_APP_SHORTCUTS_SUBDIR_NAME_DEV" desc="Name for the Chrome Apps Start Menu folder name for the Dev channel.">
           Chrome Dev Apps
-        </message>
-      </if>
-
-      <!-- Chrome Conflicts bubble -->
-      <if expr="is_win">
-        <message name="IDS_OPTIONS_CONFLICTING_MODULE" desc="Shown in a bubble when a conflict has been detected.">
-          Software running on your computer is incompatible with Google Chrome.
         </message>
       </if>
 
@@ -1024,7 +967,7 @@ Please check your email at <ph name="ACCOUNT_EMAIL">$2<ex>jane.doe@example.com</
           Relaunch Chrome
         </message>
         <message name="IDS_UPDATE_RECOMMENDED" desc="The main text of the Update Recommended dialog.">
-          Chrome is out of date because it hasn't been relaunched in a while. An update is available and will be applied as soon as you relaunch.
+          A new update for Chrome is available and will be applied as soon as you relaunch.
         </message>
         <message name="IDS_RELAUNCH_AND_UPDATE" desc="The button in the Update Recommended dialog which updates and relaunches Chrome.">
           Relaunch
@@ -1119,9 +1062,6 @@ Please check your email at <ph name="ACCOUNT_EMAIL">$2<ex>jane.doe@example.com</
       <message name="IDS_FEEDBACK_SERVICE_DIALOG_EXPLANATION" desc="Explanation of the dialog asking whether the user wants to upload suspected malicious files for analysis">
         You can help make Chrome safer and easier to use by automatically reporting details of possible security incidents to Google.
       </message>
-      <message name="IDS_FEEDBACK_SERVICE_DIALOG_EXPLANATION_SCOUT" desc="Explanation of the dialog asking whether the user wants to upload some system information and page content for Safe Browsing analysis">
-        You can help make Chrome safer and easier to use by automatically sending some system information and page content to Google to help detect dangerous apps and sites.
-      </message>
 
       <!-- Desktop Capture -->
       <message name="IDS_DESKTOP_MEDIA_PICKER_SOURCE_TYPE_TAB" desc="Text for the button on the window picker dialog, clicking which takes one to tab sharing">
@@ -1168,6 +1108,12 @@ Please check your email at <ph name="ACCOUNT_EMAIL">$2<ex>jane.doe@example.com</
         </message>
         <message name="IDS_MISSING_STORAGE_PERMISSION_DOWNLOAD_EDUCATION_TEXT" desc="Text shown educating the user that Chrome is missing the Android storage permission, which is required to download files.">
           Chrome needs storage access to download files
+        </message>
+      </if>
+
+      <if  expr="is_macosx">
+        <message name="IDS_RUNTIME_PERMISSION_OS_REASON_TEXT" desc="Text provided to the macOS permission dialog, explaining why Chrome needs to access a protected resource (e.g., camera, microphone).">
+          Once Chrome has access, websites will be able to ask you for access.
         </message>
       </if>
 
@@ -1221,7 +1167,7 @@ Please check your email at <ph name="ACCOUNT_EMAIL">$2<ex>jane.doe@example.com</
           Not now
         </message>
         <message name="IDS_DICE_WELCOME_DESCRIPTION" desc="A message on the welcome page explaining the purpose of signing in.">
-          Sign in for a personalized browsing experience, synced across devices
+          Sign in to sync and personalize Chrome across your devices
         </message>
       </if>
 
@@ -1287,6 +1233,22 @@ Please check your email at <ph name="ACCOUNT_EMAIL">$2<ex>jane.doe@example.com</
         </message>
         <message name="IDS_RELAUNCH_REQUIRED_BODY" desc="The body text of a dialog that tells users the browser must be relaunched.">
           Your administrator requires that you relaunch Chrome to apply an update
+        </message>
+      </if>
+
+      <!-- Chrome launch blocking dialog. -->
+      <if expr="not is_android and not chromeos">
+        <message name="IDS_ENTERPRISE_STARTUP_CLOUD_POLICY_ENROLLMENT_TOOLTIP" desc="The information message of Chrome launch blocking dialog for machine level user cloud policy enrollment.">
+          Launching Chrome...
+        </message>
+        <message name="IDS_ENTERPRISE_STARTUP_CLOUD_POLICY_ENROLLMENT_ERROR" desc="The error message of Chrome launch blocking dialog when machine level user cloud policy enrollment failed.">
+          Couldn't launch Chrome. Try again.
+        </message>
+        <message name="IDS_ENTERPRISE_STARTUP_RELAUNCH_BUTTON" desc="The text of relaunch button of Chrome launch blocking dialog.">
+          Relaunch Chrome
+        </message>
+        <message name="IDS_ENTERPRISE_STARTUP_CANCEL_BUTTON" desc="The text of cancel button of Chrome launch blocking dialog.">
+          Close
         </message>
       </if>
     </messages>

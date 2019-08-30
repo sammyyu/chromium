@@ -25,7 +25,7 @@
 #include "content/public/test/content_browser_test_utils.h"
 #include "content/public/test/test_utils.h"
 #include "content/shell/browser/shell.h"
-#include "third_party/WebKit/public/platform/WebInputEvent.h"
+#include "third_party/blink/public/platform/web_input_event.h"
 #include "ui/events/event_switches.h"
 #include "ui/latency/latency_info.h"
 
@@ -158,7 +158,7 @@ class MainThreadEventQueueBrowserTest : public ContentBrowserTest {
         GetWidgetHost(), blink::WebInputEvent::kTouchMove);
 
     for (const auto& event : kEvents)
-      GetWidgetHost()->ForwardEmulatedTouchEvent(event);
+      GetWidgetHost()->ForwardEmulatedTouchEvent(event, nullptr);
 
     // Runs until we get the InputMsgAck callback.
     EXPECT_EQ(INPUT_EVENT_ACK_STATE_SET_NON_BLOCKING,

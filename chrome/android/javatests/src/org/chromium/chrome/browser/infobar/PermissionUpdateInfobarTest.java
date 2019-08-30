@@ -19,7 +19,7 @@ import org.chromium.base.ThreadUtils;
 import org.chromium.base.test.util.CommandLineFlags;
 import org.chromium.chrome.browser.ChromeSwitches;
 import org.chromium.chrome.browser.preferences.website.ContentSetting;
-import org.chromium.chrome.browser.preferences.website.GeolocationInfo;
+import org.chromium.chrome.browser.preferences.website.PermissionInfo;
 import org.chromium.chrome.test.ChromeJUnit4ClassRunner;
 import org.chromium.chrome.test.ChromeTabbedActivityTestRule;
 import org.chromium.chrome.test.util.ChromeTabUtils;
@@ -30,7 +30,7 @@ import org.chromium.content.browser.test.util.CriteriaHelper;
 import org.chromium.content_public.browser.WebContents;
 import org.chromium.net.test.EmbeddedTestServer;
 import org.chromium.ui.base.AndroidPermissionDelegate;
-import org.chromium.ui.base.WindowAndroid.PermissionCallback;
+import org.chromium.ui.base.PermissionCallback;
 
 import java.util.ArrayList;
 import java.util.Arrays;
@@ -95,11 +95,12 @@ public class PermissionUpdateInfobarTest {
         container.addAnimationListener(mListener);
 
         final String locationUrl = mTestServer.getURL(GEOLOCATION_PAGE);
-        final GeolocationInfo geolocationSettings = ThreadUtils.runOnUiThreadBlockingNoException(
-                new Callable<GeolocationInfo>() {
+        final PermissionInfo geolocationSettings =
+                ThreadUtils.runOnUiThreadBlockingNoException(new Callable<PermissionInfo>() {
                     @Override
-                    public GeolocationInfo call() {
-                        return new GeolocationInfo(locationUrl, null, false);
+                    public PermissionInfo call() {
+                        return new PermissionInfo(
+                                PermissionInfo.Type.GEOLOCATION, locationUrl, null, false);
                     }
                 });
 
@@ -193,6 +194,12 @@ public class PermissionUpdateInfobarTest {
 
         @Override
         public void requestPermissions(String[] permissions, PermissionCallback callback) {
+        }
+
+        @Override
+        public boolean handlePermissionResult(
+                int requestCode, String[] permissions, int[] grantResults) {
+            return false;
         }
     }
 

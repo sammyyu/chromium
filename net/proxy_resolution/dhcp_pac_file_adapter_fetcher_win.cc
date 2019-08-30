@@ -47,14 +47,16 @@ DhcpPacFileAdapterFetcher::~DhcpPacFileAdapterFetcher() {
   Cancel();
 }
 
-void DhcpPacFileAdapterFetcher::Fetch(const std::string& adapter_name,
-                                      const CompletionCallback& callback) {
+void DhcpPacFileAdapterFetcher::Fetch(
+    const std::string& adapter_name,
+    CompletionOnceCallback callback,
+    const NetworkTrafficAnnotationTag traffic_annotation) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   DCHECK_EQ(state_, STATE_START);
   result_ = ERR_IO_PENDING;
   pac_script_ = base::string16();
   state_ = STATE_WAIT_DHCP;
-  callback_ = callback;
+  callback_ = std::move(callback);
 
   wait_timer_.Start(FROM_HERE, ImplGetTimeout(), this,
                     &DhcpPacFileAdapterFetcher::OnTimeout);
@@ -64,7 +66,7 @@ void DhcpPacFileAdapterFetcher::Fetch(const std::string& adapter_name,
       base::Bind(&DhcpPacFileAdapterFetcher::DhcpQuery::GetPacURLForAdapter,
                  dhcp_query.get(), adapter_name),
       base::Bind(&DhcpPacFileAdapterFetcher::OnDhcpQueryDone, AsWeakPtr(),
-                 dhcp_query));
+                 dhcp_query, traffic_annotation));
 }
 
 void DhcpPacFileAdapterFetcher::Cancel() {
@@ -131,7 +133,8 @@ std::string DhcpPacFileAdapterFetcher::DhcpQuery::ImplGetPacURLFromDhcp(
 DhcpPacFileAdapterFetcher::DhcpQuery::~DhcpQuery() {}
 
 void DhcpPacFileAdapterFetcher::OnDhcpQueryDone(
-    scoped_refptr<DhcpQuery> dhcp_query) {
+    scoped_refptr<DhcpQuery> dhcp_query,
+    const NetworkTrafficAnnotationTag traffic_annotation) {
   DCHECK_CALLED_ON_VALID_THREAD(thread_checker_);
   // Because we can't cancel the call to the Win32 API, we can expect
   // it to finish while we are in a few different states.  The expected
@@ -150,10 +153,11 @@ void DhcpPacFileAdapterFetcher::OnDhcpQueryDone(
     TransitionToFinish();
   } else {
     state_ = STATE_WAIT_URL;
-    script_fetcher_.reset(ImplCreateScriptFetcher());
+    script_fetcher_ = ImplCreateScriptFetcher();
     script_fetcher_->Fetch(pac_url_, &pac_script_,
                            base::Bind(&DhcpPacFileAdapterFetcher::OnFetcherDone,
-                                      base::Unretained(this)));
+                                      base::Unretained(this)),
+                           traffic_annotation);
   }
 }
 
@@ -178,20 +182,19 @@ void DhcpPacFileAdapterFetcher::OnFetcherDone(int result) {
 void DhcpPacFileAdapterFetcher::TransitionToFinish() {
   DCHECK(state_ == STATE_WAIT_DHCP || state_ == STATE_WAIT_URL);
   state_ = STATE_FINISH;
-  CompletionCallback callback = callback_;
-  callback_.Reset();
 
   // Be careful not to touch any member state after this, as the client
   // may delete us during this callback.
-  callback.Run(result_);
+  std::move(callback_).Run(result_);
 }
 
 DhcpPacFileAdapterFetcher::State DhcpPacFileAdapterFetcher::state() const {
   return state_;
 }
 
-PacFileFetcher* DhcpPacFileAdapterFetcher::ImplCreateScriptFetcher() {
-  return new PacFileFetcherImpl(url_request_context_);
+std::unique_ptr<PacFileFetcher>
+DhcpPacFileAdapterFetcher::ImplCreateScriptFetcher() {
+  return PacFileFetcherImpl::Create(url_request_context_);
 }
 
 DhcpPacFileAdapterFetcher::DhcpQuery*

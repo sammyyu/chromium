@@ -25,13 +25,9 @@ class ShellDelegateImpl : public ShellDelegate {
 
   // ShellDelegate:
   ::service_manager::Connector* GetShellConnector() const override;
-  bool IsRunningInForcedAppMode() const override;
   bool CanShowWindowForUser(aura::Window* window) const override;
-  bool IsForceMaximizeOnFirstRun() const override;
   void PreInit() override;
-  void PreShutdown() override;
   std::unique_ptr<keyboard::KeyboardUI> CreateKeyboardUI() override;
-  void OpenUrlFromArc(const GURL& url) override;
   NetworkingConfigDelegate* GetNetworkingConfigDelegate() override;
   std::unique_ptr<ScreenshotDelegate> CreateScreenshotDelegate() override;
   AccessibilityDelegate* CreateAccessibilityDelegate() override;

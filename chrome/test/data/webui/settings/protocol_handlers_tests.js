@@ -19,6 +19,7 @@ suite('ProtocolHandlers', function() {
       handlers: [{
         host: 'www.google.com',
         protocol: 'mailto',
+        protocol_name: 'email',
         spec: 'http://www.google.com/%s',
         is_default: true
       }],
@@ -29,12 +30,14 @@ suite('ProtocolHandlers', function() {
         {
           host: 'www.google1.com',
           protocol: 'webcal',
+          protocol_name: 'web calendar',
           spec: 'http://www.google1.com/%s',
           is_default: true
         },
         {
           host: 'www.google2.com',
           protocol: 'webcal',
+          protocol_name: 'web calendar',
           spec: 'http://www.google2.com/%s',
           is_default: false
         }
@@ -50,6 +53,7 @@ suite('ProtocolHandlers', function() {
   const ignoredProtocols = [{
     host: 'www.google.com',
     protocol: 'web+ignored',
+    protocol_name: 'web+ignored',
     spec: 'https://www.google.com/search?q=ignored+%s',
     is_default: false
   }];
@@ -76,18 +80,16 @@ suite('ProtocolHandlers', function() {
     PolymerTest.clearBody();
     testElement = document.createElement('protocol-handlers');
     document.body.appendChild(testElement);
-    return browserProxy.whenCalled('observeProtocolHandlers')
-        .then(function() {
-          Polymer.dom.flush();
-        });
+    return browserProxy.whenCalled('observeProtocolHandlers').then(function() {
+      Polymer.dom.flush();
+    });
   }
 
   test('empty list', function() {
-    return initPage()
-        .then(function() {
-          const listFrames = testElement.root.querySelectorAll('.list-frame');
-          assertEquals(0, listFrames.length);
-        });
+    return initPage().then(function() {
+      const listFrames = testElement.root.querySelectorAll('.list-frame');
+      assertEquals(0, listFrames.length);
+    });
   });
 
   test('non-empty list', function() {
@@ -103,9 +105,9 @@ suite('ProtocolHandlers', function() {
 
       // Check that item hosts are rendered correctly.
       const hosts = testElement.root.querySelectorAll('.protocol-host');
-      assertEquals('www.google.com', hosts[0].textContent);
-      assertEquals('www.google1.com', hosts[1].textContent);
-      assertEquals('www.google2.com', hosts[2].textContent);
+      assertEquals('www.google.com', hosts[0].textContent.trim());
+      assertEquals('www.google1.com', hosts[1].textContent.trim());
+      assertEquals('www.google2.com', hosts[2].textContent.trim());
 
       // Check that item default subtexts are rendered correctly.
       const defText = testElement.root.querySelectorAll('.protocol-default');
@@ -128,7 +130,7 @@ suite('ProtocolHandlers', function() {
 
       // Check that item hosts are rendered correctly.
       const hosts = testElement.root.querySelectorAll('.protocol-host');
-      assertEquals('www.google.com', hosts[0].textContent);
+      assertEquals('www.google.com', hosts[0].textContent.trim());
 
       // Check that item default subtexts are rendered correctly.
       const defText = testElement.root.querySelectorAll('.protocol-protocol');
@@ -148,16 +150,16 @@ suite('ProtocolHandlers', function() {
       const menuButtons = testElement.root.querySelectorAll(
           'paper-icon-button-light.icon-more-vert');
       assertEquals(3, menuButtons.length);
-      const dialog = testElement.$$('dialog[is=cr-action-menu]');
+      const dialog = testElement.$$('cr-action-menu');
       return Promise.all([[0, 0], [1, 0], [1, 1]].map((indices, menuIndex) => {
         const protocolIndex = indices[0];
         const handlerIndex = indices[1];
         // Test the button for the first protocol handler
         browserProxy.reset();
         assertFalse(dialog.open);
-        MockInteractions.tap(menuButtons[menuIndex].querySelector('button'));
+        menuButtons[menuIndex].querySelector('button').click();
         assertTrue(dialog.open);
-        MockInteractions.tap(testElement.$[button]);
+        testElement.$[button].click();
         assertFalse(dialog.open);
         return browserProxy.whenCalled(browserProxyHandler).then(args => {
           const protocol = args[0];
@@ -182,15 +184,14 @@ suite('ProtocolHandlers', function() {
     return testButtonFlow('defaultButton', 'setProtocolDefault').then(() => {
       const menuButtons = testElement.root.querySelectorAll(
           'paper-icon-button-light.icon-more-vert');
-      const closeMenu = () =>
-          testElement.$$('dialog[is=cr-action-menu]').close();
-      MockInteractions.tap(menuButtons[0].querySelector('button'));
+      const closeMenu = () => testElement.$$('cr-action-menu').close();
+      menuButtons[0].querySelector('button').click();
       assertTrue(testElement.$.defaultButton.hidden);
       closeMenu();
-      MockInteractions.tap(menuButtons[1].querySelector('button'));
+      menuButtons[1].querySelector('button').click();
       assertTrue(testElement.$.defaultButton.hidden);
       closeMenu();
-      MockInteractions.tap(menuButtons[2].querySelector('button'));
+      menuButtons[2].querySelector('button').click();
       assertFalse(testElement.$.defaultButton.hidden);
     });
   });
@@ -199,7 +200,7 @@ suite('ProtocolHandlers', function() {
     browserProxy.setIgnoredProtocols(ignoredProtocols);
     return initPage()
         .then(() => {
-          MockInteractions.tap(testElement.$$('#removeIgnoredButton'));
+          testElement.$$('#removeIgnoredButton').click();
           return browserProxy.whenCalled('removeProtocolHandler');
         })
         .then(args => {

@@ -20,9 +20,10 @@ const char kAppThemeColor[] = "app.theme_color";
 const char kAutomation[] = "automation";
 const char kBackgroundAllowJsAccess[] = "background.allow_js_access";
 const char kBackgroundPage[] = "background.page";
-const char kBackgroundPageLegacy[] = "background_page";
 const char kBackgroundPersistent[] = "background.persistent";
 const char kBackgroundScripts[] = "background.scripts";
+const char kBackgroundServiceWorkerScript[] =
+    "background.service_worker_script";
 const char kBluetooth[] = "bluetooth";
 const char kBookmarkUI[] = "bookmarks_ui";
 const char kBrowserAction[] = "browser_action";
@@ -134,6 +135,8 @@ const char kSandboxedPagesCSP[] = "sandbox.content_security_policy";
 const char kSettingsOverride[] = "chrome_settings_overrides";
 const char kSettingsOverrideAlternateUrls[] =
     "chrome_settings_overrides.search_provider.alternate_urls";
+const char kSharedModuleAllowlist[] = "allowlist";
+const char kSharedModuleLegacyAllowlist[] = "whitelist";
 const char kShiftKey[] = "shiftKey";
 const char kShortcutKey[] = "shortcutKey";
 const char kShortName[] = "short_name";
@@ -182,7 +185,6 @@ const char kWebview[] = "webview";
 const char kWebviewAccessibleResources[] = "accessible_resources";
 const char kWebviewName[] = "name";
 const char kWebviewPartitions[] = "partitions";
-const char kWhitelist[] = "whitelist";
 #if defined(OS_CHROMEOS)
 const char kActionHandlers[] = "action_handlers";
 const char kActionHandlerActionKey[] = "action";
@@ -295,8 +297,8 @@ const char kChromeVersionTooLow[] =
     "This extension requires * version * or greater.";
 const char kDeclarativeNetRequestPermissionNeeded[] =
     "The extension requires '*' permission for the '*' manifest key.";
-const char kDeclarativeNetRequestListNotPassed[] =
-    "Declarative Net Request: Ruleset must be a list.";
+const char kDeclarativeNetRequestJSONRulesFileReadError[] =
+    "Declarative Net Request: Error in reading JSON rules file.";
 const char kDefaultStateShouldNotBeSet[] =
     "The default_state key cannot be set for browser_action or page_action "
     "keys.";
@@ -322,6 +324,8 @@ const char kInvalidBackgroundScript[] =
     "Invalid value for 'background.scripts[*]'.";
 const char kInvalidBackgroundScripts[] =
     "Invalid value for 'background.scripts'.";
+const char kInvalidBackgroundServiceWorkerScript[] =
+    "Invalid value for 'background.service_worker_script'.";
 const char kInvalidBackgroundInHostedApp[] =
     "Invalid value for 'background_page'. Hosted apps must specify an "
     "absolute HTTPS URL for the background page.";
@@ -385,10 +389,9 @@ const char kInvalidExport[] =
     "Invalid value for 'export'.";
 const char kInvalidExportPermissions[] =
     "Permissions are not allowed for extensions that export resources.";
-const char kInvalidExportWhitelist[] =
-    "Invalid value for 'export.whitelist'.";
-const char kInvalidExportWhitelistString[] =
-    "Invalid value for 'export.whitelist[*]'.";
+const char kInvalidExportAllowlist[] = "Invalid value for 'export.allowlist'.";
+const char kInvalidExportAllowlistString[] =
+    "Invalid value for 'export.allowlist[*]'.";
 const char kInvalidFileAccessList[] =
     "Invalid value for 'file_access'.";
 const char kInvalidFileAccessValue[] =

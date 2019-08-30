@@ -11,6 +11,7 @@
 #include "base/metrics/field_trial.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/strings/sys_string_conversions.h"
+#import "components/prefs/ios/pref_observer_bridge.h"
 #include "components/prefs/pref_service.h"
 #import "components/signin/ios/browser/account_consistency_service.h"
 #include "ios/chrome/browser/browser_state/chrome_browser_state.h"
@@ -26,6 +27,7 @@
 #include "ios/chrome/browser/ui/prerender_final_status.h"
 #import "ios/web/public/navigation_item.h"
 #import "ios/web/public/navigation_manager.h"
+#import "ios/web/public/web_state/navigation_context.h"
 #import "ios/web/public/web_state/ui/crw_native_content.h"
 #include "ios/web/public/web_state/ui/crw_web_delegate.h"
 #import "ios/web/public/web_state/web_state.h"
@@ -89,7 +91,8 @@ bool IsPrerenderTabEvictionExperimentalGroup() {
 
 @interface PreloadController ()<CRWWebDelegate,
                                 CRWWebStateObserver,
-                                ManageAccountsDelegate>
+                                ManageAccountsDelegate,
+                                PrefObserverDelegate>
 @end
 
 @implementation PreloadController {
@@ -350,6 +353,11 @@ bool IsPrerenderTabEvictionExperimentalGroup() {
   return nil;
 }
 
+- (CGFloat)nativeContentHeaderHeightForWebState:(web::WebState*)webState {
+  return [delegate_ nativeContentHeaderHeightForPreloadController:self
+                                                         webState:webState];
+}
+
 #pragma mark -
 #pragma mark Private Methods
 
@@ -462,7 +470,19 @@ bool IsPrerenderTabEvictionExperimentalGroup() {
   }
 }
 
+- (BOOL)isAppLaunchingAllowedForWebState:(web::WebState*)webState {
+  DCHECK([self isWebStatePrerendered:webState]);
+  [self schedulePrerenderCancel];
+  return NO;
+}
+
 #pragma mark - CRWWebStateObserver
+
+- (void)webState:(web::WebState*)webState
+    didStartNavigation:(web::NavigationContext*)navigation {
+  Tab* tab = LegacyTabHelper::GetTabForWebState(webState_.get());
+  [tab notifyTabOfUrlMayStartLoading:navigation->GetUrl()];
+}
 
 - (void)webState:(web::WebState*)webState
     didLoadPageWithSuccess:(BOOL)loadSuccess {
@@ -488,36 +508,6 @@ bool IsPrerenderTabEvictionExperimentalGroup() {
   DCHECK(webState_);
   Tab* tab = LegacyTabHelper::GetTabForWebState(webState_.get());
   return [tab openExternalURL:URL sourceURL:sourceURL linkClicked:linkClicked];
-}
-
-- (BOOL)webController:(CRWWebController*)webController
-        shouldOpenURL:(const GURL&)URL
-      mainDocumentURL:(const GURL&)mainDocumentURL {
-  DCHECK(webState_);
-  Tab* tab = LegacyTabHelper::GetTabForWebState(webState_.get());
-  SEL selector = @selector(webController:shouldOpenURL:mainDocumentURL:);
-  if ([tab respondsToSelector:selector]) {
-    return [tab webController:webController
-                shouldOpenURL:URL
-              mainDocumentURL:mainDocumentURL];
-  }
-  return NO;
-}
-
-- (BOOL)webController:(CRWWebController*)webController
-    shouldOpenExternalURL:(const GURL&)URL {
-  [self schedulePrerenderCancel];
-  return NO;
-}
-
-- (CGFloat)headerHeightForWebController:(CRWWebController*)webController {
-  DCHECK(webState_);
-  Tab* tab = LegacyTabHelper::GetTabForWebState(webState_.get());
-  SEL selector = @selector(headerHeightForWebController:);
-  if ([tab respondsToSelector:selector]) {
-    return [tab headerHeightForWebController:webController];
-  }
-  return 0;
 }
 
 #pragma mark - ManageAccountsDelegate

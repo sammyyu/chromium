@@ -22,7 +22,9 @@ message TypeHint {
   optional bool has_valid_hint = 2;
 }
 
-message DeprecatedSourceInfo {}
+// A dummy message definition for deprecated fields. Never add any fields to
+// this message.
+message DeprecatedMessage {}
 
 // The additional info here is from the StatusController. They get sent when
 // the event SYNC_CYCLE_COMPLETED  is sent.
@@ -53,8 +55,8 @@ message SyncCycleCompletedEventInfo {
   // contains the |notifications_enabled| flag.
   optional GetUpdatesCallerInfo caller_info = 10;
 
-  // |source_info| was unused and marked deprecated in M66.
-  repeated DeprecatedSourceInfo source_info = 11 [deprecated = true];
+  // |source_info| was unused and marked deprecated in M67.
+  repeated DeprecatedMessage source_info = 11 [deprecated = true];
 
   optional SyncEnums.GetUpdatesOrigin get_updates_origin = 12;
 }

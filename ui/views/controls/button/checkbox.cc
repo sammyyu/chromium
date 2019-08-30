@@ -30,52 +30,13 @@
 
 namespace views {
 
-constexpr int kFocusRingThicknessDip = 2;
-
-// View used to paint the focus ring around the Checkbox icon.
-// The icon is painted separately.
-class IconFocusRing : public View {
- public:
-  explicit IconFocusRing(Checkbox* checkbox);
-  ~IconFocusRing() override = default;
-
- private:
-  // View:
-  void Layout() override;
-  void OnPaint(gfx::Canvas* canvas) override;
-
-  Checkbox* checkbox_;
-
-  DISALLOW_COPY_AND_ASSIGN(IconFocusRing);
-};
-
-IconFocusRing::IconFocusRing(Checkbox* checkbox) : checkbox_(checkbox) {
-  FocusRing::InitFocusRing(this);
-}
-
-void IconFocusRing::Layout() {
-  gfx::Rect focus_bounds = checkbox_->image()->bounds();
-  focus_bounds.Inset(-kFocusRingThicknessDip, -kFocusRingThicknessDip);
-  SetBoundsRect(focus_bounds);
-}
-
-void IconFocusRing::OnPaint(gfx::Canvas* canvas) {
-  cc::PaintFlags focus_flags;
-  focus_flags.setAntiAlias(true);
-  focus_flags.setColor(
-      SkColorSetA(GetNativeTheme()->GetSystemColor(
-                      ui::NativeTheme::kColorId_FocusedBorderColor),
-                  0x66));
-  focus_flags.setStyle(cc::PaintFlags::kStroke_Style);
-  focus_flags.setStrokeWidth(2);
-  checkbox_->PaintFocusRing(this, canvas, focus_flags);
-}
-
 // static
 const char Checkbox::kViewClassName[] = "Checkbox";
 
-Checkbox::Checkbox(const base::string16& label, bool force_md)
-    : LabelButton(NULL, label),
+Checkbox::Checkbox(const base::string16& label,
+                   ButtonListener* listener,
+                   bool force_md)
+    : LabelButton(listener, label),
       checked_(false),
       label_ax_id_(0),
       use_md_(force_md ||
@@ -88,9 +49,7 @@ Checkbox::Checkbox(const base::string16& label, bool force_md)
     set_request_focus_on_press(false);
     SetInkDropMode(InkDropMode::ON);
     set_has_ink_drop_action_on_click(true);
-    focus_ring_ = new IconFocusRing(this);
-    focus_ring_->SetVisible(false);
-    AddChildView(focus_ring_);
+    focus_ring_ = FocusRing::Install(this);
   } else {
     std::unique_ptr<LabelButtonBorder> button_border(new LabelButtonBorder());
     // Inset the trailing side by a couple pixels for the focus border.
@@ -160,7 +119,7 @@ void Checkbox::SetAssociatedLabel(View* labelling_view) {
   ui::AXNodeData node_data;
   labelling_view->GetAccessibleNodeData(&node_data);
   // TODO(aleventhal) automatically handle setting the name from the related
-  // label in view_accessibility and have it update the name if the text of the
+  // label in ViewAccessibility and have it update the name if the text of the
   // associated label changes.
   SetAccessibleName(
       node_data.GetString16Attribute(ax::mojom::StringAttribute::kName));
@@ -200,16 +159,12 @@ void Checkbox::OnFocus() {
   LabelButton::OnFocus();
   if (!UseMd())
     UpdateImage();
-  else
-    focus_ring_->SetVisible(true);
 }
 
 void Checkbox::OnBlur() {
   LabelButton::OnBlur();
   if (!UseMd())
     UpdateImage();
-  else
-    focus_ring_->SetVisible(false);
 }
 
 void Checkbox::OnNativeThemeChanged(const ui::NativeTheme* theme) {
@@ -262,6 +217,20 @@ std::unique_ptr<LabelButtonBorder> Checkbox::CreateDefaultBorder() const {
   return border;
 }
 
+void Checkbox::Layout() {
+  LabelButton::Layout();
+  if (focus_ring_ && !image()->bounds().IsEmpty())
+    focus_ring_->SetPath(GetFocusRingPath());
+}
+
+SkPath Checkbox::GetFocusRingPath() const {
+  SkPath path;
+  gfx::Rect bounds = image()->GetMirroredBounds();
+  bounds.Inset(1, 1);
+  path.addRect(RectToSkRect(bounds));
+  return path;
+}
+
 void Checkbox::SetCustomImage(bool checked,
                               bool focused,
                               ButtonState for_state,
@@ -270,14 +239,6 @@ void Checkbox::SetCustomImage(bool checked,
   const size_t focused_index = focused ? 1 : 0;
   images_[checked_index][focused_index][for_state] = image;
   UpdateImage();
-}
-
-void Checkbox::PaintFocusRing(View* view,
-                              gfx::Canvas* canvas,
-                              const cc::PaintFlags& flags) {
-  gfx::RectF bounds(view->GetLocalBounds());
-  bounds.Inset(kFocusRingThicknessDip, kFocusRingThicknessDip);
-  canvas->DrawRoundRect(bounds, kFocusRingThicknessDip, flags);
 }
 
 const gfx::VectorIcon& Checkbox::GetVectorIcon() const {

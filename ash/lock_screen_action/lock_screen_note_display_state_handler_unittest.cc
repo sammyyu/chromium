@@ -139,9 +139,7 @@ class LockScreenNoteDisplayStateHandlerTest : public AshTestBase {
     if (!timer->IsRunning())
       return false;
 
-    base::Closure task = timer->user_task();
-    timer->Stop();
-    task.Run();
+    timer->FireNow();
     return true;
   }
 
@@ -196,6 +194,7 @@ class LockScreenNoteDisplayStateHandlerTest : public AshTestBase {
         chromeos::PowerManagerClient::SwitchStates{
             chromeos::PowerManagerClient::LidState::OPEN,
             chromeos::PowerManagerClient::TabletMode::ON});
+    Shell::Get()->power_button_controller()->OnTabletModeStarted();
   }
 
   base::SimpleTestTickClock tick_clock_;

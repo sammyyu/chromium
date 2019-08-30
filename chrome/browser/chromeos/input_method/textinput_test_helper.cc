@@ -4,7 +4,6 @@
 
 #include "chrome/browser/chromeos/input_method/textinput_test_helper.h"
 #include "ash/shell.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
@@ -75,8 +74,7 @@ ui::TextInputClient* TextInputTestHelper::GetTextInputClient() const {
   return GetInputMethod()->GetTextInputClient();
 }
 
-void TextInputTestHelper::OnShowImeIfNeeded() {
-}
+void TextInputTestHelper::OnShowVirtualKeyboardIfEnabled() {}
 
 void TextInputTestHelper::OnInputMethodDestroyed(
     const ui::InputMethod* input_method) {

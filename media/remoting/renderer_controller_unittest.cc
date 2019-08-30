@@ -138,10 +138,7 @@ class RendererControllerTest : public ::testing::Test,
     decoded_frames_ = frame_rate * kDelayedStartDuration.InSeconds();
     clock_.Advance(kDelayedStartDuration);
     RunUntilIdle();
-    const base::Closure callback =
-        controller_->delayed_start_stability_timer_.user_task();
-    callback.Run();
-    controller_->delayed_start_stability_timer_.Stop();
+    controller_->delayed_start_stability_timer_.FireNow();
   }
 
   void ExpectInDelayedStart() const {
@@ -220,8 +217,6 @@ TEST_F(RendererControllerTest, NotStartForShortContent) {
                                         GetDefaultSinkMetadata(true));
   ExpectInLocalRendering();
 }
-
-#if !defined(OS_ANDROID)
 
 TEST_F(RendererControllerTest, ToggleRendererOnSinkCapabilities) {
   InitializeControllerAndBecomeDominant(DefaultMetadata(VideoCodec::kCodecVP8),
@@ -389,8 +384,6 @@ TEST_F(RendererControllerTest, PacingTooSlowly) {
   RunUntilIdle();
   ExpectInDelayedStart();  // Try start remoting again.
 }
-
-#endif  // OS_ANDROID
 
 TEST_F(RendererControllerTest, StartFailed) {
   controller_ = FakeRemoterFactory::CreateController(true);

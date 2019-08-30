@@ -43,7 +43,6 @@
           performance.measure("d", "d-start", "d-end");
       }
 
-
       function unbalancedPerformanceMeasure()
       {
           performance.mark("a-start");
@@ -54,6 +53,15 @@
           performance.measure("b", "b-start", "b-end");
       }
 
+      function unnestedPerformanceMeasure()
+      {
+          performance.mark("ab-start");
+          performance.mark("a-end");
+          doWork();
+          performance.mark("b-end");
+          performance.measure("a", "ab-start", "a-end");
+          performance.measure("b", "ab-start", "b-end");
+      }
 
       function parentMeasureIsOnTop()
       {
@@ -65,9 +73,9 @@
           doWork();
           performance.mark("endTime2");
 
+          performance.measure("durationTimeTotal", "startTime1", "endTime2");
           performance.measure("durationTime1", "startTime1", "endTime1");
           performance.measure("durationTime2", "startTime2", "endTime2");
-          performance.measure("durationTimeTotal", "startTime1", "endTime2");
       }
   `);
 
@@ -84,6 +92,10 @@
       performActions('unbalancedPerformanceMeasure()', next);
     },
 
+    function testUnnestedPerformanceMeasure(next) {
+      performActions('unnestedPerformanceMeasure()', next);
+    },
+
     function testParentMeasureIsOnTop(next) {
       performActions('parentMeasureIsOnTop()', next);
     }
@@ -91,14 +103,15 @@
 
   function dumpUserTimings() {
     var model = PerformanceTestRunner.timelineModel();
-    var asyncEvents = model.mainThreadAsyncEvents();
-
-    asyncEvents.forEach(function(eventGroup) {
-      eventGroup.forEach(function(event) {
-        if (event.hasCategory(TimelineModel.TimelineModel.Category.UserTiming))
-          TestRunner.addResult(event.name);
-      });
-    });
+    var asyncEvents;
+    for (const track of model.tracks()) {
+      if (track.type === TimelineModel.TimelineModel.TrackType.UserTiming) {
+        for (const event of track.asyncEvents) {
+          if (event.hasCategory(TimelineModel.TimelineModel.Category.UserTiming))
+            TestRunner.addResult(event.name);
+        }
+      }
+    }
   }
 
   async function performActions(actions, next) {

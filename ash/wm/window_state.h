@@ -114,6 +114,7 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   bool IsSnapped() const;
   bool IsPinned() const;
   bool IsTrustedPinned() const;
+  bool IsPip() const;
 
   // True if the window's state type is WindowStateType::MAXIMIZED,
   // WindowStateType::FULLSCREEN or WindowStateType::PINNED.
@@ -230,16 +231,6 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
     autohide_shelf_when_maximized_or_fullscreen_ = value;
   }
 
-  // If the minimum visibility is true, ash will try to keep a
-  // minimum amount of the window is always visible on the work area
-  // when shown.
-  // TODO(oshima): Consolidate this and GetWindowPositionManaged
-  // into single parameter to control the window placement.
-  bool minimum_visibility() const { return minimum_visibility_; }
-  void set_minimum_visibility(bool minimum_visibility) {
-    minimum_visibility_ = minimum_visibility;
-  }
-
   // Gets/Sets the bounds of the window before it was moved by the auto window
   // management. As long as it was not auto-managed, it will return NULL.
   const base::Optional<gfx::Rect> pre_auto_manage_window_bounds() {
@@ -349,6 +340,7 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   };
 
  private:
+  friend class BaseState;
   friend class DefaultState;
   friend class ash::wm::ClientControlledState;
   friend class ash::LockWindowState;
@@ -361,6 +353,8 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   explicit WindowState(aura::Window* window);
 
   WindowStateDelegate* delegate() { return delegate_.get(); }
+
+  bool HasMaximumWidthOrHeight() const;
 
   // Returns the window's current always_on_top state.
   bool GetAlwaysOnTop() const;
@@ -422,7 +416,6 @@ class ASH_EXPORT WindowState : public aura::WindowObserver {
   bool ignore_keyboard_bounds_change_ = false;
   bool hide_shelf_when_fullscreen_;
   bool autohide_shelf_when_maximized_or_fullscreen_;
-  bool minimum_visibility_;
   bool cached_always_on_top_;
   bool allow_set_bounds_direct_ = false;
 

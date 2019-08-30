@@ -8,6 +8,7 @@
 #include <stdint.h>
 
 #include <memory>
+#include <string>
 #include <vector>
 
 #include "base/callback_forward.h"
@@ -18,7 +19,7 @@
 #include "content/browser/accessibility/browser_accessibility_position.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/ax_event_notification_details.h"
-#include "third_party/WebKit/public/web/WebAXEnums.h"
+#include "third_party/blink/public/web/web_ax_enums.h"
 #include "ui/accessibility/ax_action_data.h"
 #include "ui/accessibility/ax_event_generator.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -203,6 +204,7 @@ class CONTENT_EXPORT BrowserAccessibilityManager : public ui::AXEventGenerator {
   // by sending a message to the renderer to perform the respective action
   // on the given node.  See the definition of |ui::AXActionData| for more
   // information about each of these actions.
+  void ClearAccessibilityFocus(const BrowserAccessibility& node);
   void Decrement(const BrowserAccessibility& node);
   void DoDefaultAction(const BrowserAccessibility& node);
   void GetImageData(const BrowserAccessibility& node,
@@ -214,10 +216,10 @@ class CONTENT_EXPORT BrowserAccessibilityManager : public ui::AXEventGenerator {
       const BrowserAccessibility& node, gfx::Rect subfocus);
   void ScrollToPoint(
       const BrowserAccessibility& node, gfx::Point point);
+  void SetAccessibilityFocus(const BrowserAccessibility& node);
   void SetFocus(const BrowserAccessibility& node);
   void SetScrollOffset(const BrowserAccessibility& node, gfx::Point offset);
-  void SetValue(
-      const BrowserAccessibility& node, const base::string16& value);
+  void SetValue(const BrowserAccessibility& node, const std::string& value);
   void SetSelection(
       ui::AXRange<
           BrowserAccessibilityPosition::AXPositionInstance::element_type>
@@ -232,8 +234,7 @@ class CONTENT_EXPORT BrowserAccessibilityManager : public ui::AXEventGenerator {
   void ActivateFindInPageResult(int request_id, int match_index);
 
   // Called when the renderer process has notified us of about tree changes.
-  virtual void OnAccessibilityEvents(
-      const std::vector<AXEventNotificationDetails>& details);
+  virtual void OnAccessibilityEvents(const AXEventNotificationDetails& details);
 
   // Called when the renderer process updates the location of accessibility
   // objects. Calls SendLocationChangeEvents(), which can be overridden.
@@ -341,7 +342,7 @@ class CONTENT_EXPORT BrowserAccessibilityManager : public ui::AXEventGenerator {
   // Accessors.
   ui::AXTreeIDRegistry::AXTreeID ax_tree_id() const { return ax_tree_id_; }
   float device_scale_factor() const { return device_scale_factor_; }
-  const ui::AXTree* ax_tree() const { return tree_.get(); }
+  ui::AXTree* ax_tree() const { return tree_.get(); }
 
   // AXTreeDelegate implementation.
   void OnNodeWillBeDeleted(ui::AXTree* tree, ui::AXNode* node) override;

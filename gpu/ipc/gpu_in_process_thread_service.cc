@@ -4,24 +4,21 @@
 
 #include "gpu/ipc/gpu_in_process_thread_service.h"
 
-#include "base/lazy_instance.h"
 #include "base/threading/thread_task_runner_handle.h"
 
 namespace gpu {
 
 GpuInProcessThreadService::GpuInProcessThreadService(
-    bool use_virtualized_gl_context,
     scoped_refptr<base::SingleThreadTaskRunner> task_runner,
     gpu::SyncPointManager* sync_point_manager,
     gpu::MailboxManager* mailbox_manager,
     scoped_refptr<gl::GLShareGroup> share_group,
     const GpuFeatureInfo& gpu_feature_info,
     const GpuPreferences& gpu_preferences)
-    : gpu::InProcessCommandBuffer::Service(gpu_preferences,
-                                           mailbox_manager,
-                                           share_group,
-                                           gpu_feature_info),
-      use_virtualized_gl_context_(use_virtualized_gl_context),
+    : gpu::CommandBufferTaskExecutor(gpu_preferences,
+                                     gpu_feature_info,
+                                     mailbox_manager,
+                                     share_group),
       task_runner_(task_runner),
       sync_point_manager_(sync_point_manager) {}
 
@@ -33,20 +30,13 @@ void GpuInProcessThreadService::ScheduleDelayedWork(base::OnceClosure task) {
   task_runner_->PostDelayedTask(FROM_HERE, std::move(task),
                                 base::TimeDelta::FromMilliseconds(2));
 }
-bool GpuInProcessThreadService::UseVirtualizedGLContexts() {
-  return use_virtualized_gl_context_;
+
+bool GpuInProcessThreadService::ForceVirtualizedGLContexts() {
+  return false;
 }
 
 gpu::SyncPointManager* GpuInProcessThreadService::sync_point_manager() {
   return sync_point_manager_;
-}
-
-void GpuInProcessThreadService::AddRef() const {
-  base::RefCountedThreadSafe<GpuInProcessThreadService>::AddRef();
-}
-
-void GpuInProcessThreadService::Release() const {
-  base::RefCountedThreadSafe<GpuInProcessThreadService>::Release();
 }
 
 bool GpuInProcessThreadService::BlockThreadOnWaitSyncToken() const {

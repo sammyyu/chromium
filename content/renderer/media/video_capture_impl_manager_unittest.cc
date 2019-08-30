@@ -7,7 +7,6 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/run_loop.h"
 #include "base/test/scoped_task_environment.h"
@@ -70,7 +69,9 @@ class MockVideoCaptureImpl : public VideoCaptureImpl,
 
   MOCK_METHOD1(Stop, void(int32_t));
 
-  void Pause(int device_id) { pause_callback_->OnPaused(session_id()); }
+  void Pause(int device_id) override {
+    pause_callback_->OnPaused(session_id());
+  }
 
   void Resume(int32_t device_id,
               int32_t session_id,
@@ -149,7 +150,8 @@ class VideoCaptureImplManagerTest : public ::testing::Test,
           .Times(kNumClients - 1)
           .RetiresOnSaturation();
     }
-    EXPECT_CALL(*this, OnStarted(_)).WillOnce(RunClosure(quit_closure))
+    EXPECT_CALL(*this, OnStarted(_))
+        .WillOnce(RunClosure(std::move(quit_closure)))
         .RetiresOnSaturation();
     std::array<base::Closure, kNumClients> stop_callbacks;
     media::VideoCaptureParams params;
@@ -170,7 +172,8 @@ class VideoCaptureImplManagerTest : public ::testing::Test,
     base::Closure quit_closure = BindToCurrentLoop(run_loop.QuitClosure());
     EXPECT_CALL(*this, OnStopped(_)).Times(kNumClients - 1)
         .RetiresOnSaturation();
-    EXPECT_CALL(*this, OnStopped(_)).WillOnce(RunClosure(quit_closure))
+    EXPECT_CALL(*this, OnStopped(_))
+        .WillOnce(RunClosure(std::move(quit_closure)))
         .RetiresOnSaturation();
     for (const auto& stop_callback : *stop_callbacks)
       stop_callback.Run();
@@ -252,7 +255,8 @@ TEST_F(VideoCaptureImplManagerTest, SuspendAndResumeSessions) {
     base::Closure quit_closure = BindToCurrentLoop(run_loop.QuitClosure());
     EXPECT_CALL(*this, OnPaused(0)).Times(1).RetiresOnSaturation();
     EXPECT_CALL(*this, OnPaused(1)).Times(1).RetiresOnSaturation();
-    EXPECT_CALL(*this, OnPaused(2)).WillOnce(RunClosure(quit_closure))
+    EXPECT_CALL(*this, OnPaused(2))
+        .WillOnce(RunClosure(std::move(quit_closure)))
         .RetiresOnSaturation();
     manager_->SuspendDevices(video_devices, true);
     run_loop.Run();
@@ -264,7 +268,8 @@ TEST_F(VideoCaptureImplManagerTest, SuspendAndResumeSessions) {
     base::Closure quit_closure = BindToCurrentLoop(run_loop.QuitClosure());
     EXPECT_CALL(*this, OnResumed(0)).Times(1).RetiresOnSaturation();
     EXPECT_CALL(*this, OnResumed(1)).Times(1).RetiresOnSaturation();
-    EXPECT_CALL(*this, OnResumed(2)).WillOnce(RunClosure(quit_closure))
+    EXPECT_CALL(*this, OnResumed(2))
+        .WillOnce(RunClosure(std::move(quit_closure)))
         .RetiresOnSaturation();
     manager_->SuspendDevices(video_devices, false);
     run_loop.Run();
@@ -275,7 +280,8 @@ TEST_F(VideoCaptureImplManagerTest, SuspendAndResumeSessions) {
   {
     base::RunLoop run_loop;
     base::Closure quit_closure = BindToCurrentLoop(run_loop.QuitClosure());
-    EXPECT_CALL(*this, OnPaused(0)).WillOnce(RunClosure(quit_closure))
+    EXPECT_CALL(*this, OnPaused(0))
+        .WillOnce(RunClosure(std::move(quit_closure)))
         .RetiresOnSaturation();
     manager_->Suspend(0);
     run_loop.Run();
@@ -287,7 +293,8 @@ TEST_F(VideoCaptureImplManagerTest, SuspendAndResumeSessions) {
     base::RunLoop run_loop;
     base::Closure quit_closure = BindToCurrentLoop(run_loop.QuitClosure());
     EXPECT_CALL(*this, OnPaused(1)).Times(1).RetiresOnSaturation();
-    EXPECT_CALL(*this, OnPaused(2)).WillOnce(RunClosure(quit_closure))
+    EXPECT_CALL(*this, OnPaused(2))
+        .WillOnce(RunClosure(std::move(quit_closure)))
         .RetiresOnSaturation();
     manager_->SuspendDevices(video_devices, true);
     run_loop.Run();
@@ -306,7 +313,8 @@ TEST_F(VideoCaptureImplManagerTest, SuspendAndResumeSessions) {
     base::Closure quit_closure = BindToCurrentLoop(run_loop.QuitClosure());
     EXPECT_CALL(*this, OnResumed(0)).Times(1).RetiresOnSaturation();
     EXPECT_CALL(*this, OnResumed(1)).Times(1).RetiresOnSaturation();
-    EXPECT_CALL(*this, OnResumed(2)).WillOnce(RunClosure(quit_closure))
+    EXPECT_CALL(*this, OnResumed(2))
+        .WillOnce(RunClosure(std::move(quit_closure)))
         .RetiresOnSaturation();
     manager_->SuspendDevices(video_devices, false);
     run_loop.Run();

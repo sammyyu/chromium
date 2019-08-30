@@ -7,7 +7,7 @@ const controlsFadeOutDurationMs = 300;
 // The timeout for the hide-after-no-mouse-movement behavior. Defined (and
 // should mirror) the value 'timeWithoutMouseMovementBeforeHidingMediaControls'
 // in MediaControls.cpp.
-const controlsMouseMovementTimeoutMs = 3000;
+const controlsMouseMovementTimeoutMs = 2500;
 
 function isControlVisible(control) {
     var style = getComputedStyle(control);
@@ -18,32 +18,39 @@ function isControlVisible(control) {
 
 function mediaControls(videoElement) {
   var controlID = '-webkit-media-controls';
-  var element = mediaControlsElement(window.internals.shadowRoot(videoElement).firstChild, controlID);
+  var element = mediaControlsElement(internals.shadowRoot(videoElement).firstChild, controlID);
   if (!element)
     throw 'Failed to find media controls';
   return element;
 }
 
+function buttonPanelElement(videoElement) {
+  var controlID = '-internal-media-controls-button-panel';
+  var element = mediaControlsElement(internals.shadowRoot(videoElement).firstChild, controlID);
+  if (!element)
+    throw 'Failed to find media controls button panel';
+  return element;
+}
+
 function castButton(videoElement) {
     var controlID = '-internal-media-controls-cast-button';
-    var button = mediaControlsElement(window.internals.shadowRoot(videoElement).firstChild, controlID);
+    var button = mediaControlsElement(internals.shadowRoot(videoElement).firstChild, controlID);
     if (!button)
         throw 'Failed to find cast button';
     return button;
 }
 
-function pictureInPictureButton(videoElement) {
-    var controlID = '-internal-media-controls-picture-in-picture-button';
-
-    var button = mediaControlsElement(window.internals.shadowRoot(videoElement).firstChild, controlID);
-    if (!button)
-        throw 'Failed to find picture in picture button';
-    return button;
+function currentTimeElement(videoElement) {
+  var controlID = '-webkit-media-controls-current-time-display';
+  var element = mediaControlsElement(internals.shadowRoot(videoElement).firstChild, controlID);
+  if (!element)
+    throw 'Failed to find current time element';
+  return element;
 }
 
 function downloadButton(videoElement) {
     var controlID = '-internal-media-controls-download-button';
-    var button = mediaControlsElement(window.internals.shadowRoot(videoElement).firstChild, controlID);
+    var button = mediaControlsElement(internals.shadowRoot(videoElement).firstChild, controlID);
     if (!button)
         throw 'Failed to find download button';
     return button;
@@ -51,7 +58,7 @@ function downloadButton(videoElement) {
 
 function fullscreenButton(videoElement) {
     var controlID = '-webkit-media-controls-fullscreen-button';
-    var button = mediaControlsElement(window.internals.shadowRoot(videoElement).firstChild, controlID);
+    var button = mediaControlsElement(internals.shadowRoot(videoElement).firstChild, controlID);
     if (!button)
         throw 'Failed to find fullscreen button';
     return button;
@@ -60,25 +67,33 @@ function fullscreenButton(videoElement) {
 function overlayCastButton(videoElement)
 {
     var controlID = '-internal-media-controls-overlay-cast-button';
-    var button = mediaControlsElement(window.internals.shadowRoot(videoElement).firstChild, controlID);
+    var button = mediaControlsElement(internals.shadowRoot(videoElement).firstChild, controlID);
     if (!button)
         throw 'Failed to find cast button';
     return button;
 }
 
+function overlayEnclosureElement(videoElement) {
+    var controlID = '-webkit-media-controls-overlay-enclosure';
+    var element = mediaControlsElement(internals.shadowRoot(videoElement).firstChild, controlID);
+    if (!element)
+        throw 'Failed to find overlay enclosure';
+    return element;
+}
+
 function overflowButton(videoElement)
 {
     var controlID = '-internal-media-controls-overflow-button';
-    var button = mediaControlsElement(window.internals.shadowRoot(videoElement).firstChild, controlID);
+    var button = mediaControlsElement(internals.shadowRoot(videoElement).firstChild, controlID);
     if (!button)
-        throw 'Failed to find cast button';
+        throw 'Failed to find overflow button';
     return button;
 }
 
 function textTrackMenu(video)
 {
   var controlID = '-internal-media-controls-text-track-list';
-  var element = mediaControlsElement(window.internals.shadowRoot(video).firstChild, controlID);
+  var element = mediaControlsElement(internals.shadowRoot(video).firstChild, controlID);
   if (!element)
     throw 'Failed to find the overflow menu';
   return element;
@@ -87,10 +102,37 @@ function textTrackMenu(video)
 function overflowMenu(video)
 {
   var controlID = '-internal-media-controls-overflow-menu-list';
-  var element = mediaControlsElement(window.internals.shadowRoot(video).firstChild, controlID);
+  var element = mediaControlsElement(internals.shadowRoot(video).firstChild, controlID);
   if (!element)
     throw 'Failed to find the overflow menu';
   return element;
+}
+
+function overflowItem(video, controlID) {
+  var element = mediaControlsElement(overflowMenu(video).firstChild, controlID);
+  if (!element)
+    throw 'Failed to find overflow item: ' + controlID;
+  return element;
+}
+
+function fullscreenOverflowItem(video) {
+  return overflowItem(video, '-webkit-media-controls-fullscreen-button');
+}
+
+function muteOverflowItem(video) {
+  return overflowItem(video, '-webkit-media-controls-mute-button');
+}
+
+function captionsOverflowItem(video) {
+  return overflowItem(video, '-webkit-media-controls-toggle-closed-captions-button');
+}
+
+function castOverflowItem(video) {
+  return overflowItem(video, '-internal-media-controls-cast-button');
+}
+
+function downloadsOverflowItem(video) {
+  return overflowItem(video, '-internal-media-controls-download-button');
 }
 
 function mediaControlsElement(first, id)
@@ -184,6 +226,28 @@ function textTrackDisplayElement(parentElement)
     return mediaControlsElement(containerElement.firstChild, "-webkit-media-text-track-display");
 }
 
+function isCastButtonEnabled(video) {
+  var button = castOverflowItem(video);
+  return !button.disabled && button.style.display != "none";
+}
+
+function isClosedCaptionsButtonEnabled(video) {
+  var button = captionsOverflowItem(video);
+  return !button.disabled && button.style.display != "none";
+}
+
+function isDownloadsButtonEnabled(video) {
+  var button = downloadsOverflowItem(video);
+  return !button.disabled && button.style.display != "none";
+}
+
+function isFullscreenButtonEnabled(video) {
+  var button = fullscreenButton(video);
+  var overflowButton = fullscreenOverflowItem(video);
+  return (!button.disabled && button.style.display != "none") ||
+      (!overflowButton.disabled && overflowButton.style.display != "none");
+}
+
 function isClosedCaptionsButtonVisible(currentMediaElement)
 {
     var captionsButtonElement = mediaControlsButton(currentMediaElement, "toggle-closed-captions-button");
@@ -216,64 +280,71 @@ function timelineElement(videoElement) {
 
 function timelineThumb(videoElement) {
     const timeline = timelineElement(videoElement);
-    const thumb = window.internals.shadowRoot(timeline).getElementById('thumb');
+    const thumb = internals.shadowRoot(timeline).getElementById('thumb');
     if (!thumb)
         throw 'Failed to find timeline thumb';
     return thumb;
 }
 
-function timelineThumbCurrentTime(videoElement) {
-    const controlID = '-internal-media-controls-thumb-current-time';
-    const timeline = timelineElement(videoElement);
-    const thumb = mediaControlsElement(window.internals.shadowRoot(timeline).firstChild, controlID);
-    if (!thumb)
-        throw 'Failed to find timeline current time';
-    return thumb;
-}
-
 function scrubbingMessageElement(videoElement) {
     var controlID = '-internal-media-controls-scrubbing-message';
-    var button = mediaControlsElement(window.internals.shadowRoot(videoElement).firstChild, controlID);
+    var button = mediaControlsElement(internals.shadowRoot(videoElement).firstChild, controlID);
     if (!button)
         throw 'Failed to find scrubbing message element';
     return button;
 }
 
-function clickAtCoordinates(x, y)
-{
+function clickAtCoordinates(x, y) {
     eventSender.mouseMoveTo(x, y);
     eventSender.mouseDown();
     eventSender.mouseUp();
 }
 
-function textTrackListItemAtIndex(video, index)
-{
+function openOverflowAndClickButton(video, button, callback) {
+  singleTapOnControl(overflowButton(video), function () {
+    singleTapOnControl(button, callback);
+  });
+}
+
+function clickDownloadButton(video, callback) {
+  openOverflowAndClickButton(video, downloadsOverflowItem(video), callback);
+}
+
+function textTrackListItemAtIndex(video, index) {
     var trackListItems = textTrackMenu(video).childNodes;
     for (var i = 0; i < trackListItems.length; i++) {
         var trackListItem = trackListItems[i];
-        if (trackListItem.firstChild.getAttribute("data-track-index") == index)
+        var innerCheckbox = textTrackListItemInnerCheckbox(trackListItem);
+        if (innerCheckbox && innerCheckbox.getAttribute("data-track-index") == index)
             return trackListItem;
     }
 }
 
-function clickCaptionButton(video)
-{
-    var captionsButtonCoordinates =
-            mediaControlsButtonCoordinates(video, "toggle-closed-captions-button");
-    clickAtCoordinates(captionsButtonCoordinates[0], captionsButtonCoordinates[1]);
+function textTrackListItemInnerCheckbox(trackListItem) {
+  const children = trackListItem.children;
+  for (var i = 0; i < children.length; i++) {
+    const child = children[i];
+    if (internals.shadowPseudoId(child) == "-internal-media-controls-text-track-list-item-input")
+      return child;
+  }
+  return null;
 }
 
-function clickTextTrackAtIndex(video, index)
-{
-    clickCaptionButton(video);
-    var trackListItemElement = textTrackListItemAtIndex(video, index);
-    var trackListItemCoordinates = elementCoordinates(trackListItemElement);
-    clickAtCoordinates(trackListItemCoordinates[0], trackListItemCoordinates[1]);
+function clickCaptionButton(video, callback) {
+  openOverflowAndClickButton(video, captionsOverflowItem(video), callback);
 }
 
-function turnClosedCaptionsOff(video)
+function clickTextTrackAtIndex(video, index, callback) {
+    clickCaptionButton(video, function () {
+      var track = textTrackListItemAtIndex(video, index);
+      track.scrollIntoView();
+      singleTapOnControl(track, callback);
+    });
+}
+
+function turnClosedCaptionsOff(video, callback)
 {
-    clickTextTrackAtIndex(video, -1);
+    clickTextTrackAtIndex(video, -1, callback);
 }
 
 function checkCaptionsVisible(video, captions)
@@ -304,10 +375,9 @@ function runAfterHideMediaControlsTimerFired(func, mediaElement)
     setTimeout(func, hideTimeoutMs);
 }
 
-function hasFullscreenButton(element)
-{
-    var size = mediaControlsButtonDimensions(element, "fullscreen-button");
-    return size[0] > 0 && size[1] > 0;
+function hasEnabledFullscreenButton(element) {
+  var button = fullscreenButton(element);
+  return !button.disabled && button.style.display != "none";
 }
 
 function isControlsPanelVisible(element)
@@ -330,7 +400,29 @@ function checkButtonNotHasClass(button, className) {
 }
 
 function checkControlsClassName(videoElement, className) {
-  assert_equals(window.internals.shadowRoot(videoElement).firstChild.className, className);
+  assert_equals(internals.shadowRoot(videoElement).firstChild.className, className);
+}
+
+function checkControlsHasClass(videoElement, className) {
+  assert_true(mediaControls(videoElement).classList.contains(className),
+      'Controls should have class: ' + className);
+}
+
+function checkControlsDoesNotHaveClass(videoElement, className) {
+  assert_false(mediaControls(videoElement).classList.contains(className),
+      'Controls should not have class: ' + className);
+}
+
+function checkControlsHasClasses(videoElement, classes) {
+  classes.forEach(className => {
+    checkControlsHasClass(videoElement, className);
+  });
+}
+
+function checkControlsDoesNotHaveClasses(videoElement, classes) {
+  classes.forEach(className => {
+    checkControlsDoesNotHaveClass(videoElement, className);
+  });
 }
 
 function mediaControlsOverlayPlayButton(videoElement) {
@@ -340,7 +432,7 @@ function mediaControlsOverlayPlayButton(videoElement) {
 function mediaControlsOverlayPlayButtonInternal(videoElement) {
   var controlID = '-internal-media-controls-overlay-play-button-internal';
   var element = mediaControlsElement(
-      window.internals.shadowRoot(
+      internals.shadowRoot(
           mediaControlsOverlayPlayButton(videoElement)).firstChild, controlID);
   if (!element)
     throw 'Failed to find the internal overlay play button';
@@ -348,16 +440,16 @@ function mediaControlsOverlayPlayButtonInternal(videoElement) {
 }
 
 function pictureInPictureInterstitial(videoElement) {
-  var controlID = '-internal-picture-in-picture-icon';
+  var controlID = '-internal-picture-in-picture-interstitial-message';
 
-  var interstitial = getElementByPseudoId(window.internals.shadowRoot(videoElement).firstChild, controlID);
+  var interstitial = getElementByPseudoId(internals.shadowRoot(videoElement).firstChild, controlID);
   if (!interstitial)
       throw 'Failed to find picture in picture interstitial';
   return interstitial;
 }
 
 function checkPictureInPictureInterstitialDoesNotExist(videoElement) {
-  var controlID = '-internal-picture-in-picture-icon';
+  var controlID = '-internal-picture-in-picture-interstitial-message';
 
   var interstitial = getElementByPseudoId(internals.shadowRoot(videoElement), controlID);
   if (interstitial)
@@ -365,8 +457,7 @@ function checkPictureInPictureInterstitialDoesNotExist(videoElement) {
 }
 
 function doubleTapAtCoordinates(x, y, timeout, callback) {
-  if (timeout == undefined)
-    timeout = 100;
+  timeout = timeout == undefined ? 100 : timeout;
 
   chrome.gpuBenchmarking.pointerActionSequence([
     {
@@ -394,6 +485,13 @@ function singleTapAtCoordinates(xPos, yPos, callback) {
   ], callback);
 }
 
+function singleTapOnControl(control, callback) {
+  const coordinates = elementCoordinates(control);
+  singleTapAtCoordinates(coordinates[0], coordinates[1], callback);
+}
+
+// This function does not work on Mac due to crbug.com/613672. When using this
+// function, add an entry into TestExpectations to skip on Mac.
 function singleTouchAtCoordinates(xPos, yPos, callback) {
   chrome.gpuBenchmarking.pointerActionSequence([
     {
@@ -406,26 +504,26 @@ function singleTouchAtCoordinates(xPos, yPos, callback) {
   ], callback);
 }
 
-function enableDoubleTapToJumpForTest(t) {
-  var doubleTapToJumpOnVideoEnabledValue =
-      internals.runtimeFlags.doubleTapToJumpOnVideoEnabled;
-  internals.runtimeFlags.doubleTapToJumpOnVideoEnabled = true;
+function doubleTouchAtCoordinates(x, y, timeout, callback) {
+  timeout = timeout == undefined ? 100 : timeout;
 
-  t.add_cleanup(() => {
-    internals.runtimeFlags.doubleTapToJumpOnVideoEnabled =
-        doubleTapToJumpOnVideoEnabledValue;
-  });
+  chrome.gpuBenchmarking.pointerActionSequence([
+    {
+      source: 'touch',
+      actions: [
+        { name: 'pointerDown', x: x, y: y },
+        { name: 'pointerUp' },
+        { name: 'pause', duration: timeout / 1000 },
+        { name: 'pointerDown', x: x, y: y },
+        { name: 'pointerUp' }
+      ]
+    }
+  ], callback);
 }
 
-function enablePictureInPictureForTest(t) {
-  var pictureInPictureEnabledValue =
-      internals.runtimeFlags.pictureInPictureEnabled;
-  internals.runtimeFlags.pictureInPictureEnabled = true;
-
-  t.add_cleanup(() => {
-    internals.runtimeFlags.pictureInPictureEnabled =
-        pictureInPictureEnabledValue;
-  });
+function singleTouchOnControl(control, callback) {
+  const coordinates = elementCoordinates(control);
+  singleTouchAtCoordinates(coordinates[0], coordinates[1], callback);
 }
 
 function traverseNextNode(node, stayWithin) {
@@ -459,4 +557,20 @@ function getElementByPseudoId(root, pseudoId) {
         node = traverseNextNode(node, root);
     }
     return null;
+}
+
+function enableTestMode(video) {
+  if (window.internals)
+    internals.setMediaControlsTestMode(video, true);
+}
+
+function enableImmersiveMode(t) {
+  if (!window.internals)
+    return;
+
+  const oldImmersive = internals.settings.immersiveModeEnabled;
+  internals.settings.setImmersiveModeEnabled(true);
+  t.add_cleanup(() => {
+    internals.settings.setImmersiveModeEnabled(oldImmersive);
+  });
 }

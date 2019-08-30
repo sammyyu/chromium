@@ -6,8 +6,11 @@
 #define ASH_WM_OVERVIEW_OVERVIEW_UTILS_H_
 
 #include "ash/ash_export.h"
+#include "ash/wm/overview/overview_animation_type.h"
 #include "third_party/skia/include/core/SkColor.h"
 #include "ui/compositor/layer_type.h"
+
+#include <memory>
 
 namespace aura {
 class Window;
@@ -26,20 +29,14 @@ namespace ash {
 // Returns true if |window| can cover available workspace.
 bool CanCoverAvailableWorkspace(aura::Window* window);
 
-// Returns true if overview mode should use the new animations.
-// TODO(wutao): Remove this function when the old overview mode animations
-// become obsolete. See https://crbug.com/801465.
-bool IsNewOverviewAnimationsEnabled();
+bool IsOverviewSwipeToCloseEnabled();
 
-// Returns true if overview mode should use the new ui.
-// TODO(sammiequon): Remove this function when the old overview mode ui becomes
-// obsolete. See https://crbug.com/782320.
-bool IsNewOverviewUi();
-
-// Resets the stored value so that the next IsNewOverviewAnimations and
-// IsNewOverviewUi call will query the command line arguments again.
-ASH_EXPORT void ResetCachedOverviewAnimationsValueForTesting();
-ASH_EXPORT void ResetCachedOverviewUiValueForTesting();
+// Fades |widget| to opacity zero with animation settings depending on
+// |animation_type|. Used by several classes which need to be destroyed on
+// exiting overview, but have some widgets which need to continue animating.
+// |widget| is destroyed after finishing animation.
+void FadeOutWidgetOnExit(std::unique_ptr<views::Widget> widget,
+                         OverviewAnimationType animation_type);
 
 // Creates and returns a background translucent widget parented in
 // |root_window|'s default container and having |background_color|.

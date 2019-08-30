@@ -46,10 +46,12 @@ class ChromeVirtualKeyboardDelegate : public VirtualKeyboardDelegate {
   bool ShowLanguageSettings() override;
   bool IsLanguageSettingsEnabled() override;
   bool SetVirtualKeyboardMode(int mode_enum,
+                              base::Optional<gfx::Rect> target_bounds,
                               OnSetModeCallback on_set_mode_callback) override;
   bool SetDraggableArea(
       const api::virtual_keyboard_private::Bounds& rect) override;
   bool SetRequestedKeyboardState(int state_enum) override;
+  bool SetOccludedBounds(const std::vector<gfx::Rect>& bounds) override;
 
   api::virtual_keyboard::FeatureRestrictions RestrictFeatures(
       const api::virtual_keyboard::RestrictFeatures::Params& params) override;

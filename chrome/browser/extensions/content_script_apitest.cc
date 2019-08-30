@@ -7,7 +7,6 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
 #include "base/strings/stringprintf.h"
 #include "base/strings/utf_string_conversions.h"
@@ -21,14 +20,17 @@
 #include "chrome/browser/search/search.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/javascript_dialogs/javascript_dialog_tab_helper.h"
+#include "chrome/browser/ui/search/local_ntp_test_utils.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
 #include "chrome/common/chrome_switches.h"
+#include "chrome/common/webui_url_constants.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "content/public/browser/javascript_dialog_manager.h"
 #include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/web_contents.h"
 #include "content/public/browser/web_contents_delegate.h"
 #include "content/public/test/browser_test_utils.h"
+#include "extensions/browser/browsertest_util.h"
 #include "extensions/browser/notification_types.h"
 #include "extensions/common/extension.h"
 #include "extensions/common/extension_features.h"
@@ -235,6 +237,13 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ContentScriptOtherExtensions) {
       << message_;
 }
 
+// https://crbug.com/825111 -- content scripts may fetch() a blob URL from their
+// chrome-extension:// origin.
+IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ContentScriptBlobFetch) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+  ASSERT_TRUE(RunExtensionTest("content_scripts/blob_fetch")) << message_;
+}
+
 class ContentScriptCssInjectionTest : public ExtensionApiTest {
  protected:
   // TODO(rdevlin.cronin): Make a testing switch that looks like FeatureSwitch,
@@ -395,7 +404,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTestWithManagementPolicy,
   // Set enterprise policy to block injection to policy specified host.
   {
     ExtensionManagementPolicyUpdater pref(&policy_provider_);
-    pref.AddRuntimeBlockedHost("*", "*://example.com");
+    pref.AddPolicyBlockedHost("*", "*://example.com");
   }
   ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("content_scripts/policy")) << message_;
@@ -407,7 +416,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTestWithManagementPolicy,
   // Set enterprise policy to block injection to policy specified hosts.
   {
     ExtensionManagementPolicyUpdater pref(&policy_provider_);
-    pref.AddRuntimeBlockedHost("*", "*://example.*");
+    pref.AddPolicyBlockedHost("*", "*://example.*");
   }
   ASSERT_TRUE(StartEmbeddedTestServer());
   ASSERT_TRUE(RunExtensionTest("content_scripts/policy")) << message_;
@@ -434,7 +443,7 @@ IN_PROC_BROWSER_TEST_F(ExtensionApiTestWithManagementPolicy,
   // specified host.
   {
     ExtensionManagementPolicyUpdater pref(&policy_provider_);
-    pref.AddRuntimeBlockedHost(extension_id, "*://example.com");
+    pref.AddPolicyBlockedHost(extension_id, "*://example.com");
   }
   // Some policy updating operations are performed asynchronuosly. Wait for them
   // to complete before installing extension.
@@ -633,7 +642,7 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest,
                                                        false);
   LoadExtension(data_dir.AppendASCII("script_a_com"));
   LoadExtension(data_dir.AppendASCII("background_page_iframe"));
-  iframe_loaded_listener.WaitUntilSatisfied();
+  EXPECT_TRUE(iframe_loaded_listener.WaitUntilSatisfied());
   EXPECT_FALSE(content_script_listener.was_satisfied());
 }
 
@@ -673,6 +682,181 @@ IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, CannotScriptTheNewTabPage) {
   ui_test_utils::NavigateToURL(browser(), unprotected_url);
   EXPECT_TRUE(
       did_script_inject(browser()->tab_strip_model()->GetActiveWebContents()));
+}
+
+IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ContentScriptSameSiteCookies) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+  const Extension* extension = LoadExtension(
+      test_data_dir_.AppendASCII("content_scripts/request_cookies"));
+  ASSERT_TRUE(extension);
+  GURL url = embedded_test_server()->GetURL("a.com", "/extensions/body1.html");
+  ResultCatcher catcher;
+  constexpr char kScript[] =
+      R"(chrome.tabs.create({url: '%s'}, () => {
+           let message = 'success';
+           if (chrome.runtime.lastError)
+             message = chrome.runtime.lastError.message;
+           domAutomationController.send(message);
+         });)";
+  std::string result = browsertest_util::ExecuteScriptInBackgroundPage(
+      profile(), extension->id(),
+      base::StringPrintf(kScript, url.spec().c_str()));
+
+  EXPECT_EQ("success", result);
+  EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
+}
+
+IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ExecuteScriptFileSameSiteCookies) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+  const Extension* extension = LoadExtension(
+      test_data_dir_.AppendASCII("content_scripts/request_cookies"));
+  ASSERT_TRUE(extension);
+  GURL url = embedded_test_server()->GetURL("b.com", "/extensions/body1.html");
+  ResultCatcher catcher;
+  constexpr char kScript[] =
+      R"(chrome.tabs.create({url: '%s'}, (tab) => {
+           if (chrome.runtime.lastError) {
+             domAutomationController.send(chrome.runtime.lastError.message);
+             return;
+           }
+           chrome.tabs.executeScript(tab.id, {file: 'cookies.js'}, () => {
+             let message = 'success';
+             if (chrome.runtime.lastError)
+               message = chrome.runtime.lastError.message;
+             domAutomationController.send(message);
+           });
+         });)";
+  std::string result = browsertest_util::ExecuteScriptInBackgroundPage(
+      profile(), extension->id(),
+      base::StringPrintf(kScript, url.spec().c_str()));
+
+  EXPECT_EQ("success", result);
+  EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
+}
+
+IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ExecuteScriptCodeSameSiteCookies) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+  const Extension* extension = LoadExtension(
+      test_data_dir_.AppendASCII("content_scripts/request_cookies"));
+  ASSERT_TRUE(extension);
+  GURL url = embedded_test_server()->GetURL("b.com", "/extensions/body1.html");
+  ResultCatcher catcher;
+  constexpr char kScript[] =
+      R"(chrome.tabs.create({url: '%s'}, (tab) => {
+           if (chrome.runtime.lastError) {
+             domAutomationController.send(chrome.runtime.lastError.message);
+             return;
+           }
+           fetch(chrome.runtime.getURL('cookies.js')).then((response) => {
+             return response.text();
+           }).then((text) => {
+             chrome.tabs.executeScript(tab.id, {code: text}, () => {
+               let message = 'success';
+               if (chrome.runtime.lastError)
+                 message = chrome.runtime.lastError.message;
+               domAutomationController.send(message);
+             });
+           }).catch((e) => {
+             domAutomationController.send(e);
+           });
+         });)";
+  std::string result = browsertest_util::ExecuteScriptInBackgroundPage(
+      profile(), extension->id(),
+      base::StringPrintf(kScript, url.spec().c_str()));
+
+  EXPECT_EQ("success", result);
+  EXPECT_TRUE(catcher.GetNextResult()) << catcher.message();
+}
+
+// Tests that extension content scripts can execute (including asynchronously
+// through timeouts) in pages with Content-Security-Policy: sandbox.
+// See https://crbug.com/811528.
+IN_PROC_BROWSER_TEST_F(ContentScriptApiTest, ExecuteScriptBypassingSandbox) {
+  ASSERT_TRUE(StartEmbeddedTestServer());
+
+  TestExtensionDir test_dir;
+  test_dir.WriteManifest(
+      R"({
+           "name": "Bypass Sandbox CSP",
+           "description": "Extensions should bypass a page's CSP sandbox.",
+           "version": "0.1",
+           "manifest_version": 2,
+           "content_scripts": [{
+             "matches": ["*://example.com:*/*"],
+             "js": ["script.js"]
+           }]
+         })");
+  test_dir.WriteFile(
+      FILE_PATH_LITERAL("script.js"),
+      R"(window.setTimeout(() => { chrome.test.notifyPass(); }, 10);)");
+
+  ResultCatcher catcher;
+  const Extension* extension = LoadExtension(test_dir.UnpackedPath());
+  ASSERT_TRUE(extension);
+
+  GURL url = embedded_test_server()->GetURL(
+      "example.com", "/extensions/page_with_sandbox_csp.html");
+  ui_test_utils::NavigateToURL(browser(), url);
+  ASSERT_TRUE(catcher.GetNextResult()) << catcher.message();
+}
+
+// Test fixture which sets a custom NTP Page.
+// TODO(karandeepb): Similar logic to set up a custom NTP is used elsewhere as
+// well. Abstract this away into a reusable test fixture class.
+class NTPInterceptionTest : public ExtensionApiTest {
+ public:
+  NTPInterceptionTest()
+      : https_test_server_(net::EmbeddedTestServer::TYPE_HTTPS) {}
+
+  // ExtensionApiTest override:
+  void SetUpOnMainThread() override {
+    ExtensionApiTest::SetUpOnMainThread();
+    test_data_dir_ = test_data_dir_.AppendASCII("ntp_content_script");
+    https_test_server_.ServeFilesFromDirectory(test_data_dir_);
+    ASSERT_TRUE(https_test_server_.Start());
+
+    GURL ntp_url = https_test_server_.GetURL("/fake_ntp.html");
+    local_ntp_test_utils::SetUserSelectedDefaultSearchProvider(
+        profile(), https_test_server_.base_url().spec(), ntp_url.spec());
+  }
+
+  const net::EmbeddedTestServer* https_test_server() const {
+    return &https_test_server_;
+  }
+
+ private:
+  net::EmbeddedTestServer https_test_server_;
+  DISALLOW_COPY_AND_ASSIGN(NTPInterceptionTest);
+};
+
+// Ensure extensions can't inject a content script into the New Tab page.
+// Regression test for crbug.com/844428.
+IN_PROC_BROWSER_TEST_F(NTPInterceptionTest, ContentScript) {
+  // Load an extension which tries to inject a script into every frame.
+  ExtensionTestMessageListener listener("ready", false /*will_reply*/);
+  const Extension* extension = LoadExtension(test_data_dir_);
+  ASSERT_TRUE(extension);
+  ASSERT_TRUE(listener.WaitUntilSatisfied());
+
+  // Create a corresponding off the record profile for the current profile. This
+  // is necessary to reproduce crbug.com/844428, which occurs in part due to
+  // incorrect handling of multiple profiles by the NTP code.
+  Browser* incognito_browser = CreateIncognitoBrowser(profile());
+  ASSERT_TRUE(incognito_browser);
+
+  // Ensure that the extension isn't able to inject the script into the New Tab
+  // Page.
+  ui_test_utils::NavigateToURL(browser(), GURL(chrome::kChromeUINewTabURL));
+  content::WebContents* web_contents =
+      browser()->tab_strip_model()->GetActiveWebContents();
+  ASSERT_TRUE(search::IsInstantNTP(web_contents));
+
+  bool script_injected_in_ntp = false;
+  ASSERT_TRUE(ExecuteScriptAndExtractBool(
+      web_contents,
+      "window.domAutomationController.send(document.title !== 'Fake NTP');",
+      &script_injected_in_ntp));
+  EXPECT_FALSE(script_injected_in_ntp);
 }
 
 }  // namespace extensions

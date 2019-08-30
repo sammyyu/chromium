@@ -153,8 +153,11 @@ Value::Value(const char16* in_string16) : Value(StringPiece16(in_string16)) {}
 
 Value::Value(StringPiece16 in_string16) : Value(UTF16ToUTF8(in_string16)) {}
 
-Value::Value(const BlobStorage& in_blob)
-    : type_(Type::BINARY), binary_value_(in_blob) {}
+Value::Value(const std::vector<char>& in_blob)
+    : type_(Type::BINARY), binary_value_(in_blob.begin(), in_blob.end()) {}
+
+Value::Value(base::span<const uint8_t> in_blob)
+    : type_(Type::BINARY), binary_value_(in_blob.begin(), in_blob.end()) {}
 
 Value::Value(BlobStorage&& in_blob) noexcept
     : type_(Type::BINARY), binary_value_(std::move(in_blob)) {}
@@ -430,6 +433,16 @@ Value::const_dict_iterator_proxy Value::DictItems() const {
   return const_dict_iterator_proxy(&dict_);
 }
 
+size_t Value::DictSize() const {
+  CHECK(is_dict());
+  return dict_.size();
+}
+
+bool Value::DictEmpty() const {
+  CHECK(is_dict());
+  return dict_.empty();
+}
+
 bool Value::GetAsBoolean(bool* out_value) const {
   if (out_value && is_bool()) {
     *out_value = bool_value_;
@@ -554,8 +567,7 @@ bool operator==(const Value& lhs, const Value& rhs) {
         return false;
       return std::equal(std::begin(lhs.dict_), std::end(lhs.dict_),
                         std::begin(rhs.dict_),
-                        [](const Value::DictStorage::value_type& u,
-                           const Value::DictStorage::value_type& v) {
+                        [](const auto& u, const auto& v) {
                           return std::tie(u.first, *u.second) ==
                                  std::tie(v.first, *v.second);
                         });

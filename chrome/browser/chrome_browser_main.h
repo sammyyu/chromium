@@ -6,7 +6,6 @@
 #define CHROME_BROWSER_CHROME_BROWSER_MAIN_H_
 
 #include <memory>
-#include <vector>
 
 #include "base/macros.h"
 #include "build/build_config.h"
@@ -18,6 +17,7 @@
 #include "chrome/common/thread_profiler.h"
 #include "content/public/browser/browser_main_parts.h"
 #include "content/public/common/main_function_params.h"
+#include "ui/base/resource/data_pack.h"
 
 class BrowserProcessImpl;
 class ChromeBrowserMainExtraParts;
@@ -27,7 +27,6 @@ class Profile;
 class StartupBrowserCreator;
 class StartupTimeBomb;
 class ShutdownWatcherHelper;
-class ThreeDAPIObserver;
 class WebUsbDetector;
 
 namespace base {
@@ -52,13 +51,16 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
   // Add additional ChromeBrowserMainExtraParts.
   virtual void AddParts(ChromeBrowserMainExtraParts* parts);
 
- protected:
 #if !defined(OS_ANDROID)
-  class DeferringTaskRunner;
+  // Returns the RunLoop that would be run by MainMessageLoopRun. This is used
+  // by InProcessBrowserTests to allow them to run until the BrowserProcess is
+  // ready for the browser to exit.
+  static std::unique_ptr<base::RunLoop> TakeRunLoopForTest();
 #endif
 
-  explicit ChromeBrowserMainParts(
-      const content::MainFunctionParams& parameters);
+ protected:
+  explicit ChromeBrowserMainParts(const content::MainFunctionParams& parameters,
+                                  std::unique_ptr<ui::DataPack> data_pack);
 
   // content::BrowserMainParts overrides.
   bool ShouldContentCreateFeatureList() override;
@@ -103,6 +105,8 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
   Profile* profile() { return profile_; }
 
  private:
+  friend class ChromeBrowserMainPartsTestApi;
+
   // Sets up the field trials and related initialization. Call only after
   // about:flags have been converted to switches.
   void SetupFieldTrials();
@@ -147,6 +151,9 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
   const base::CommandLine& parsed_command_line_;
   int result_code_;
 
+  ChromeBrowserFieldTrials browser_field_trials_;
+
+#if !defined(OS_ANDROID)
   // Create StartupTimeBomb object for watching jank during startup.
   std::unique_ptr<StartupTimeBomb> startup_watcher_;
 
@@ -155,11 +162,8 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
   // it is destroyed last.
   std::unique_ptr<ShutdownWatcherHelper> shutdown_watcher_;
 
-  ChromeBrowserFieldTrials browser_field_trials_;
-
-#if !defined(OS_ANDROID)
   std::unique_ptr<WebUsbDetector> web_usb_detector_;
-#endif
+#endif  // !defined(OS_ANDROID)
 
   // Vector of additional ChromeBrowserMainExtraParts.
   // Parts are deleted in the inverse order they are added.
@@ -167,6 +171,11 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
 
   // A profiler that periodically samples stack traces on the UI thread.
   std::unique_ptr<ThreadProfiler> ui_thread_profiler_;
+
+  // Whether PerformPreMainMessageLoopStartup() is called on VariationsService.
+  // Initialized to true if |MainFunctionParams::ui_task| is null (meaning not
+  // running browser_tests), but may be forced to true for tests.
+  bool should_call_pre_main_loop_start_startup_on_variations_service_;
 
   // Members initialized after / released before main_message_loop_ ------------
 
@@ -192,19 +201,15 @@ class ChromeBrowserMainParts : public content::BrowserMainParts {
 
   Profile* profile_;
   bool run_message_loop_;
-  std::unique_ptr<ThreeDAPIObserver> three_d_observer_;
 
   // Initialized in |SetupFieldTrials()|.
   scoped_refptr<FieldTrialSynchronizer> field_trial_synchronizer_;
 
   base::FilePath user_data_dir_;
 
-#if !defined(OS_ANDROID)
-  // This TaskRunner is created and the constructor and destroyed in
-  // PreCreateThreadsImpl(). It's used to queue any tasks scheduled before the
-  // real task scheduler has been created.
-  scoped_refptr<DeferringTaskRunner> initial_task_runner_;
-#endif
+  // This is used to store the ui data pack. The data pack is moved when
+  // resource bundle gets created.
+  std::unique_ptr<ui::DataPack> service_manifest_data_pack_;
 
   DISALLOW_COPY_AND_ASSIGN(ChromeBrowserMainParts);
 };

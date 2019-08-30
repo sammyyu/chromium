@@ -8,6 +8,32 @@
 
 
 /**
+ * Enum for classnames.
+ * @enum {string}
+ * @const
+ */
+const CLASSES = {
+  FAILED_FAVICON: 'failed-favicon',  // Applied when the favicon fails to load.
+  // Material Design classes.
+  MATERIAL_DESIGN: 'md',  // Applies Material Design styles to the page.
+  MD_EMPTY_TILE: 'md-empty-tile',
+  MD_FALLBACK_BACKGROUND: 'md-fallback-background',
+  MD_FALLBACK_LETTER: 'md-fallback-letter',
+  MD_FAVICON: 'md-favicon',
+  MD_LINK: 'md-link',
+  MD_ICON: 'md-icon',
+  MD_ICON_BACKGROUND: 'md-icon-background',
+  MD_ADD_ICON: 'md-add-icon',
+  MD_ADD_BACKGROUND: 'md-add-background',
+  MD_MENU: 'md-menu',
+  MD_TILE: 'md-tile',
+  MD_TILE_INNER: 'md-tile-inner',
+  MD_TITLE: 'md-title',
+  MD_TITLE_CONTAINER: 'md-title-container',
+};
+
+
+/**
  * The different types of events that are logged from the NTP.  This enum is
  * used to transfer information from the NTP JavaScript to the renderer and is
  * not used as a UMA enum histogram's logged value.
@@ -43,11 +69,18 @@ var TileVisualType = {
 
 
 /**
- * Total number of tiles to show at any time. If the host page doesn't send
- * enough tiles, we fill them blank.
+ * Maximum number of MostVisited tiles to show at any time. If the host page
+ * doesn't send enough tiles, we fill them blank.
  * @const {number}
  */
-var NUMBER_OF_TILES = 8;
+var MAX_NUM_TILES = 8;
+
+
+/**
+ * Maximum number of custom link tiles to show at any time.
+ * @const {number}
+ */
+var MAX_NUM_CUSTOM_LINKS = 10;
 
 
 /**
@@ -89,6 +122,20 @@ var queryArgs = {};
 
 
 /**
+ * True if Material Design styles should be applied.
+ * @type {boolean}
+ */
+let isMDEnabled = false;
+
+
+/**
+ * True if custom links is enabled.
+ * @type {boolean}
+ */
+let isCustomLinksEnabled = false;
+
+
+/**
  * Log an event on the NTP.
  * @param {number} eventType Event from LOG_TYPE.
  */
@@ -98,7 +145,7 @@ var logEvent = function(eventType) {
 
 /**
  * Log impression of an NTP tile.
- * @param {number} tileIndex Position of the tile, >= 0 and < NUMBER_OF_TILES.
+ * @param {number} tileIndex Position of the tile, >= 0 and < MAX_NUM_TILES.
  * @param {number} tileTitleSource The source of the tile's title as received
  *                 from getMostVisitedItemData.
  * @param {number} tileSource The tile's source as received from
@@ -115,7 +162,7 @@ function logMostVisitedImpression(
 
 /**
  * Log click on an NTP tile.
- * @param {number} tileIndex Position of the tile, >= 0 and < NUMBER_OF_TILES.
+ * @param {number} tileIndex Position of the tile, >= 0 and < MAX_NUM_TILES.
  * @param {number} tileTitleSource The source of the tile's title as received
  *                 from getMostVisitedItemData.
  * @param {number} tileSource The tile's source as received from
@@ -202,6 +249,7 @@ var showTiles = function(info) {
 var updateTheme = function(info) {
   document.body.style.setProperty('--tile-title-color', info.tileTitleColor);
   document.body.classList.toggle('dark-theme', info.isThemeDark);
+  document.body.classList.toggle('background-image', info.hasBackgroundImage);
 };
 
 
@@ -226,9 +274,24 @@ var swapInNewTiles = function() {
   // Store the tiles on the current closure.
   var cur = tiles;
 
-  // Create empty tiles until we have NUMBER_OF_TILES.
-  while (cur.childNodes.length < NUMBER_OF_TILES) {
-    addTile({});
+  // Add an "add new custom link" button if we haven't reached the maximum
+  // number of links.
+  if (isCustomLinksEnabled && cur.childNodes.length < MAX_NUM_CUSTOM_LINKS) {
+    let data = {
+      'tid': -1,
+      'title': 'Add shortcut',  // TODO(851293): Use translated strings.
+      'url': '',
+      'isAddButton': true,
+    };
+    tiles.appendChild(renderMaterialDesignTile(data));
+  }
+
+  // Create empty tiles until we have MAX_NUM_TILES. This is not required for
+  // the Material Design style tiles.
+  if (!isMDEnabled) {
+    while (cur.childNodes.length < MAX_NUM_TILES) {
+      addTile({});
+    }
   }
 
   var parent = document.querySelector('#most-visited');
@@ -252,6 +315,11 @@ var swapInNewTiles = function() {
   // Add new tileset.
   cur.id = 'mv-tiles';
   parent.appendChild(cur);
+  if (isMDEnabled) {
+    // Called after appending to document so that css styles are active.
+    truncateTitleText(
+        parent.lastChild.querySelectorAll('.' + CLASSES.MD_TITLE));
+  }
   // getComputedStyle causes the initial style (opacity 0) to be applied, so
   // that when we then set it to 1, that triggers the CSS transition.
   if (fadeIn) {
@@ -266,9 +334,30 @@ var swapInNewTiles = function() {
 
 
 /**
+ * Truncates titles that are longer than one line and appends an ellipsis. Text
+ * overflow in CSS ("text-overflow: ellipsis") requires "overflow: hidden",
+ * which will cut off the title's text shadow. Only used for Material Design
+ * tiles.
+ */
+function truncateTitleText(titles) {
+  for (let i = 0; i < titles.length; i++) {
+    let el = titles[i];
+    const originalTitle = el.innerText;
+    let truncatedTitle = el.innerText;
+    while (el.scrollHeight > el.offsetHeight && truncatedTitle.length > 0) {
+      el.innerText = (truncatedTitle = truncatedTitle.slice(0, -1)) + '...';
+    }
+    if (truncatedTitle.length == 0) {
+      console.error('Title truncation failed: ' + originalTitle);
+    }
+  }
+}
+
+
+/**
  * Handler for the 'show' message from the host page, called when it wants to
  * add a suggestion tile.
- * It's also used to fill up our tiles to NUMBER_OF_TILES if necessary.
+ * It's also used to fill up our tiles to MAX_NUM_TILES if necessary.
  * @param {object} args Data for the tile to be rendered.
  */
 var addTile = function(args) {
@@ -311,6 +400,15 @@ var blacklistTile = function(tile) {
 
 
 /**
+ * Starts add custom link flow. Tells host page to show the edit custom link
+ * dialog.
+ */
+function addCustomLink() {
+  window.parent.postMessage({cmd: 'startEditLink'}, DOMAIN_ORIGIN);
+}
+
+
+/**
  * Returns whether the given URL has a known, safe scheme.
  * @param {string} url URL to check.
  */
@@ -322,10 +420,25 @@ var isSchemeAllowed = function(url) {
 
 /**
  * Renders a MostVisited tile to the DOM.
- * @param {object} data Object containing rid, url, title, favicon, thumbnail.
- *     data is null if you want to construct an empty tile.
+ * @param {object} data Object containing rid, url, title, favicon, thumbnail,
+ *     and optionally isAddButton. isAddButton is true if you want to construct
+ *     an add custom link button. data is null if you want to construct an
+ *     empty tile. isAddButton can only be set if custom links is enabled.
  */
 var renderTile = function(data) {
+  if (isMDEnabled) {
+    return renderMaterialDesignTile(data);
+  }
+  return renderMostVisitedTile(data);
+};
+
+
+/**
+ * @param {object} data Object containing rid, url, title, favicon, thumbnail.
+ *     data is null if you want to construct an empty tile.
+ * @return {Element}
+ */
+var renderMostVisitedTile = function(data) {
   var tile = document.createElement('a');
 
   if (data == null) {
@@ -407,7 +520,7 @@ var renderTile = function(data) {
   fi.addEventListener('load', countLoad);
   fi.addEventListener('error', countLoad);
   fi.addEventListener('error', function(ev) {
-    favicon.classList.add('failed-favicon');
+    favicon.classList.add(CLASSES.FAILED_FAVICON);
   });
   favicon.appendChild(fi);
   tile.appendChild(favicon);
@@ -473,6 +586,162 @@ var renderTile = function(data) {
 
 
 /**
+ * Renders a MostVisited tile with Material Design styles.
+ * @param {object} data Object containing rid, url, title, favicon, and
+ *     optionally isAddButton. isAddButton is if you want to construct an add
+ *     custom link button. data is null if you want to construct an empty tile.
+ * @return {Element}
+ */
+function renderMaterialDesignTile(data) {
+  let mdTile = document.createElement('a');
+
+  if (data == null) {
+    mdTile.className = CLASSES.MD_EMPTY_TILE;
+    return mdTile;
+  }
+
+  // The tile will be appended to tiles.
+  const position = tiles.children.length;
+  // This is set in the load/error event for the favicon image.
+  let tileType = TileVisualType.NONE;
+
+  mdTile.className = CLASSES.MD_TILE;
+  mdTile.setAttribute('data-tid', data.tid);
+  mdTile.setAttribute('data-pos', position);
+  if (isSchemeAllowed(data.url)) {
+    mdTile.href = data.url;
+  }
+  mdTile.setAttribute('aria-label', data.title);
+  mdTile.title = data.title;
+
+  mdTile.addEventListener('click', function(ev) {
+    if (data.isAddButton) {
+      addCustomLink();
+    } else {
+      logMostVisitedNavigation(
+          position, data.tileTitleSource, data.tileSource, tileType,
+          data.dataGenerationTime);
+    }
+  });
+  mdTile.addEventListener('keydown', function(event) {
+    if ((event.keyCode == 46 /* DELETE */ ||
+         event.keyCode == 8 /* BACKSPACE */) &&
+        !data.isAddButton) {
+      event.preventDefault();
+      event.stopPropagation();
+      blacklistTile(this);
+    } else if (
+        event.keyCode == 13 /* ENTER */ || event.keyCode == 32 /* SPACE */) {
+      event.preventDefault();
+      this.click();
+    } else if (event.keyCode == 37 /* LEFT */) {
+      const tiles = document.querySelectorAll('#mv-tiles .' + CLASSES.MD_TILE);
+      tiles[Math.max(this.getAttribute('data-pos') - 1, 0)].focus();
+    } else if (event.keyCode == 39 /* RIGHT */) {
+      const tiles = document.querySelectorAll('#mv-tiles .' + CLASSES.MD_TILE);
+      tiles[Math.min(this.getAttribute('data-pos') + 1, tiles.length - 1)]
+          .focus();
+    }
+  });
+
+  let mdTileInner = document.createElement('div');
+  mdTileInner.className = CLASSES.MD_TILE_INNER;
+
+  let mdIcon = document.createElement('div');
+  mdIcon.className = CLASSES.MD_ICON;
+
+  let mdFavicon = document.createElement('div');
+  mdFavicon.className = CLASSES.MD_FAVICON;
+  if (data.isAddButton) {
+    let mdAdd = document.createElement('div');
+    mdAdd.className = CLASSES.MD_ADD_ICON;
+    let addBackground = document.createElement('div');
+    addBackground.className = CLASSES.MD_ADD_BACKGROUND;
+
+    addBackground.appendChild(mdAdd);
+    mdFavicon.appendChild(addBackground);
+  } else {
+    let fi = document.createElement('img');
+    // Set title and alt to empty so screen readers won't say the image name.
+    fi.title = '';
+    fi.alt = '';
+    fi.src = 'chrome-search://ntpicon/size/24@' + window.devicePixelRatio +
+        'x/' + data.url;
+    loadedCounter += 1;
+    fi.addEventListener('load', function(ev) {
+      // Store the type for a potential later navigation.
+      tileType = TileVisualType.ICON_REAL;
+      logMostVisitedImpression(
+          position, data.tileTitleSource, data.tileSource, tileType,
+          data.dataGenerationTime);
+      // Note: It's important to call countLoad last, because that might emit
+      // the NTP_ALL_TILES_LOADED event, which must happen after the impression
+      // log.
+      countLoad();
+    });
+    fi.addEventListener('error', function(ev) {
+      let fallbackBackground = document.createElement('div');
+      fallbackBackground.className = CLASSES.MD_FALLBACK_BACKGROUND;
+      let fallbackLetter = document.createElement('div');
+      fallbackLetter.className = CLASSES.MD_FALLBACK_LETTER;
+      fallbackLetter.innerText = data.title.charAt(0).toUpperCase();
+      mdFavicon.classList.add(CLASSES.FAILED_FAVICON);
+
+      fallbackBackground.appendChild(fallbackLetter);
+      mdFavicon.removeChild(fi);
+      mdFavicon.appendChild(fallbackBackground);
+
+      // Store the type for a potential later navigation.
+      tileType = TileVisualType.ICON_DEFAULT;
+      logMostVisitedImpression(
+          position, data.tileTitleSource, data.tileSource, tileType,
+          data.dataGenerationTime);
+      // Note: It's important to call countLoad last, because that might emit
+      // the NTP_ALL_TILES_LOADED event, which must happen after the impression
+      // log.
+      countLoad();
+    });
+
+    mdFavicon.appendChild(fi);
+  }
+
+  mdIcon.appendChild(mdFavicon);
+  mdTileInner.appendChild(mdIcon);
+
+  let mdTitleContainer = document.createElement('div');
+  mdTitleContainer.className = CLASSES.MD_TITLE_CONTAINER;
+  let mdTitle = document.createElement('div');
+  mdTitle.className = CLASSES.MD_TITLE;
+  mdTitle.innerText = data.title;
+  mdTitle.style.direction = data.direction || 'ltr';
+  mdTitleContainer.appendChild(mdTitle);
+  mdTileInner.appendChild(mdTitleContainer);
+  mdTile.appendChild(mdTileInner);
+
+  if (!data.isAddButton) {
+    let mdMenu = document.createElement('button');
+    mdMenu.className = CLASSES.MD_MENU;
+    mdMenu.title = queryArgs['removeTooltip'] || '';
+    mdMenu.addEventListener('click', function(ev) {
+      removeAllOldTiles();
+      blacklistTile(mdTile);
+      ev.preventDefault();
+      ev.stopPropagation();
+    });
+    // Don't allow the event to bubble out to the containing tile, as that would
+    // trigger navigation to the tile URL.
+    mdMenu.addEventListener('keydown', function(event) {
+      event.stopPropagation();
+    });
+
+    mdTile.appendChild(mdMenu);
+  }
+
+  return mdTile;
+}
+
+
+/**
  * Does some initialization and parses the query arguments passed to the iframe.
  */
 var init = function() {
@@ -502,6 +771,17 @@ var init = function() {
   if (queryArgs['rtl'] == '1') {
     var html = document.querySelector('html');
     html.dir = 'rtl';
+  }
+
+  // Enable Material Design.
+  if (queryArgs['enableMD'] == '1') {
+    isMDEnabled = true;
+    document.body.classList.add(CLASSES.MATERIAL_DESIGN);
+  }
+
+  // Enable custom links.
+  if (queryArgs['enableCustomLinks'] == '1') {
+    isCustomLinksEnabled = true;
   }
 
   window.addEventListener('message', handlePostMessage);

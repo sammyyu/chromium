@@ -13,6 +13,9 @@
 namespace syncer {
 namespace {
 
+using testing::Invoke;
+using testing::_;
+
 class ForwardingModelTypeChangeProcessor : public ModelTypeChangeProcessor {
  public:
   // |other| must not be nullptr and must outlive this object.
@@ -41,21 +44,27 @@ class ForwardingModelTypeChangeProcessor : public ModelTypeChangeProcessor {
     other_->UntrackEntity(entity_data);
   }
 
+  void UntrackEntityForStorageKey(const std::string& storage_key) override {
+    other_->UntrackEntityForStorageKey(storage_key);
+  }
+
+  void OnModelStarting(ModelTypeSyncBridge* bridge) override {
+    other_->OnModelStarting(bridge);
+  }
+
   void ModelReadyToSync(std::unique_ptr<MetadataBatch> batch) override {
     other_->ModelReadyToSync(std::move(batch));
   }
-
-  void OnSyncStarting(const ModelErrorHandler& error_handler,
-                      const StartCallback& callback) override {
-    other_->OnSyncStarting(error_handler, callback);
-  }
-
-  void DisableSync() override { other_->DisableSync(); }
 
   bool IsTrackingMetadata() override { return other_->IsTrackingMetadata(); }
 
   void ReportError(const ModelError& error) override {
     other_->ReportError(error);
+  }
+
+  base::WeakPtr<ModelTypeControllerDelegate> GetControllerDelegateOnUIThread()
+      override {
+    return other_->GetControllerDelegateOnUIThread();
   }
 
  private:
@@ -68,26 +77,50 @@ MockModelTypeChangeProcessor::MockModelTypeChangeProcessor() {}
 
 MockModelTypeChangeProcessor::~MockModelTypeChangeProcessor() {}
 
-void MockModelTypeChangeProcessor::Put(
-    const std::string& storage_key,
-    std::unique_ptr<EntityData> entity_data,
-    MetadataChangeList* metadata_change_list) {
-  DoPut(storage_key, entity_data.get(), metadata_change_list);
+std::unique_ptr<ModelTypeChangeProcessor>
+MockModelTypeChangeProcessor::CreateForwardingProcessor() {
+  return base::WrapUnique<ModelTypeChangeProcessor>(
+      new ForwardingModelTypeChangeProcessor(this));
 }
 
-void MockModelTypeChangeProcessor::ModelReadyToSync(
-    std::unique_ptr<MetadataBatch> batch) {
-  DoModelReadyToSync(batch.get());
-}
+void MockModelTypeChangeProcessor::DelegateCallsByDefaultTo(
+    ModelTypeChangeProcessor* delegate) {
+  DCHECK(delegate);
 
-ModelTypeSyncBridge::ChangeProcessorFactory
-MockModelTypeChangeProcessor::FactoryForBridgeTest() {
-  return base::BindRepeating(
-      [](ModelTypeChangeProcessor* processor, ModelType, ModelTypeSyncBridge*) {
-        return base::WrapUnique<ModelTypeChangeProcessor>(
-            new ForwardingModelTypeChangeProcessor(processor));
-      },
-      base::Unretained(this));
+  ON_CALL(*this, Put(_, _, _))
+      .WillByDefault([delegate](const std::string& storage_key,
+                                std::unique_ptr<EntityData> entity_data,
+                                MetadataChangeList* metadata_change_list) {
+        delegate->Put(storage_key, std::move(entity_data),
+                      metadata_change_list);
+      });
+  ON_CALL(*this, Delete(_, _))
+      .WillByDefault(Invoke(delegate, &ModelTypeChangeProcessor::Delete));
+  ON_CALL(*this, UpdateStorageKey(_, _, _))
+      .WillByDefault(
+          Invoke(delegate, &ModelTypeChangeProcessor::UpdateStorageKey));
+  ON_CALL(*this, UntrackEntity(_))
+      .WillByDefault(
+          Invoke(delegate, &ModelTypeChangeProcessor::UntrackEntity));
+  ON_CALL(*this, UntrackEntityForStorageKey(_))
+      .WillByDefault(Invoke(
+          delegate, &ModelTypeChangeProcessor::UntrackEntityForStorageKey));
+  ON_CALL(*this, OnModelStarting(_))
+      .WillByDefault(
+          Invoke(delegate, &ModelTypeChangeProcessor::OnModelStarting));
+  ON_CALL(*this, ModelReadyToSync(_))
+      .WillByDefault([delegate](std::unique_ptr<MetadataBatch> batch) {
+        delegate->ModelReadyToSync(std::move(batch));
+      });
+  ON_CALL(*this, IsTrackingMetadata())
+      .WillByDefault(
+          Invoke(delegate, &ModelTypeChangeProcessor::IsTrackingMetadata));
+  ON_CALL(*this, ReportError(_))
+      .WillByDefault(Invoke(delegate, &ModelTypeChangeProcessor::ReportError));
+  ON_CALL(*this, GetControllerDelegateOnUIThread())
+      .WillByDefault(
+          Invoke(delegate,
+                 &ModelTypeChangeProcessor::GetControllerDelegateOnUIThread));
 }
 
 }  //  namespace syncer

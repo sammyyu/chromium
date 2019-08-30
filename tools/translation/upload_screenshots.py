@@ -40,8 +40,14 @@ TRANSLATION_EXPECTATIONS_PATH = os.path.join('tools', 'gritsettings',
                                              'translation_expectations.pyl')
 
 # URL of the bucket used for storing screenshots.
-BUCKET_URL = 'gs://chrome-screenshots'
+# This is writable by @google.com accounts, readable by everyone.
+BUCKET_URL = 'gs://chromium-translation-screenshots'
 
+if sys.platform.startswith('win'):
+  # Use the |git.bat| in the depot_tools/ on Windows.
+  GIT = 'git.bat'
+else:
+  GIT = 'git'
 
 
 def query_yes_no(question, default='yes'):
@@ -80,7 +86,7 @@ def list_grds_in_repository(repo_path):
   # This works because git does its own glob expansion even though there is no
   # shell to do it.
   output = subprocess.check_output(
-      ['git', 'ls-files', '--', '*.grd'], cwd=repo_path)
+      [GIT, 'ls-files', '--', '*.grd'], cwd=repo_path)
   return output.strip().splitlines()
 
 
@@ -91,18 +97,26 @@ def git_add(files, repo_root):
   added_count = 0
   while added_count < len(files):
     batch = files[added_count:added_count+BATCH_SIZE]
-    command = ['git', 'add'] + batch
+    command = [GIT, 'add'] + batch
     subprocess.check_call(command, cwd=repo_root)
     added_count += len(batch)
 
 
 def find_screenshots(repo_root, translation_expectations):
-  grd_files = translation_helper.get_translatable_grds(
+  """Returns a list of translation related .png files in the repository."""
+  translatable_grds = translation_helper.get_translatable_grds(
       repo_root, list_grds_in_repository(repo_root), translation_expectations)
 
+  # Add the paths of grds and any files they include. This includes grdp files
+  # and files included via <structure> elements.
+  src_paths = []
+  for grd in translatable_grds:
+    src_paths.append(grd.path)
+    src_paths.extend(grd.grdp_paths)
+    src_paths.extend(grd.structure_paths)
+
   screenshots = []
-  for grd_file in grd_files:
-    grd_path = grd_file.path
+  for grd_path in src_paths:
     # Convert grd_path.grd to grd_path_grd/ directory.
     name, ext = os.path.splitext(os.path.basename(grd_path))
     relative_screenshots_dir = os.path.relpath(
@@ -141,6 +155,7 @@ def main():
                                               TRANSLATION_EXPECTATIONS_PATH))
   if not screenshots:
     print 'No screenshots found, exiting.'
+    exit(0)
 
   print 'Found %d updated screenshot(s): ' % len(screenshots)
   for s in screenshots:

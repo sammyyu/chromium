@@ -337,6 +337,9 @@ class ASH_EXPORT TouchExplorationController
   // fingers in place is a bit harder.
   float GetSplitTapTouchSlop();
 
+  // Convert a gfx::PointF from DIP back to raw screen coordinates.
+  gfx::PointF ConvertDIPToScreenInPixels(const gfx::PointF& location);
+
   enum State {
     // No fingers are down and no events are pending.
     NO_FINGERS_DOWN,
@@ -440,11 +443,6 @@ class ASH_EXPORT TouchExplorationController
     BOTTOM_RIGHT_CORNER = RIGHT_EDGE | BOTTOM_EDGE,
   };
 
-  // Return the bounds of the root window in actual device pixels, not DIP,
-  // in order to match the coordinate system of touch events. Note that this
-  // is not the same as screen coordinates, which span multiple displays.
-  gfx::Rect GetRootWindowBoundsInScreenUnits();
-
   // Given a point, if it is within the given inset of an edge, returns the
   // edge. If it is within the given inset of two edges, returns an int with
   // both bits that represent the respective edges turned on. Otherwise returns
@@ -503,7 +501,7 @@ class ASH_EXPORT TouchExplorationController
   // set either via touch exploration, or by a call to
   // SetTouchAccessibilityAnchorPoint when focus moves due to something other
   // than touch exploration.
-  gfx::PointF anchor_point_;
+  gfx::PointF anchor_point_dip_;
 
   // The current state of the anchor point.
   AnchorPointState anchor_point_state_;
@@ -552,6 +550,9 @@ class ASH_EXPORT TouchExplorationController
 
   // Whether or not we've seen a touch press event yet.
   bool seen_press_ = false;
+
+  // The maximum touch points seen in the current gesture.
+  size_t max_gesture_touch_points_ = 0;
 
   DISALLOW_COPY_AND_ASSIGN(TouchExplorationController);
 };

@@ -3,7 +3,9 @@
 interface Event {
   readonly attribute DOMString type;
   readonly attribute EventTarget? target;
+  readonly attribute EventTarget? srcElement;
   readonly attribute EventTarget? currentTarget;
+  sequence<EventTarget> composedPath();
 
   const unsigned short NONE = 0;
   const unsigned short CAPTURING_PHASE = 1;
@@ -16,8 +18,10 @@ interface Event {
 
   readonly attribute boolean bubbles;
   readonly attribute boolean cancelable;
+           attribute boolean returnValue;
   void preventDefault();
   readonly attribute boolean defaultPrevented;
+  readonly attribute boolean composed;
 
   [Unforgeable] readonly attribute boolean isTrusted;
   readonly attribute DOMTimeStamp timeStamp;
@@ -28,6 +32,11 @@ interface Event {
 dictionary EventInit {
   boolean bubbles = false;
   boolean cancelable = false;
+};
+
+
+partial interface Window {
+  [Replaceable] readonly attribute any event;
 };
 
 
@@ -351,6 +360,7 @@ interface Element : Node {
   void setAttributeNS(DOMString? namespace, DOMString qualifiedName, DOMString value);
   void removeAttribute(DOMString qualifiedName);
   void removeAttributeNS(DOMString? namespace, DOMString localName);
+  boolean toggleAttribute(DOMString qualifiedName, optional boolean force);
   boolean hasAttribute(DOMString qualifiedName);
   boolean hasAttributeNS(DOMString? namespace, DOMString localName);
 
@@ -440,14 +450,22 @@ interface Comment : CharacterData {
 };
 
 
-[Constructor,
- Exposed=Window]
-interface Range {
+[Exposed=Window]
+interface AbstractRange {
   readonly attribute Node startContainer;
   readonly attribute unsigned long startOffset;
   readonly attribute Node endContainer;
   readonly attribute unsigned long endOffset;
   readonly attribute boolean collapsed;
+};
+
+[Exposed=Window]
+interface StaticRange : AbstractRange {
+};
+
+[Constructor,
+ Exposed=Window]
+interface Range : AbstractRange {
   readonly attribute Node commonAncestorContainer;
 
   void setStart(Node node, unsigned long offset);

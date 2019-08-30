@@ -14,17 +14,14 @@
 #include "base/bind.h"
 #include "base/callback.h"
 #include "base/callback_helpers.h"
-#include "base/files/file_util.h"
 #include "base/location.h"
 #include "base/logging.h"
 #include "base/memory/ptr_util.h"
-#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/numerics/safe_conversions.h"
 #include "base/numerics/safe_math.h"
 #include "base/strings/stringprintf.h"
 #include "base/task_runner.h"
-#include "base/task_scheduler/post_task.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/trace_event/memory_dump_manager.h"
 #include "base/trace_event/trace_event.h"
@@ -38,21 +35,6 @@ namespace storage {
 namespace {
 using ItemCopyEntry = BlobEntry::ItemCopyEntry;
 using QuotaAllocationTask = BlobMemoryController::QuotaAllocationTask;
-
-std::vector<base::Time> GetModificationTimes(
-    std::vector<base::FilePath> paths) {
-  std::vector<base::Time> result;
-  result.reserve(paths.size());
-  for (const auto& path : paths) {
-    base::File::Info info;
-    if (!base::GetFileInfo(path, &info)) {
-      result.emplace_back();
-      continue;
-    }
-    result.emplace_back(info.last_modified);
-  }
-  return result;
-}
 }  // namespace
 
 BlobStorageContext::BlobStorageContext()
@@ -157,7 +139,8 @@ void BlobStorageContext::RevokePublicBlobURL(const GURL& blob_url) {
 std::unique_ptr<BlobDataHandle> BlobStorageContext::AddFutureBlob(
     const std::string& uuid,
     const std::string& content_type,
-    const std::string& content_disposition) {
+    const std::string& content_disposition,
+    BuildAbortedCallback build_aborted_callback) {
   DCHECK(!registry_.HasEntry(uuid));
 
   BlobEntry* entry =
@@ -166,6 +149,8 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::AddFutureBlob(
   entry->set_status(BlobStatus::PENDING_CONSTRUCTION);
   entry->set_building_state(std::make_unique<BlobEntry::BuildingState>(
       false, TransportAllowedCallback(), 0));
+  entry->building_state_->build_aborted_callback =
+      std::move(build_aborted_callback);
   return CreateHandle(uuid, entry);
 }
 
@@ -242,29 +227,6 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlobInternal(
   UMA_HISTOGRAM_COUNTS_1M("Storage.Blob.TotalUnsharedSize",
                           total_memory_needed / 1024);
 
-  std::vector<scoped_refptr<BlobDataItem>> items_needing_timestamp;
-  std::vector<base::FilePath> file_paths_needing_timestamp;
-  for (auto& item : entry->items_) {
-    if (item->item()->type() == BlobDataItem::Type::kFile &&
-        !item->item()->IsFutureFileItem() &&
-        item->item()->expected_modification_time().is_null()) {
-      items_needing_timestamp.push_back(item->item());
-      file_paths_needing_timestamp.push_back(item->item()->path());
-    }
-  }
-  if (!items_needing_timestamp.empty()) {
-    // Blob construction isn't blocked on getting these timestamps. The created
-    // blob will be fully functional whether or not timestamps are set. When
-    // the timestamp isn't set the blob just won't be able to detect the file
-    // on disk changing after the blob is created.
-    base::PostTaskWithTraitsAndReplyWithResult(
-        FROM_HERE, {base::MayBlock()},
-        base::BindOnce(&GetModificationTimes,
-                       std::move(file_paths_needing_timestamp)),
-        base::BindOnce(&BlobDataItem::SetFileModificationTimes,
-                       std::move(items_needing_timestamp)));
-  }
-
   size_t num_building_dependent_blobs = 0;
   std::vector<std::unique_ptr<BlobDataHandle>> dependent_blobs;
   // We hold a handle to all blobs we're using. This is important, as our memory
@@ -315,6 +277,8 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlobInternal(
     DCHECK(previous_building_state->copies.empty());
     std::swap(building_state->build_completion_callbacks,
               previous_building_state->build_completion_callbacks);
+    building_state->build_aborted_callback =
+        std::move(previous_building_state->build_aborted_callback);
     auto runner = base::ThreadTaskRunnerHandle::Get();
     for (auto& callback : previous_building_state->build_started_callbacks)
       runner->PostTask(FROM_HERE,
@@ -358,7 +322,7 @@ std::unique_ptr<BlobDataHandle> BlobStorageContext::BuildBlobInternal(
             content->ReleasePendingTransportItems(),
             base::BindOnce(&BlobStorageContext::OnEnoughSpaceForTransport,
                            ptr_factory_.GetWeakPtr(), content->uuid_,
-                           base::Passed(&empty_files)));
+                           std::move(empty_files)));
         break;
       }
       case TransportQuotaType::FILE:
@@ -652,7 +616,7 @@ void BlobStorageContext::OnDependentBlobFinished(
 
 void BlobStorageContext::ClearAndFreeMemory(BlobEntry* entry) {
   if (entry->building_state_)
-    entry->building_state_->CancelRequests();
+    entry->building_state_->CancelRequestsAndAbort();
   entry->ClearItems();
   entry->ClearOffsets();
   entry->set_size(0);

@@ -5,6 +5,7 @@
 #include "components/offline_pages/content/background_loader/background_loader_contents.h"
 
 #include "base/synchronization/waitable_event.h"
+#include "content/public/browser/web_contents.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
 
@@ -107,8 +108,8 @@ TEST_F(BackgroundLoaderContentsTest, DoesNotFocusAfterCrash) {
 TEST_F(BackgroundLoaderContentsTest, CannotDownloadNoDelegate) {
   contents()->CanDownload(
       GURL::EmptyGURL(), std::string(),
-      base::Bind(&BackgroundLoaderContentsTest::DownloadCallback,
-                 base::Unretained(this)));
+      base::BindRepeating(&BackgroundLoaderContentsTest::DownloadCallback,
+                          base::Unretained(this)));
   WaitForSignal();
   ASSERT_FALSE(download());
   ASSERT_FALSE(can_download_delegate_called());
@@ -118,8 +119,8 @@ TEST_F(BackgroundLoaderContentsTest, CanDownload_DelegateCalledWhenSet) {
   SetDelegate();
   contents()->CanDownload(
       GURL::EmptyGURL(), std::string(),
-      base::Bind(&BackgroundLoaderContentsTest::DownloadCallback,
-                 base::Unretained(this)));
+      base::BindRepeating(&BackgroundLoaderContentsTest::DownloadCallback,
+                          base::Unretained(this)));
   WaitForSignal();
   ASSERT_TRUE(download());
   ASSERT_TRUE(can_download_delegate_called());
@@ -139,7 +140,8 @@ TEST_F(BackgroundLoaderContentsTest, ShouldNotCreateWebContents) {
 TEST_F(BackgroundLoaderContentsTest, ShouldNotAddNewContents) {
   bool blocked;
   contents()->AddNewContents(
-      nullptr /* source */, nullptr /* new_contents */,
+      nullptr /* source */,
+      std::unique_ptr<content::WebContents>() /* new_contents */,
       WindowOpenDisposition::CURRENT_TAB /* disposition */,
       gfx::Rect() /* initial_rect */, false /* user_gesture */,
       &blocked /* was_blocked */);
@@ -159,8 +161,8 @@ TEST_F(BackgroundLoaderContentsTest, DoesNotGiveMediaAccessPermission) {
       false /* disable_local_echo */);
   contents()->RequestMediaAccessPermission(
       nullptr /* contents */, request /* request */,
-      base::Bind(&BackgroundLoaderContentsTest::MediaAccessCallback,
-                 base::Unretained(this)));
+      base::BindRepeating(&BackgroundLoaderContentsTest::MediaAccessCallback,
+                          base::Unretained(this)));
   WaitForSignal();
   // No devices allowed.
   ASSERT_TRUE(devices().empty());
@@ -182,28 +184,28 @@ TEST_F(BackgroundLoaderContentsTest, AdjustPreviewsState) {
 
   // If the state starts out as off or disabled, it should stay that way.
   previews_state = content::PREVIEWS_OFF;
-  contents()->AdjustPreviewsStateForNavigation(&previews_state);
+  contents()->AdjustPreviewsStateForNavigation(nullptr, &previews_state);
   EXPECT_EQ(previews_state, content::PREVIEWS_OFF);
   previews_state = content::PREVIEWS_NO_TRANSFORM;
-  contents()->AdjustPreviewsStateForNavigation(&previews_state);
+  contents()->AdjustPreviewsStateForNavigation(nullptr, &previews_state);
   EXPECT_EQ(previews_state, content::PREVIEWS_NO_TRANSFORM);
 
   // If the state starts out as a state unfriendly to offlining, we should
   // and out the unfriendly previews.
   previews_state = content::SERVER_LOFI_ON | content::CLIENT_LOFI_ON;
-  contents()->AdjustPreviewsStateForNavigation(&previews_state);
+  contents()->AdjustPreviewsStateForNavigation(nullptr, &previews_state);
   EXPECT_EQ(previews_state, content::SERVER_LOFI_ON);
 
   // If the state starts out as offlining friendly previews, we should preserve
   // them.
   previews_state = content::PARTIAL_CONTENT_SAFE_PREVIEWS;
-  contents()->AdjustPreviewsStateForNavigation(&previews_state);
+  contents()->AdjustPreviewsStateForNavigation(nullptr, &previews_state);
   EXPECT_EQ(previews_state, content::PARTIAL_CONTENT_SAFE_PREVIEWS);
 
   // If there are only offlining unfriendly previews, they should all get turned
   // off.
   previews_state = content::CLIENT_LOFI_ON;
-  contents()->AdjustPreviewsStateForNavigation(&previews_state);
+  contents()->AdjustPreviewsStateForNavigation(nullptr, &previews_state);
   EXPECT_EQ(previews_state, content::PREVIEWS_OFF);
 }
 

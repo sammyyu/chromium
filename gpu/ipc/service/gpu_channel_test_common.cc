@@ -4,7 +4,6 @@
 
 #include "gpu/ipc/service/gpu_channel_test_common.h"
 
-#include "base/memory/ptr_util.h"
 #include "base/memory/shared_memory.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
@@ -38,10 +37,10 @@ class TestGpuChannelManagerDelegate : public GpuChannelManagerDelegate {
   void StoreShaderToDisk(int32_t client_id,
                          const std::string& key,
                          const std::string& shader) override {}
+  void ExitProcess() override {}
 #if defined(OS_WIN)
-  void SendAcceleratedSurfaceCreatedChildWindow(
-      SurfaceHandle parent_window,
-      SurfaceHandle child_window) override {}
+  void SendCreatedChildWindow(SurfaceHandle parent_window,
+                              SurfaceHandle child_window) override {}
 #endif
 
  private:
@@ -108,7 +107,7 @@ GpuChannel* GpuChannelTestCommon::CreateChannel(int32_t client_id,
                                                 bool is_gpu_host) {
   uint64_t kClientTracingId = 1;
   GpuChannel* channel = channel_manager()->EstablishChannel(
-      client_id, kClientTracingId, is_gpu_host);
+      client_id, kClientTracingId, is_gpu_host, true);
   channel->Init(std::make_unique<TestSinkFilteredSender>());
   base::ProcessId kProcessId = 1;
   channel->OnChannelConnected(kProcessId);
@@ -156,10 +155,9 @@ void GpuChannelTestCommon::HandleMessage(GpuChannel* channel,
   delete msg;
 }
 
-base::SharedMemoryHandle GpuChannelTestCommon::GetSharedHandle() {
-  base::SharedMemory shared_memory;
-  shared_memory.CreateAnonymous(10);
-  return shared_memory.handle().Duplicate();
+base::UnsafeSharedMemoryRegion GpuChannelTestCommon::GetSharedMemoryRegion() {
+  return base::UnsafeSharedMemoryRegion::Create(
+      sizeof(CommandBufferSharedState));
 }
 
 }  // namespace gpu

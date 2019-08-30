@@ -13,6 +13,7 @@
 #include "components/viz/common/quads/surface_draw_quad.h"
 #include "components/viz/common/surfaces/parent_local_surface_id_allocator.h"
 #include "components/viz/service/display/surface_aggregator.h"
+#include "components/viz/service/display_embedder/server_shared_bitmap_manager.h"
 #include "components/viz/service/frame_sinks/compositor_frame_sink_support.h"
 #include "components/viz/service/frame_sinks/frame_sink_manager_impl.h"
 #include "components/viz/service/frame_sinks/video_detector.h"
@@ -74,17 +75,20 @@ class TestObserver : public mojom::VideoDetectorObserver {
 class VideoDetectorTest : public testing::Test {
  public:
   VideoDetectorTest()
-      : surface_aggregator_(frame_sink_manager_.surface_manager(),
+      : frame_sink_manager_(&shared_bitmap_manager_),
+        surface_aggregator_(frame_sink_manager_.surface_manager(),
                             nullptr,
                             false) {}
 
   ~VideoDetectorTest() override {}
 
   void SetUp() override {
-    mock_task_runner_ = base::MakeRefCounted<base::TestMockTimeTaskRunner>();
+    mock_task_runner_ = base::MakeRefCounted<base::TestMockTimeTaskRunner>(
+        base::Time() + base::TimeDelta::FromSeconds(1),
+        base::TimeTicks() + base::TimeDelta::FromSeconds(1));
 
     detector_ = frame_sink_manager_.CreateVideoDetectorForTesting(
-        mock_task_runner_->DeprecatedGetMockTickClock(), mock_task_runner_);
+        mock_task_runner_->GetMockTickClock(), mock_task_runner_);
 
     mojom::VideoDetectorObserverPtr video_detector_observer;
     observer_.Bind(mojo::MakeRequest(&video_detector_observer));
@@ -112,8 +116,8 @@ class VideoDetectorTest : public testing::Test {
   }
 
   void CreateDisplayFrame() {
-    surface_aggregator_.Aggregate(
-        root_frame_sink_->last_activated_surface_id());
+    surface_aggregator_.Aggregate(root_frame_sink_->last_activated_surface_id(),
+                                  mock_task_runner_->NowTicks());
   }
 
   void EmbedClient(CompositorFrameSinkSupport* frame_sink) {
@@ -129,10 +133,10 @@ class VideoDetectorTest : public testing::Test {
     for (CompositorFrameSinkSupport* frame_sink : embedded_clients_) {
       SurfaceDrawQuad* quad =
           render_pass->CreateAndAppendDrawQuad<SurfaceDrawQuad>();
-      quad->SetNew(shared_quad_state, gfx::Rect(0, 0, 10, 10),
-                   gfx::Rect(0, 0, 5, 5),
-                   frame_sink->last_activated_surface_id(), base::nullopt,
-                   SK_ColorMAGENTA, false);
+      quad->SetNew(
+          shared_quad_state, gfx::Rect(0, 0, 10, 10), gfx::Rect(0, 0, 5, 5),
+          SurfaceRange(base::nullopt, frame_sink->last_activated_surface_id()),
+          SK_ColorMAGENTA, false);
     }
     root_frame_sink_->SubmitCompositorFrame(
         root_frame_sink_->last_activated_local_surface_id(), std::move(frame));
@@ -190,6 +194,7 @@ class VideoDetectorTest : public testing::Test {
         .Build();
   }
 
+  ServerSharedBitmapManager shared_bitmap_manager_;
   FrameSinkManagerImpl frame_sink_manager_;
   FakeCompositorFrameSinkClient frame_sink_client_;
   ParentLocalSurfaceIdAllocator parent_local_surface_id_allocator_;

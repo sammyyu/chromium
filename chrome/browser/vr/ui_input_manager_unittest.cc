@@ -10,8 +10,10 @@
 #include "base/time/time.h"
 #include "cc/test/geometry_test_utils.h"
 #include "chrome/browser/vr/content_input_delegate.h"
+#include "chrome/browser/vr/elements/invisible_hit_target.h"
 #include "chrome/browser/vr/elements/rect.h"
 #include "chrome/browser/vr/elements/ui_element.h"
+#include "chrome/browser/vr/input_event.h"
 #include "chrome/browser/vr/model/model.h"
 #include "chrome/browser/vr/test/animation_utils.h"
 #include "chrome/browser/vr/test/constants.h"
@@ -23,7 +25,6 @@
 #include "chrome/browser/vr/ui_scene_creator.h"
 #include "chrome/browser/vr/ui_unsupported_mode.h"
 #include "testing/gmock/include/gmock/gmock.h"
-#include "third_party/WebKit/public/platform/WebGestureEvent.h"
 
 using ::testing::_;
 using ::testing::InSequence;
@@ -44,11 +45,24 @@ class MockRect : public Rect {
   MockRect() = default;
   ~MockRect() override = default;
 
-  MOCK_METHOD1(OnHoverEnter, void(const gfx::PointF& position));
-  MOCK_METHOD0(OnHoverLeave, void());
-  MOCK_METHOD1(OnMove, void(const gfx::PointF& position));
-  MOCK_METHOD1(OnButtonDown, void(const gfx::PointF& position));
-  MOCK_METHOD1(OnButtonUp, void(const gfx::PointF& position));
+  MOCK_METHOD2(OnHoverEnter,
+               void(const gfx::PointF& position, base::TimeTicks timestamp));
+  MOCK_METHOD1(OnHoverLeave, void(base::TimeTicks timestamp));
+  MOCK_METHOD2(OnHoverMove,
+               void(const gfx::PointF& position, base::TimeTicks timestamp));
+  MOCK_METHOD2(OnButtonDown,
+               void(const gfx::PointF& position, base::TimeTicks timestamp));
+  MOCK_METHOD2(OnButtonUp,
+               void(const gfx::PointF& position, base::TimeTicks timestamp));
+  MOCK_METHOD2(OnTouchMove,
+               void(const gfx::PointF& position, base::TimeTicks timestamp));
+  MOCK_METHOD2(OnScrollBegin,
+               void(std::unique_ptr<InputEvent>, const gfx::PointF&));
+  MOCK_METHOD2(OnScrollUpdate,
+               void(std::unique_ptr<InputEvent>, const gfx::PointF&));
+  MOCK_METHOD2(OnScrollEnd,
+               void(std::unique_ptr<InputEvent>, const gfx::PointF&));
+  MOCK_METHOD0(MockedOnScrollBegin, void());
   MOCK_METHOD1(OnFocusChanged, void(bool));
   MOCK_METHOD1(OnInputEdited, void(const EditedText&));
   MOCK_METHOD1(OnInputCommitted, void(const EditedText&));
@@ -78,6 +92,8 @@ class UiInputManagerTest : public testing::Test {
     input_manager_ = std::make_unique<UiInputManager>(scene_.get());
   }
 
+  void TearDown() override { gesture_list_.clear(); }
+
   StrictMock<MockRect>* CreateAndAddMockElement(float z_position) {
     auto element = std::make_unique<StrictMock<MockRect>>();
     StrictMock<MockRect>* p_element = element.get();
@@ -92,6 +108,7 @@ class UiInputManagerTest : public testing::Test {
     auto element = std::make_unique<StrictMock<MockTextInput>>();
     StrictMock<MockTextInput>* p_element = element.get();
     element->SetTranslate(0, 0, z_position);
+    element->SetSize(1, 0.1);
     element->set_hit_testable(true);
     scene_->AddUiElement(kRoot, std::move(element));
     scene_->OnBeginFrame(base::TimeTicks(), kStartHeadPose);
@@ -114,12 +131,17 @@ class UiInputManagerTest : public testing::Test {
                                 &reticle_model_, &gesture_list_);
   }
 
+  void AddGesture(InputEvent::Type type) {
+    auto gesture = std::make_unique<InputEvent>(type);
+    gesture_list_.push_back(std::move(gesture));
+  }
+
  protected:
   std::unique_ptr<UiScene> scene_;
   std::unique_ptr<UiInputManager> input_manager_;
   ReticleModel reticle_model_;
   ControllerModel controller_model_;
-  GestureList gesture_list_;
+  InputEventList gesture_list_;
   InSequence inSequence;
 };
 
@@ -127,8 +149,8 @@ class UiInputManagerContentTest : public UiTest {
  public:
   void SetUp() override {
     UiTest::SetUp();
-    CreateScene(kNotInCct, kNotInWebVr);
-    input_manager_ = ui_->input_manager();
+    CreateScene(kNotInWebVr);
+    input_manager_ = ui_instance_->input_manager();
   }
 
  protected:
@@ -140,7 +162,6 @@ class UiInputManagerContentTest : public UiTest {
         1.0f, static_cast<float>(kWindowSize.width()) / kWindowSize.height());
 
     render_info.head_pose = head_pose_;
-    render_info.surface_texture_size = kWindowSize;
     render_info.left_eye_model.viewport = gfx::Rect(kWindowSize);
     render_info.left_eye_model.view_matrix = head_pose_;
     render_info.left_eye_model.proj_matrix = projection_matrix;
@@ -198,12 +219,12 @@ TEST_F(UiInputManagerTest, FocusableChildStealsFocus) {
   input_manager_->RequestFocus(p_element->id());
 
   // Focus child.
-  EXPECT_CALL(*p_child, OnHoverEnter(_)).InSequence(s);
-  EXPECT_CALL(*p_child, OnButtonDown(_)).InSequence(s);
+  EXPECT_CALL(*p_child, OnHoverEnter(_, _)).InSequence(s);
+  EXPECT_CALL(*p_child, OnButtonDown(_, _)).InSequence(s);
   HandleInput(kForwardVector, kDown);
-  EXPECT_CALL(*p_child, OnMove(_)).InSequence(s);
-  EXPECT_CALL(*p_child, OnButtonUp(_)).InSequence(s);
+  EXPECT_CALL(*p_child, OnButtonUp(_, _)).InSequence(s);
   EXPECT_CALL(*p_element, OnFocusChanged(false)).InSequence(s);
+  EXPECT_CALL(*p_child, OnHoverMove(_, _)).InSequence(s);
   HandleInput(kForwardVector, kUp);
 }
 
@@ -224,8 +245,8 @@ TEST_F(UiInputManagerTest, NonFocusableChildDoestNotStealFocus) {
   input_manager_->RequestFocus(p_element->id());
 
   // Focus child.
-  EXPECT_CALL(*p_child, OnHoverEnter(_)).InSequence(s);
-  EXPECT_CALL(*p_child, OnButtonDown(_)).InSequence(s);
+  EXPECT_CALL(*p_child, OnHoverEnter(_, _)).InSequence(s);
+  EXPECT_CALL(*p_child, OnButtonDown(_, _)).InSequence(s);
   EXPECT_CALL(*p_element, OnFocusChanged(false)).Times(0).InSequence(s);
   HandleInput(kForwardVector, kDown);
 }
@@ -243,15 +264,15 @@ TEST_F(UiInputManagerTest, ReticleRenderTarget) {
   controller_model.laser_origin = {0, 0, 0};
   controller_model.touchpad_button_state = kUp;
   ReticleModel reticle_model;
-  GestureList gesture_list;
+  InputEventList input_event_list;
 
   input_manager_->HandleInput(MsToTicks(1), RenderInfo(), controller_model,
-                              &reticle_model, &gesture_list);
+                              &reticle_model, &input_event_list);
   EXPECT_EQ(0, reticle_model.target_element_id);
 
   controller_model.laser_direction = kForwardVector;
   input_manager_->HandleInput(MsToTicks(1), RenderInfo(), controller_model,
-                              &reticle_model, &gesture_list);
+                              &reticle_model, &input_event_list);
   EXPECT_EQ(p_element->id(), reticle_model.target_element_id);
   EXPECT_NEAR(-1.0, reticle_model.target_point.z(), kEpsilon);
 }
@@ -263,73 +284,146 @@ TEST_F(UiInputManagerTest, HoverClick) {
   StrictMock<MockRect>* p_element = CreateAndAddMockElement(-5.f);
 
   // Move over the test element.
-  EXPECT_CALL(*p_element, OnHoverEnter(_));
+  EXPECT_CALL(*p_element, OnHoverEnter(_, _));
   HandleInput(kForwardVector, kUp);
-  EXPECT_CALL(*p_element, OnMove(_));
+  EXPECT_CALL(*p_element, OnHoverMove(_, _));
   HandleInput(kForwardVector, kUp);
   Mock::VerifyAndClearExpectations(p_element);
 
   // Press the button while on the element.
-  EXPECT_CALL(*p_element, OnMove(_));
-  EXPECT_CALL(*p_element, OnButtonDown(_));
+  EXPECT_CALL(*p_element, OnHoverMove(_, _));
+  EXPECT_CALL(*p_element, OnButtonDown(_, _));
+  HandleInput(kForwardVector, kDown);
+  Mock::VerifyAndClearExpectations(p_element);
+
+  EXPECT_CALL(*p_element, OnTouchMove(_, _));
   HandleInput(kForwardVector, kDown);
   Mock::VerifyAndClearExpectations(p_element);
 
   // Release the button while on the element.
-  EXPECT_CALL(*p_element, OnMove(_));
-  EXPECT_CALL(*p_element, OnButtonUp(_));
+  EXPECT_CALL(*p_element, OnButtonUp(_, _));
+  EXPECT_CALL(*p_element, OnHoverMove(_, _));
   HandleInput(kForwardVector, kUp);
   Mock::VerifyAndClearExpectations(p_element);
 
   // Move off of the element.
-  EXPECT_CALL(*p_element, OnHoverLeave());
+  EXPECT_CALL(*p_element, OnHoverLeave(_));
   HandleInput(kBackwardVector, kUp);
   Mock::VerifyAndClearExpectations(p_element);
 
   // Press while not on the element, move over the element, move away, then
-  // release. The element should receive hover events.
+  // release. The element should not receive hover nor touch events.
   HandleInput(kBackwardVector, kDown);
-  EXPECT_CALL(*p_element, OnHoverEnter(_));
   HandleInput(kForwardVector, kDown);
-  EXPECT_CALL(*p_element, OnHoverLeave());
   HandleInput(kBackwardVector, kUp);
   Mock::VerifyAndClearExpectations(p_element);
 
-  // Press on an element, move away, then release.
-  EXPECT_CALL(*p_element, OnHoverEnter(_));
-  EXPECT_CALL(*p_element, OnButtonDown(_));
+  // Press on an element, move away, then release. The element should receive
+  // hover leave, but keep receiving touch move events until release.
+  EXPECT_CALL(*p_element, OnHoverEnter(_, _));
+  EXPECT_CALL(*p_element, OnButtonDown(_, _));
   HandleInput(kForwardVector, kDown);
-  EXPECT_CALL(*p_element, OnHoverLeave());
+  EXPECT_CALL(*p_element, OnHoverLeave(_));
+  EXPECT_CALL(*p_element, OnTouchMove(_, _));
   HandleInput(kBackwardVector, kDown);
   Mock::VerifyAndClearExpectations(p_element);
-  EXPECT_CALL(*p_element, OnButtonUp(_));
+  EXPECT_CALL(*p_element, OnButtonUp(_, _));
   HandleInput(kBackwardVector, kUp);
   Mock::VerifyAndClearExpectations(p_element);
 }
 
 // Test pressing the button while on an element, moving to another element, and
-// releasing the button. Upon release, the previous element should see its click
+// releasing the button. Before release, the first element should still receive
+// touch move events. Upon release, the previous element should see its click
 // and hover states cleared, and the new element should see a hover.
 TEST_F(UiInputManagerTest, ReleaseButtonOnAnotherElement) {
   StrictMock<MockRect>* p_front_element = CreateAndAddMockElement(-5.f);
   StrictMock<MockRect>* p_back_element = CreateAndAddMockElement(5.f);
 
-  // TODO(ymalik): We should test verify that the functions called on the
-  // element are in the element's local coordinate space, but that would require
-  // writing a matcher for gfx::Point3F.
-  // Press on an element, move away, then release.
-  EXPECT_CALL(*p_front_element, OnHoverEnter(_));
-  EXPECT_CALL(*p_front_element, OnButtonDown(_));
+  // Press on an element.
+  EXPECT_CALL(*p_front_element, OnHoverEnter(_, _));
+  EXPECT_CALL(*p_front_element, OnButtonDown(_, _));
   HandleInput(kForwardVector, kDown);
-  EXPECT_CALL(*p_front_element, OnHoverLeave());
-  EXPECT_CALL(*p_back_element, OnHoverEnter(_));
+  // Point to another element while pressing.
+  EXPECT_CALL(*p_front_element, OnHoverLeave(_));
+  EXPECT_CALL(*p_front_element, OnTouchMove(_, _));
   HandleInput(kBackwardVector, kDown);
-  EXPECT_CALL(*p_back_element, OnMove(_));
-  EXPECT_CALL(*p_front_element, OnButtonUp(_));
+  // Point again to the previous element while pressing.
+  EXPECT_CALL(*p_front_element, OnTouchMove(_, _));
+  EXPECT_CALL(*p_front_element, OnHoverEnter(_, _));
+  HandleInput(kForwardVector, kDown);
+  // Point to second element and release.
+  EXPECT_CALL(*p_front_element, OnButtonUp(_, _));
+  EXPECT_CALL(*p_front_element, OnHoverLeave(_));
+  EXPECT_CALL(*p_back_element, OnHoverEnter(_, _));
   HandleInput(kBackwardVector, kUp);
-  EXPECT_CALL(*p_back_element, OnHoverLeave());
-  EXPECT_CALL(*p_front_element, OnHoverEnter(_));
+  // Point again to first element.
+  EXPECT_CALL(*p_back_element, OnHoverLeave(_));
+  EXPECT_CALL(*p_front_element, OnHoverEnter(_, _));
   HandleInput(kForwardVector, kUp);
+}
+
+// Test scrolling while on an element, moving to another element, and stopping
+// scrolling. Upon stop, the former element should have received the scrolling
+// events, and the new element should receive the new scrolling events.
+TEST_F(UiInputManagerTest, ScrollEndOnAnotherElement) {
+  StrictMock<MockRect>* p_front_element = CreateAndAddMockElement(-5.0f);
+  p_front_element->set_scrollable(true);
+  StrictMock<MockRect>* p_back_element = CreateAndAddMockElement(5.0f);
+  p_back_element->set_scrollable(true);
+
+  // Scroll on an element.
+  AddGesture(InputEvent::kScrollBegin);
+  EXPECT_CALL(*p_front_element, OnHoverEnter(_, _));
+  EXPECT_CALL(*p_front_element, OnScrollBegin(_, _));
+  HandleInput(kForwardVector, kUp);
+  EXPECT_TRUE(gesture_list_.empty());
+  AddGesture(InputEvent::kScrollUpdate);
+  EXPECT_CALL(*p_front_element, OnScrollUpdate(_, _));
+  HandleInput(kForwardVector, kUp);
+  EXPECT_TRUE(gesture_list_.empty());
+
+  // Move away.
+  AddGesture(InputEvent::kScrollUpdate);
+  EXPECT_CALL(*p_front_element, OnHoverLeave(_));
+  EXPECT_CALL(*p_front_element, OnScrollUpdate(_, _));
+  HandleInput(kBackwardVector, kUp);
+  EXPECT_TRUE(gesture_list_.empty());
+
+  // Release scroll.
+  AddGesture(InputEvent::kScrollEnd);
+  EXPECT_CALL(*p_front_element, OnScrollEnd(_, _));
+  EXPECT_CALL(*p_back_element, OnHoverEnter(_, _));
+  HandleInput(kBackwardVector, kUp);
+  EXPECT_TRUE(gesture_list_.empty());
+
+  // Start scrolling on a new element.
+  EXPECT_CALL(*p_back_element, OnHoverMove(_, _));
+  AddGesture(InputEvent::kScrollBegin);
+  EXPECT_CALL(*p_back_element, OnScrollBegin(_, _));
+  HandleInput(kBackwardVector, kUp);
+  EXPECT_TRUE(gesture_list_.empty());
+}
+
+// Test that scrolling events are transfered to the parent if the child is not
+// scrollable.
+TEST_F(UiInputManagerTest, ScrollBeginOnChild) {
+  StrictMock<MockRect>* p_element = CreateAndAddMockElement(-5.0f);
+  p_element->set_scrollable(true);
+  auto child = std::make_unique<StrictMock<MockRect>>();
+  auto* p_child = child.get();
+  child->SetTranslate(0.0f, 0.0f, -5.0f);
+  child->set_hit_testable(true);
+  child->set_focusable(true);
+  p_element->AddChild(std::move(child));
+
+  AddGesture(InputEvent::kScrollBegin);
+  EXPECT_CALL(*p_element, OnHoverEnter(_, _));
+  EXPECT_CALL(*p_element, OnScrollBegin(_, _));
+  EXPECT_CALL(*p_child, OnScrollBegin(_, _)).Times(0);
+  HandleInput(kForwardVector, kUp);
+  ASSERT_EQ(p_child->id(), reticle_model_.target_element_id);
+  EXPECT_TRUE(gesture_list_.empty());
 }
 
 // Test that input is tolerant of disappearing elements.
@@ -337,7 +431,7 @@ TEST_F(UiInputManagerTest, ElementDeletion) {
   StrictMock<MockRect>* p_element = CreateAndAddMockElement(-5.f);
 
   // Hover on an element.
-  EXPECT_CALL(*p_element, OnHoverEnter(_));
+  EXPECT_CALL(*p_element, OnHoverEnter(_, _));
   HandleInput(kForwardVector, kUp);
 
   // Remove and retain the element from the scene, and ensure that it receives
@@ -349,8 +443,8 @@ TEST_F(UiInputManagerTest, ElementDeletion) {
   // Re-add the element to the scene, and press on it to lock it for input.
   scene_->AddUiElement(kRoot, std::move(deleted_element));
   scene_->OnBeginFrame(base::TimeTicks(), kStartHeadPose);
-  EXPECT_CALL(*p_element, OnHoverEnter(_));
-  EXPECT_CALL(*p_element, OnButtonDown(_));
+  EXPECT_CALL(*p_element, OnHoverEnter(_, _));
+  EXPECT_CALL(*p_element, OnButtonDown(_, _));
   HandleInput(kForwardVector, kDown);
 
   // Remove the element again, move off the element, and release to ensure that
@@ -396,7 +490,7 @@ TEST_F(UiInputManagerTest, HitTestStrategy) {
 }
 
 TEST_F(UiInputManagerContentTest, NoMouseMovesDuringClick) {
-  EXPECT_TRUE(RunFor(MsToDelta(500)));
+  EXPECT_FALSE(RunForMs(500));
   // It would be nice if the controller weren't platform specific and we could
   // mock out the underlying sensor data. For now, we will hallucinate
   // parameters to HandleInput.
@@ -410,9 +504,9 @@ TEST_F(UiInputManagerContentTest, NoMouseMovesDuringClick) {
   controller_model.laser_origin = origin;
   controller_model.touchpad_button_state = UiInputManager::ButtonState::DOWN;
   ReticleModel reticle_model;
-  GestureList gesture_list;
+  InputEventList input_event_list;
   input_manager_->HandleInput(MsToTicks(1), RenderInfo(), controller_model,
-                              &reticle_model, &gesture_list);
+                              &reticle_model, &input_event_list);
 
   // We should have hit the content quad if our math was correct.
   ASSERT_NE(0, reticle_model.target_element_id);
@@ -421,39 +515,16 @@ TEST_F(UiInputManagerContentTest, NoMouseMovesDuringClick) {
   // Unless we suppress content move events during clicks, this will cause us to
   // call OnContentMove on the delegate. We should do this suppression, so we
   // set the expected number of calls to zero.
-  EXPECT_CALL(*content_input_delegate_, OnContentMove(testing::_)).Times(0);
+  EXPECT_CALL(*content_input_delegate_, OnHoverMove(_, _)).Times(0);
 
   input_manager_->HandleInput(MsToTicks(1), RenderInfo(), controller_model,
-                              &reticle_model, &gesture_list);
-}
-
-TEST_F(UiInputManagerContentTest, ExitPromptHitTesting) {
-  model_->active_modal_prompt_type = kModalPromptTypeExitVRForSiteInfo;
-  EXPECT_TRUE(RunFor(MsToDelta(500)));
-
-  UiElement* exit_prompt =
-      scene_->GetUiElementByName(UiElementName::kExitPrompt);
-  gfx::Point3F exit_prompt_center = exit_prompt->GetCenter();
-  gfx::Point3F origin;
-
-  ControllerModel controller_model;
-  controller_model.laser_direction = exit_prompt_center - origin;
-  controller_model.laser_origin = origin;
-  controller_model.touchpad_button_state = UiInputManager::ButtonState::DOWN;
-  ReticleModel reticle_model;
-  GestureList gesture_list;
-  input_manager_->HandleInput(MsToTicks(1), RenderInfo(), controller_model,
-                              &reticle_model, &gesture_list);
-
-  // We should have hit the exit prompt if our math was correct.
-  ASSERT_NE(0, reticle_model.target_element_id);
-  EXPECT_EQ(exit_prompt->id(), reticle_model.target_element_id);
+                              &reticle_model, &input_event_list);
 }
 
 TEST_F(UiInputManagerContentTest, AudioPermissionPromptHitTesting) {
   model_->active_modal_prompt_type =
       kModalPromptTypeExitVRForVoiceSearchRecordAudioOsPermission;
-  EXPECT_TRUE(RunFor(MsToDelta(500)));
+  EXPECT_TRUE(RunForMs(500));
 
   UiElement* url_bar = scene_->GetUiElementByName(UiElementName::kUrlBar);
   gfx::Point3F url_bar_center = url_bar->GetCenter();
@@ -464,16 +535,15 @@ TEST_F(UiInputManagerContentTest, AudioPermissionPromptHitTesting) {
   controller_model.laser_origin = origin;
   controller_model.touchpad_button_state = UiInputManager::ButtonState::DOWN;
   ReticleModel reticle_model;
-  GestureList gesture_list;
+  InputEventList input_event_list;
   input_manager_->HandleInput(MsToTicks(1), RenderInfo(), controller_model,
-                              &reticle_model, &gesture_list);
+                              &reticle_model, &input_event_list);
 
   // Even if the reticle is over the URL bar, the backplane should be in front
   // and should be hit.
   ASSERT_NE(0, reticle_model.target_element_id);
-  auto& backplane =
-      scene_->GetUiElementByName(kAudioPermissionPrompt)->children().front();
-  EXPECT_EQ(backplane->type(), kTypePromptBackplane);
+  auto* prompt = scene_->GetUiElementByName(kExitPrompt);
+  auto* backplane = prompt->GetDescendantByType(kTypePromptBackplane);
   EXPECT_EQ(backplane->id(), reticle_model.target_element_id);
 }
 
@@ -491,9 +561,9 @@ TEST_F(UiInputManagerContentTest, TreeVsZOrder) {
   controller_model.laser_origin = origin;
   controller_model.touchpad_button_state = UiInputManager::ButtonState::DOWN;
   ReticleModel reticle_model;
-  GestureList gesture_list;
+  InputEventList input_event_list;
   input_manager_->HandleInput(MsToTicks(1), RenderInfo(), controller_model,
-                              &reticle_model, &gesture_list);
+                              &reticle_model, &input_event_list);
 
   // We should have hit the content quad if our math was correct.
   ASSERT_NE(0, reticle_model.target_element_id);
@@ -504,7 +574,7 @@ TEST_F(UiInputManagerContentTest, TreeVsZOrder) {
   OnBeginFrame();
 
   input_manager_->HandleInput(MsToTicks(1), RenderInfo(), controller_model,
-                              &reticle_model, &gesture_list);
+                              &reticle_model, &input_event_list);
 
   // We should have hit the content quad even though, geometrically, it stacks
   // behind the backplane.
@@ -524,14 +594,14 @@ TEST_F(UiInputManagerContentTest, ControllerRestingInViewport) {
       controller_center.x(), controller_center.y(), controller_center.z());
   controller_model.laser_origin = controller_center;
   ReticleModel reticle_model;
-  GestureList gesture_list;
+  InputEventList input_event_list;
   RenderInfo render_info = CreateRenderInfo();
 
   // The controller is initially not in the viewport.
   EXPECT_FALSE(input_manager_->controller_resting_in_viewport());
 
   input_manager_->HandleInput(MsToTicks(1), render_info, controller_model,
-                              &reticle_model, &gesture_list);
+                              &reticle_model, &input_event_list);
   ui_->OnControllerUpdated(controller_model, reticle_model);
   scene_->OnBeginFrame(base::TimeTicks(), head_pose_);
 
@@ -540,7 +610,7 @@ TEST_F(UiInputManagerContentTest, ControllerRestingInViewport) {
   EXPECT_FALSE(input_manager_->controller_resting_in_viewport());
 
   input_manager_->HandleInput(MsToTicks(50000), render_info, controller_model,
-                              &reticle_model, &gesture_list);
+                              &reticle_model, &input_event_list);
   ui_->OnControllerUpdated(controller_model, reticle_model);
   scene_->OnBeginFrame(base::TimeTicks(), head_pose_);
 

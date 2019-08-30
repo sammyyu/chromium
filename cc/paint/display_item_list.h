@@ -9,6 +9,7 @@
 
 #include <memory>
 #include <utility>
+#include <vector>
 
 #include "base/gtest_prod_util.h"
 #include "base/macros.h"
@@ -28,6 +29,7 @@ class SkCanvas;
 
 namespace gpu {
 namespace raster {
+class RasterImplementation;
 class RasterImplementationGLES;
 }  // namespace raster
 }  // namespace gpu
@@ -68,14 +70,26 @@ class CC_PAINT_EXPORT DisplayItemList
 
   // Push functions construct a new op on the paint op buffer, while maintaining
   // bookkeeping information. Must be called after invoking StartPaint().
+  // Returns the id (which is an opaque value) of the operation that can be used
+  // in UpdateSaveLayerBounds().
   template <typename T, typename... Args>
-  void push(Args&&... args) {
+  size_t push(Args&&... args) {
 #if DCHECK_IS_ON()
     DCHECK(IsPainting());
 #endif
+    size_t offset = paint_op_buffer_.next_op_offset();
     if (usage_hint_ == kTopLevelDisplayItemList)
-      offsets_.push_back(paint_op_buffer_.next_op_offset());
+      offsets_.push_back(offset);
     paint_op_buffer_.push<T>(std::forward<Args>(args)...);
+    return offset;
+  }
+
+  // Called by blink::PaintChunksToCcLayer when an effect ends, to update the
+  // bounds of a SaveLayer[Alpha]Op which was emitted when the effect started.
+  // This is needed because blink doesn't know the bounds when an effect starts.
+  // Don't add other mutation methods like this if there is better alternative.
+  void UpdateSaveLayerBounds(size_t id, const SkRect& bounds) {
+    paint_op_buffer_.UpdateSaveLayerBounds(id, bounds);
   }
 
   void EndPaintOfUnpaired(const gfx::Rect& visual_rect) {
@@ -150,7 +164,7 @@ class CC_PAINT_EXPORT DisplayItemList
   bool HasNonAAPaint() const { return paint_op_buffer_.HasNonAAPaint(); }
 
   // This gives the total number of PaintOps.
-  size_t op_count() const { return paint_op_buffer_.size(); }
+  size_t TotalOpCount() const { return paint_op_buffer_.total_op_count(); }
   size_t BytesUsed() const;
 
   const DiscardableImageMap& discardable_image_map() const {
@@ -180,6 +194,7 @@ class CC_PAINT_EXPORT DisplayItemList
  private:
   FRIEND_TEST_ALL_PREFIXES(DisplayItemListTest, AsValueWithNoOps);
   FRIEND_TEST_ALL_PREFIXES(DisplayItemListTest, AsValueWithOps);
+  friend gpu::raster::RasterImplementation;
   friend gpu::raster::RasterImplementationGLES;
 
   ~DisplayItemList();

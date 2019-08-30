@@ -6,7 +6,7 @@
 
 #include <algorithm>
 
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/power_monitor_test_base.h"
 #include "base/test/scoped_task_environment.h"
 #include "chrome/browser/ui/tabs/tab_strip_model.h"
@@ -40,9 +40,10 @@ class TestTabStatsTracker : public TabStatsTracker {
                  ChromeRenderViewHostTestHarness* test_harness) {
     EXPECT_TRUE(test_harness);
     for (size_t i = 0; i < tab_count; ++i) {
-      content::WebContents* tab = test_harness->CreateTestWebContents();
-      tab_stats_data_store()->OnTabAdded(tab);
-      tabs_.emplace_back(base::WrapUnique(tab));
+      std::unique_ptr<content::WebContents> tab =
+          test_harness->CreateTestWebContents();
+      tab_stats_data_store()->OnTabAdded(tab.get());
+      tabs_.emplace_back(std::move(tab));
     }
     return tab_stats_data_store()->tab_stats().total_tab_count;
   }
@@ -291,7 +292,7 @@ TEST_F(TabStatsTrackerTest, TabUsageGetsReported) {
 
   std::vector<std::unique_ptr<content::WebContents>> web_contentses;
   for (size_t i = 0; i < 4; ++i) {
-    web_contentses.emplace_back(base::WrapUnique(CreateTestWebContents()));
+    web_contentses.emplace_back(CreateTestWebContents());
     // Make sure that these WebContents are initially not visible.
     web_contentses[i]->WasHidden();
     tab_stats_tracker_->OnInitialOrInsertedTab(web_contentses[i].get());
@@ -366,7 +367,7 @@ TEST_F(TabStatsTrackerTest, TabUsageGetsReported) {
   // Simulate an interaction on a tab, we should now see 3 tabs being marked as
   // used.
   content::WebContentsTester::For(web_contentses[2].get())
-      ->TestOnUserInteraction(blink::WebInputEvent::kMouseDown);
+      ->TestDidReceiveInputEvent(blink::WebInputEvent::kMouseDown);
   tab_stats_tracker_->OnInterval(kValidLongInterval, interval_map);
   histogram_tester_.ExpectBucketCount(
       TestUmaStatsReportingDelegate::GetIntervalHistogramName(
@@ -394,7 +395,7 @@ TEST_F(TabStatsTrackerTest, TabUsageGetsReported) {
   // We need to re-interact with the WebContents as each call to |OnInterval|
   // reset the interval and clear the interaction bit.
   content::WebContentsTester::For(web_contentses.back().get())
-      ->TestOnUserInteraction(blink::WebInputEvent::kMouseDown);
+      ->TestDidReceiveInputEvent(blink::WebInputEvent::kMouseDown);
   web_contentses.pop_back();
   tab_stats_tracker_->OnInterval(kValidLongInterval, interval_map);
   histogram_tester_.ExpectBucketCount(

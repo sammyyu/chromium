@@ -16,7 +16,7 @@
 #include "content/browser/renderer_host/render_widget_host_view_child_frame.h"
 #include "content/common/content_export.h"
 #include "content/common/cursors/webcursor.h"
-#include "third_party/WebKit/public/platform/WebInputEvent.h"
+#include "third_party/blink/public/platform/web_input_event.h"
 #include "ui/events/event.h"
 #include "ui/events/gestures/gesture_recognizer.h"
 #include "ui/events/gestures/gesture_types.h"
@@ -62,6 +62,9 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   // Called when this RenderWidgetHostViewGuest is attached.
   void OnAttached();
 
+  // RenderWidgetHostViewChildFrame implementation.
+  RenderWidgetHostViewBase* GetParentView() override;
+
   // RenderWidgetHostView implementation.
   bool OnMessageReceived(const IPC::Message& msg) override;
   void InitAsChild(gfx::NativeView parent_view) override;
@@ -77,14 +80,17 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   gfx::Rect GetBoundsInRootWindow() override;
   gfx::Size GetCompositorViewportPixelSize() const override;
   base::string16 GetSelectedText() override;
+  base::string16 GetSurroundingText() override;
+  gfx::Range GetSelectedRange() override;
   void SetNeedsBeginFrames(bool needs_begin_frames) override;
   TouchSelectionControllerClientManager*
   GetTouchSelectionControllerClientManager() override;
   gfx::PointF TransformPointToRootCoordSpaceF(
       const gfx::PointF& point) override;
-  bool TransformPointToLocalCoordSpace(const gfx::PointF& point,
-                                       const viz::SurfaceId& original_surface,
-                                       gfx::PointF* transformed_point) override;
+  bool TransformPointToLocalCoordSpaceLegacy(
+      const gfx::PointF& point,
+      const viz::SurfaceId& original_surface,
+      gfx::PointF* transformed_point) override;
   gfx::PointF TransformRootPointToViewCoordSpace(
       const gfx::PointF& point) override;
 
@@ -121,7 +127,8 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
   void DidStopFlinging() override;
   bool LockMouse() override;
   void UnlockMouse() override;
-  viz::LocalSurfaceId GetLocalSurfaceId() const override;
+  viz::FrameSinkId GetRootFrameSinkId() override;
+  const viz::LocalSurfaceId& GetLocalSurfaceId() const override;
   void DidCreateNewRendererCompositorFrameSink(
       viz::mojom::CompositorFrameSinkClient* renderer_compositor_frame_sink)
       override;
@@ -147,15 +154,20 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
 
   void GetScreenInfo(ScreenInfo* screen_info) const override;
 
-  viz::ScopedSurfaceIdAllocator ResizeDueToAutoResize(
-      const gfx::Size& new_size,
-      uint64_t sequence_number) override;
+  void EnableAutoResize(const gfx::Size& min_size,
+                        const gfx::Size& max_size) override;
+  void DisableAutoResize(const gfx::Size& new_size) override;
+
+  viz::ScopedSurfaceIdAllocator DidUpdateVisualProperties(
+      const cc::RenderFrameMetadata& metadata) override;
 
  private:
   friend class RenderWidgetHostView;
 
-  void SendSurfaceInfoToEmbedderImpl(
-      const viz::SurfaceInfo& surface_info) override;
+  void FirstSurfaceActivation(const viz::SurfaceInfo& surface_info) override;
+
+  void OnDidUpdateVisualPropertiesComplete(
+      const cc::RenderFrameMetadata& metadata);
 
   RenderWidgetHostViewGuest(
       RenderWidgetHost* widget,
@@ -176,7 +188,8 @@ class CONTENT_EXPORT RenderWidgetHostViewGuest
                           int browser_plugin_instance_id,
                           const blink::WebInputEvent* event);
 
-  bool HasEmbedderChanged() override;
+  void ProcessTouchpadPinchAckInRoot(const blink::WebGestureEvent& event,
+                                     InputEventAckState ack_result);
 
 #if defined(USE_AURA)
   void OnGotEmbedToken(const base::UnguessableToken& token);

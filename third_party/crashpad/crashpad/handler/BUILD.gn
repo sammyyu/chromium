@@ -40,6 +40,7 @@ static_library("handler") {
   }
 
   if (crashpad_is_linux || crashpad_is_android) {
+    set_sources_assignment_filter([])
     sources += [
       "linux/crash_report_exception_handler.cc",
       "linux/crash_report_exception_handler.h",
@@ -111,11 +112,12 @@ source_set("handler_test") {
   if (crashpad_is_win) {
     data_deps = [
       ":crashpad_handler_test_extended_handler",
+      ":fake_handler_that_crashes_at_startup",
     ]
   }
 }
 
-executable("crashpad_handler") {
+crashpad_executable("crashpad_handler") {
   sources = [
     "main.cc",
   ]
@@ -137,28 +139,48 @@ executable("crashpad_handler") {
         "@loader_path/../../../../../../../..",
 
         # The handler is also in
-        # Content Shell.app/Contents/Frameworks/Content Shell Framework.framework/Helpers/
+        # Content Shell.app/Contents/Frameworks/Content Shell Framework.framework/Versions/C/Helpers/
         # so set the rpath for that too.
         "-rpath",
-        "@loader_path/../../../../..",
+        "@loader_path/../../../../../../..",
       ]
     }
   }
 
   if (crashpad_is_win) {
     if (crashpad_is_in_chromium) {
-      configs -= [ "//build/config/win:console" ]
-      configs += [ "//build/config/win:windowed" ]
+      remove_configs = [ "//build/config/win:console" ]
+      configs = [ "//build/config/win:windowed" ]
     } else {
-      configs -=
+      remove_configs =
           [ "//third_party/mini_chromium/mini_chromium/build:win_console" ]
-      configs +=
+      configs =
           [ "//third_party/mini_chromium/mini_chromium/build:win_windowed" ]
     }
   }
 }
 
-executable("crashpad_handler_test_extended_handler") {
+# There is not any normal way to package native executables in an Android APK.
+# It is normal to package native code as a loadable module but Android's APK
+# installer will ignore files not named like a shared object, so give the
+# handler executable an acceptable name.
+if (crashpad_is_android) {
+  copy("crashpad_handler_module") {
+    deps = [
+      ":crashpad_handler",
+    ]
+
+    sources = [
+      "$root_out_dir/crashpad_handler",
+    ]
+
+    outputs = [
+      "$root_out_dir/libcrashpad_handler.so",
+    ]
+  }
+}
+
+crashpad_executable("crashpad_handler_test_extended_handler") {
   testonly = true
 
   sources = [
@@ -176,7 +198,7 @@ executable("crashpad_handler_test_extended_handler") {
 }
 
 if (crashpad_is_win) {
-  executable("crashpad_handler_com") {
+  crashpad_executable("crashpad_handler_com") {
     sources = [
       "main.cc",
     ]
@@ -206,7 +228,7 @@ if (crashpad_is_win) {
     ]
   }
 
-  executable("crash_other_program") {
+  crashpad_executable("crash_other_program") {
     testonly = true
 
     sources = [
@@ -221,7 +243,7 @@ if (crashpad_is_win) {
     ]
   }
 
-  executable("crashy_program") {
+  crashpad_executable("crashy_program") {
     testonly = true
 
     sources = [
@@ -234,7 +256,7 @@ if (crashpad_is_win) {
     ]
   }
 
-  executable("crashy_signal") {
+  crashpad_executable("crashy_signal") {
     testonly = true
 
     sources = [
@@ -249,7 +271,7 @@ if (crashpad_is_win) {
     ]
   }
 
-  executable("fake_handler_that_crashes_at_startup") {
+  crashpad_executable("fake_handler_that_crashes_at_startup") {
     testonly = true
 
     sources = [
@@ -257,7 +279,7 @@ if (crashpad_is_win) {
     ]
   }
 
-  executable("hanging_program") {
+  crashpad_executable("hanging_program") {
     testonly = true
 
     sources = [
@@ -270,7 +292,7 @@ if (crashpad_is_win) {
     ]
   }
 
-  loadable_module("loader_lock_dll") {
+  crashpad_loadable_module("loader_lock_dll") {
     testonly = true
 
     sources = [
@@ -278,7 +300,7 @@ if (crashpad_is_win) {
     ]
   }
 
-  executable("self_destroying_program") {
+  crashpad_executable("self_destroying_program") {
     testonly = true
 
     sources = [
@@ -295,7 +317,7 @@ if (crashpad_is_win) {
 
   if (current_cpu == "x86") {
     # Cannot create an x64 DLL with embedded debug info.
-    executable("crashy_z7_loader") {
+    crashpad_executable("crashy_z7_loader") {
       testonly = true
 
       sources = [

@@ -8,12 +8,13 @@
 #include <memory>
 
 #include "base/version.h"
+#include "chrome/browser/vr/vr_export.h"
 
 class SkBitmap;
 
 namespace vr {
 
-struct Assets {
+struct VR_EXPORT Assets {
   Assets();
   ~Assets();
 
@@ -32,6 +33,7 @@ struct Assets {
   std::unique_ptr<std::string> button_hover_sound;
   std::unique_ptr<std::string> button_click_sound;
   std::unique_ptr<std::string> back_button_click_sound;
+  std::unique_ptr<std::string> inactive_button_click_sound;
 
   base::Version version;
 };

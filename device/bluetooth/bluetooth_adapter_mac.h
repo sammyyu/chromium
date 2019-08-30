@@ -17,6 +17,7 @@
 #include "base/memory/ref_counted.h"
 #include "base/memory/weak_ptr.h"
 #include "base/observer_list.h"
+#include "base/single_thread_task_runner.h"
 #include "device/bluetooth/bluetooth_adapter.h"
 #include "device/bluetooth/bluetooth_discovery_manager_mac.h"
 #include "device/bluetooth/bluetooth_export.h"
@@ -30,6 +31,7 @@
 @class NSDate;
 
 @class BluetoothLowEnergyCentralManagerDelegate;
+@class BluetoothLowEnergyPeripheralManagerDelegate;
 
 namespace device {
 
@@ -150,6 +152,9 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterMac
   // Returns the CBCentralManager instance.
   CBCentralManager* GetCentralManager();
 
+  // Returns the CBPeripheralManager instance.
+  CBPeripheralManager* GetPeripheralManager();
+
   // Allow the mocking out of getting the HostController state for testing.
   void SetHostControllerStateFunctionForTesting(
       HostControllerStateFunction controller_state_function);
@@ -166,6 +171,7 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterMac
   friend class BluetoothTestMac;
   friend class BluetoothAdapterMacTest;
   friend class BluetoothLowEnergyCentralManagerBridge;
+  friend class BluetoothLowEnergyPeripheralManagerBridge;
 
   BluetoothAdapterMac();
   ~BluetoothAdapterMac() override;
@@ -174,15 +180,15 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterMac
   void AddDiscoverySession(
       BluetoothDiscoveryFilter* discovery_filter,
       const base::Closure& callback,
-      const DiscoverySessionErrorCallback& error_callback) override;
+      DiscoverySessionErrorCallback error_callback) override;
   void RemoveDiscoverySession(
       BluetoothDiscoveryFilter* discovery_filter,
       const base::Closure& callback,
-      const DiscoverySessionErrorCallback& error_callback) override;
+      DiscoverySessionErrorCallback error_callback) override;
   void SetDiscoveryFilter(
       std::unique_ptr<BluetoothDiscoveryFilter> discovery_filter,
       const base::Closure& callback,
-      const DiscoverySessionErrorCallback& error_callback) override;
+      DiscoverySessionErrorCallback error_callback) override;
 
   // Start classic and/or low energy discovery sessions, according to the
   // filter.  If a discovery session is already running the filter is updated.
@@ -262,6 +268,11 @@ class DEVICE_BLUETOOTH_EXPORT BluetoothAdapterMac
   base::scoped_nsobject<CBCentralManager> low_energy_central_manager_;
   base::scoped_nsobject<BluetoothLowEnergyCentralManagerDelegate>
       low_energy_central_manager_delegate_;
+
+  // Underlying CoreBluetooth CBPeripheralManager and its delegate.
+  base::scoped_nsobject<CBPeripheralManager> low_energy_peripheral_manager_;
+  base::scoped_nsobject<BluetoothLowEnergyPeripheralManagerDelegate>
+      low_energy_peripheral_manager_delegate_;
 
   base::WeakPtrFactory<BluetoothAdapterMac> weak_ptr_factory_;
 

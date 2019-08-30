@@ -132,8 +132,7 @@ class NetErrorHelperCore {
   NetErrorHelperCore(Delegate* delegate,
                      bool auto_reload_enabled,
                      bool auto_reload_visible_only,
-                     bool is_visible,
-                     bool online);
+                     bool is_visible);
   ~NetErrorHelperCore();
 
   // Sets values in |pending_error_page_info_|. If |error_html| is not null, it
@@ -193,7 +192,7 @@ class NetErrorHelperCore {
 
   bool ShouldSuppressErrorPage(FrameType frame_type, const GURL& url);
 
-  void set_timer_for_testing(std::unique_ptr<base::Timer> timer) {
+  void set_timer_for_testing(std::unique_ptr<base::OneShotTimer> timer) {
     auto_reload_timer_ = std::move(timer);
   }
 
@@ -258,7 +257,7 @@ class NetErrorHelperCore {
   const bool auto_reload_visible_only_;
 
   // Timer used to wait for auto-reload attempts.
-  std::unique_ptr<base::Timer> auto_reload_timer_;
+  std::unique_ptr<base::OneShotTimer> auto_reload_timer_;
 
   // True if the auto-reload timer would be running but is waiting for an
   // offline->online network transition.

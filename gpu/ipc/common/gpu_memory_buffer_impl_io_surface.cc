@@ -27,6 +27,7 @@ uint32_t LockFlags(gfx::BufferUsage usage) {
     case gfx::BufferUsage::GPU_READ:
     case gfx::BufferUsage::SCANOUT:
     case gfx::BufferUsage::SCANOUT_CAMERA_READ_WRITE:
+    case gfx::BufferUsage::CAMERA_AND_CPU_READ_WRITE:
     case gfx::BufferUsage::SCANOUT_CPU_READ_WRITE:
     case gfx::BufferUsage::SCANOUT_VDA_WRITE:
     case gfx::BufferUsage::GPU_READ_CPU_READ_WRITE_PERSISTENT:
@@ -130,10 +131,15 @@ void GpuMemoryBufferImplIOSurface::SetColorSpace(
   IOSurfaceSetColorSpace(io_surface_, color_space);
 }
 
-gfx::GpuMemoryBufferHandle GpuMemoryBufferImplIOSurface::GetHandle() const {
+gfx::GpuMemoryBufferType GpuMemoryBufferImplIOSurface::GetType() const {
+  return gfx::IO_SURFACE_BUFFER;
+}
+
+gfx::GpuMemoryBufferHandle GpuMemoryBufferImplIOSurface::CloneHandle() const {
   gfx::GpuMemoryBufferHandle handle;
   handle.type = gfx::IO_SURFACE_BUFFER;
   handle.id = id_;
+  handle.mach_port.reset(IOSurfaceCreateMachPort(io_surface_));
   return handle;
 }
 

@@ -32,7 +32,7 @@ class VideoDecoderForMixer : public MediaPipelineBackend::VideoDecoder {
   // Initializes the VideoDecoderForMixer. Called after allocation and before
   // Start is called. Gives the implementation a chance to initialize any
   // resources.
-  virtual void Initialize() = 0;
+  virtual bool Initialize() = 0;
 
   // When called, playback is expected to start from |start_pts|.
   //
@@ -52,9 +52,9 @@ class VideoDecoderForMixer : public MediaPipelineBackend::VideoDecoder {
   // playback rate prior to pausing.
   virtual bool Resume() = 0;
 
-  // Get the current video PTS. This will typically be the pts of the last
+  // Returns the current video PTS. This will typically be the pts of the last
   // video frame displayed.
-  virtual int64_t GetCurrentPts() const = 0;
+  virtual bool GetCurrentPts(int64_t* timestamp, int64_t* pts) const = 0;
 
   // Set the playback rate. This is used to sync the audio to the video. This
   // call will change the rate of play of video in the following manner:
@@ -71,7 +71,33 @@ class VideoDecoderForMixer : public MediaPipelineBackend::VideoDecoder {
   // than the current pts, all video frames in this pts range will be repeated.
   // Implementation is encouraged to smooth out this transition, such that
   // minimal jitter in the video is shown, but that is not necessary.
-  virtual bool SetCurrentPts(int64_t pts) = 0;
+  virtual bool SetPts(int64_t timestamp, int64_t pts) = 0;
+
+  // Returns number of frames dropped since the last call to Start(). This is
+  // used to estimate video playback smoothness.
+  // This is different from VideoDecoder::Statistics::dropped_frames. That
+  // value is the number of *decoded* dropped frames. The value returned here
+  // must be the total number of dropped frames, whether the frames have been
+  // decoded or not.
+  virtual int64_t GetDroppedFrames() = 0;
+
+  // Returns number of frames repeated since the last call to Start(). This is
+  // used to estimate video playback smoothness. Note that repeated frames could
+  // be due to changes in the rate of playback, setting the PTS, or simply due
+  // to frame rate conversion. This number should be the sum of all of these
+  // factors.
+  //
+  // For example, if the current OutputRefreshRate is 60hz, and the current
+  // content frame rate is 24fps, it is expected to repeat 36fps.
+  virtual int64_t GetRepeatedFrames() = 0;
+
+  // Returns the output refresh rate on this platform, in mHz (millihertz). On
+  // display devices, this will be the display refresh rate. On HDMI devices,
+  // this will be the refresh rate of the HDMI connection.
+  virtual int64_t GetOutputRefreshRate() = 0;
+
+  // Returns the current content refresh rate in mHz (millihertz).
+  virtual int64_t GetCurrentContentRefreshRate() = 0;
 };
 
 }  // namespace media

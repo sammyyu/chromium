@@ -20,6 +20,7 @@
 #include "mash/public/mojom/launchable.mojom.h"
 #include "services/service_manager/public/cpp/connector.h"
 #include "ui/accessibility/ax_node_data.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/geometry/size.h"
 #include "ui/gfx/paint_vector_icon.h"
@@ -37,21 +38,19 @@ FlagWarningTray::FlagWarningTray(Shelf* shelf) : shelf_(shelf) {
   DCHECK(shelf_);
   SetLayoutManager(std::make_unique<views::FillLayout>());
 
-  const bool is_mash = Shell::GetAshConfig() == Config::MASH;
-  if (is_mash) {
-    container_ = new TrayContainer(shelf);
-    AddChildView(container_);
+  DCHECK(!::features::IsAshInBrowserProcess());
+  container_ = new TrayContainer(shelf);
+  AddChildView(container_);
 
-    button_ = views::MdTextButton::Create(this, base::string16(),
-                                          CONTEXT_LAUNCHER_BUTTON);
-    button_->SetProminent(true);
-    button_->SetBgColorOverride(gfx::kGoogleYellow300);
-    button_->SetEnabledTextColors(SK_ColorBLACK);
-    button_->SetTooltipText(base::ASCIIToUTF16(kTooltipText));
-    UpdateButton();
-    container_->AddChildView(button_);
-  }
-  SetVisible(is_mash);
+  button_ = views::MdTextButton::Create(this, base::string16(),
+                                        CONTEXT_LAUNCHER_BUTTON);
+  button_->SetProminent(true);
+  button_->SetBgColorOverride(gfx::kGoogleYellow300);
+  button_->SetEnabledTextColors(SK_ColorBLACK);
+  button_->SetTooltipText(base::ASCIIToUTF16(kTooltipText));
+  UpdateButton();
+  container_->AddChildView(button_);
+  SetVisible(true);
 }
 
 FlagWarningTray::~FlagWarningTray() = default;

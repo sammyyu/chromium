@@ -7,7 +7,6 @@
 #include "base/lazy_instance.h"
 #include "cc/layers/layer.h"
 #include "cc/layers/layer_collections.h"
-#include "cc/layers/surface_layer.h"
 #include "cc/paint/filter_operations.h"
 #include "chrome/browser/android/compositor/layer/thumbnail_layer.h"
 #include "chrome/browser/android/compositor/tab_content_manager.h"
@@ -92,10 +91,17 @@ void ContentLayer::SetProperties(int id,
   }
   if (static_layer.get()) {
     static_layer->layer()->SetIsDrawable(true);
-    if (should_clip)
+
+    if (should_clip) {
       static_layer->Clip(clip);
-    else
-      static_layer->ClearClip();
+    } else {
+      // Clipping to the computed size of the layer fixes an issue where the tab
+      // contents briefly jump back-and-forth when transitioning from a
+      // TabListSceneLayer to a StaticTabSceneLayer.
+      const gfx::Size& size = ComputeSize(id);
+      static_layer->Clip(gfx::Rect(0, 0, size.width(), size.height()));
+    }
+
     SetOpacityOnLeaf(static_layer->layer(), static_opacity);
 
     cc::FilterOperations static_filter_operations;
@@ -113,10 +119,9 @@ gfx::Size ContentLayer::ComputeSize(int id) const {
   gfx::Size size;
 
   scoped_refptr<cc::Layer> live_layer = tab_content_manager_->GetLiveLayer(id);
-  cc::SurfaceLayer* surface_layer =
-      static_cast<cc::SurfaceLayer*>(GetDrawsContentLeaf(live_layer));
-  if (surface_layer)
-    size.SetToMax(surface_layer->bounds());
+  cc::Layer* leaf_that_draws = GetDrawsContentLeaf(live_layer);
+  if (leaf_that_draws)
+    size.SetToMax(leaf_that_draws->bounds());
 
   scoped_refptr<ThumbnailLayer> static_layer =
       tab_content_manager_->GetStaticLayer(id);

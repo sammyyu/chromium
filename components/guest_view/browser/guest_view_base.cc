@@ -27,7 +27,7 @@
 #include "content/public/browser/web_contents.h"
 #include "content/public/common/page_zoom.h"
 #include "content/public/common/url_constants.h"
-#include "third_party/WebKit/public/platform/WebGestureEvent.h"
+#include "third_party/blink/public/platform/web_gesture_event.h"
 
 using content::WebContents;
 
@@ -187,7 +187,7 @@ GuestViewBase::GuestViewBase(WebContents* owner_web_contents)
 GuestViewBase::~GuestViewBase() {}
 
 void GuestViewBase::Init(const base::DictionaryValue& create_params,
-                         const WebContentsCreatedCallback& callback) {
+                         WebContentsCreatedCallback callback) {
   if (initialized_)
     return;
   initialized_ = true;
@@ -196,16 +196,15 @@ void GuestViewBase::Init(const base::DictionaryValue& create_params,
     // The derived class did not create a WebContents so this class serves no
     // purpose. Let's self-destruct.
     delete this;
-    callback.Run(nullptr);
+    std::move(callback).Run(nullptr);
     return;
   }
 
   std::unique_ptr<base::DictionaryValue> params(create_params.DeepCopy());
   CreateWebContents(create_params,
-                    base::Bind(&GuestViewBase::CompleteInit,
-                               weak_ptr_factory_.GetWeakPtr(),
-                               base::Passed(&params),
-                               callback));
+                    base::BindOnce(&GuestViewBase::CompleteInit,
+                                   weak_ptr_factory_.GetWeakPtr(),
+                                   base::Passed(&params), std::move(callback)));
 }
 
 void GuestViewBase::InitWithWebContents(
@@ -299,10 +298,12 @@ void GuestViewBase::SetSize(const SetSizeParams& params) {
   enable_auto_size &= !min_auto_size_.IsEmpty() && !max_auto_size_.IsEmpty() &&
                       IsAutoSizeSupported();
 
-  content::RenderViewHost* rvh = web_contents()->GetRenderViewHost();
+  content::RenderWidgetHostView* rwhv =
+      web_contents()->GetRenderWidgetHostView();
   if (enable_auto_size) {
     // Autosize is being enabled.
-    rvh->EnableAutoResize(min_auto_size_, max_auto_size_);
+    if (rwhv)
+      rwhv->EnableAutoResize(min_auto_size_, max_auto_size_);
     normal_size_.SetSize(0, 0);
   } else {
     // Autosize is being disabled.
@@ -324,7 +325,8 @@ void GuestViewBase::SetSize(const SetSizeParams& params) {
     bool changed_due_to_auto_resize = false;
     if (auto_size_enabled_) {
       // Autosize was previously enabled.
-      rvh->DisableAutoResize(new_size);
+      if (rwhv)
+        rwhv->DisableAutoResize(new_size);
       changed_due_to_auto_resize = true;
     } else {
       // Autosize was already disabled.
@@ -780,17 +782,17 @@ void GuestViewBase::SendQueuedEvents() {
 
 void GuestViewBase::CompleteInit(
     std::unique_ptr<base::DictionaryValue> create_params,
-    const WebContentsCreatedCallback& callback,
+    WebContentsCreatedCallback callback,
     WebContents* guest_web_contents) {
   if (!guest_web_contents) {
     // The derived class did not create a WebContents so this class serves no
     // purpose. Let's self-destruct.
     delete this;
-    callback.Run(nullptr);
+    std::move(callback).Run(nullptr);
     return;
   }
   InitWithWebContents(*create_params, guest_web_contents);
-  callback.Run(guest_web_contents);
+  std::move(callback).Run(guest_web_contents);
 }
 
 double GuestViewBase::GetEmbedderZoomFactor() const {

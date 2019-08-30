@@ -12,7 +12,6 @@
 
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/single_thread_task_runner.h"
 #include "net/base/elements_upload_data_stream.h"
@@ -99,10 +98,11 @@ std::unique_ptr<net::UploadDataStream> UploadDataStreamBuilder::Build(
             body, file_task_runner, element));
         break;
       case network::DataElement::TYPE_BLOB: {
-        DCHECK_EQ(std::numeric_limits<uint64_t>::max(), element.length());
         DCHECK_EQ(0ul, element.offset());
         std::unique_ptr<storage::BlobDataHandle> handle =
             blob_context->GetBlobDataFromUUID(element.blob_uuid());
+        DCHECK(element.length() == std::numeric_limits<uint64_t>::max() ||
+               element.length() == handle->size());
         element_readers.push_back(
             std::make_unique<storage::UploadBlobElementReader>(
                 std::move(handle)));

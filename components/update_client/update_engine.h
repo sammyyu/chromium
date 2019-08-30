@@ -5,11 +5,9 @@
 #ifndef COMPONENTS_UPDATE_CLIENT_UPDATE_ENGINE_H_
 #define COMPONENTS_UPDATE_CLIENT_UPDATE_ENGINE_H_
 
-#include <iterator>
 #include <list>
 #include <map>
 #include <memory>
-#include <set>
 #include <string>
 #include <vector>
 
@@ -17,6 +15,7 @@
 #include "base/containers/queue.h"
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
+#include "base/optional.h"
 #include "base/threading/thread_checker.h"
 #include "base/time/time.h"
 #include "components/update_client/component.h"
@@ -52,6 +51,9 @@ class UpdateEngine : public base::RefCounted<UpdateEngine> {
                scoped_refptr<PingManager> ping_manager,
                const NotifyObserversCallback& notify_observers_callback);
 
+  // Returns true and the state of the component identified by |id|, if the
+  // component is found in any update context. Returns false if the component
+  // is not found.
   bool GetUpdateState(const std::string& id, CrxUpdateItem* update_state);
 
   void Update(bool is_foreground,
@@ -68,23 +70,27 @@ class UpdateEngine : public base::RefCounted<UpdateEngine> {
   friend class base::RefCounted<UpdateEngine>;
   ~UpdateEngine();
 
-  using UpdateContexts = std::set<scoped_refptr<UpdateContext>>;
-  using UpdateContextIterator = UpdateContexts::iterator;
+  using UpdateContexts = std::map<std::string, scoped_refptr<UpdateContext>>;
 
-  void UpdateComplete(UpdateContextIterator it, Error error);
+  void UpdateComplete(scoped_refptr<UpdateContext> update_context, Error error);
 
-  void ComponentCheckingForUpdatesStart(UpdateContextIterator it,
-                                        const std::string& id);
-  void ComponentCheckingForUpdatesComplete(UpdateContextIterator it);
-  void UpdateCheckComplete(UpdateContextIterator it);
+  void ComponentCheckingForUpdatesStart(
+      scoped_refptr<UpdateContext> update_context,
+      const std::string& id);
+  void ComponentCheckingForUpdatesComplete(
+      scoped_refptr<UpdateContext> update_context);
+  void UpdateCheckComplete(scoped_refptr<UpdateContext> update_context);
 
-  void DoUpdateCheck(UpdateContextIterator it);
-  void UpdateCheckDone(UpdateContextIterator it,
-                       int error,
-                       int retry_after_sec);
+  void DoUpdateCheck(scoped_refptr<UpdateContext> update_context);
+  void UpdateCheckResultsAvailable(
+      scoped_refptr<UpdateContext> update_context,
+      const base::Optional<ProtocolParser::Results>& results,
+      ErrorCategory error_category,
+      int error,
+      int retry_after_sec);
 
-  void HandleComponent(UpdateContextIterator it);
-  void HandleComponentComplete(UpdateContextIterator it);
+  void HandleComponent(scoped_refptr<UpdateContext> update_context);
+  void HandleComponentComplete(scoped_refptr<UpdateContext> update_context);
 
   // Returns true if the update engine rejects this update call because it
   // occurs too soon.
@@ -155,10 +161,20 @@ struct UpdateContext : public base::RefCounted<UpdateContext> {
   // The time in seconds to wait until doing further update checks.
   int retry_after_sec = 0;
 
+  // Contains the ids of the components to check for updates. It is possible
+  // for a component to be uninstalled after it has been added in this context
+  // but before an update check is made. When this happens, the component won't
+  // have a CrxComponent instance, therefore, it can't be included in an
+  // update check.
+  std::vector<std::string> components_to_check_for_updates;
+
+  // The error reported by the update checker.
   int update_check_error = 0;
+
   size_t num_components_ready_to_check = 0;
   size_t num_components_checked = 0;
 
+  // Contains the ids of the components that the state machine must handle.
   base::queue<std::string> component_queue;
 
   // The time to wait before handling the update for a component.
@@ -168,7 +184,9 @@ struct UpdateContext : public base::RefCounted<UpdateContext> {
   // is handling the next component in the queue.
   base::TimeDelta next_update_delay;
 
-  // The session id this context is associated with.
+  // The unique session id of this context. The session id is serialized in
+  // every protocol request. It is also used as a key in various data stuctures
+  // to uniquely identify an update context.
   const std::string session_id;
 
  private:

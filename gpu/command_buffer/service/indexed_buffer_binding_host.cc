@@ -96,11 +96,11 @@ void IndexedBufferBindingHost::DoBindBufferBase(GLuint index, Buffer* buffer) {
   glBindBufferBase(target_, index, service_id);
 
   if (buffer_bindings_[index].buffer && is_bound_) {
-    buffer_bindings_[index].buffer->OnUnbind(target_);
+    buffer_bindings_[index].buffer->OnUnbind(target_, true);
   }
   buffer_bindings_[index].SetBindBufferBase(buffer);
   if (buffer && is_bound_) {
-    buffer->OnBind(target_);
+    buffer->OnBind(target_, true);
   }
   UpdateMaxNonNullBindingIndex(index);
 }
@@ -119,11 +119,11 @@ void IndexedBufferBindingHost::DoBindBufferRange(GLuint index,
   }
 
   if (buffer_bindings_[index].buffer && is_bound_) {
-    buffer_bindings_[index].buffer->OnUnbind(target_);
+    buffer_bindings_[index].buffer->OnUnbind(target_, true);
   }
   buffer_bindings_[index].SetBindBufferRange(buffer, offset, size);
   if (buffer && is_bound_) {
-    buffer->OnBind(target_);
+    buffer->OnBind(target_, true);
   }
   UpdateMaxNonNullBindingIndex(index);
 }
@@ -175,13 +175,25 @@ void IndexedBufferBindingHost::OnBufferData(Buffer* buffer) {
   }
 }
 
-void IndexedBufferBindingHost::RemoveBoundBuffer(Buffer* buffer) {
+void IndexedBufferBindingHost::RemoveBoundBuffer(
+    GLenum target,
+    Buffer* buffer,
+    Buffer* target_generic_bound_buffer,
+    bool have_context) {
+  DCHECK(buffer);
+  bool need_to_recover_generic_binding = false;
   for (size_t ii = 0; ii < buffer_bindings_.size(); ++ii) {
     if (buffer_bindings_[ii].buffer.get() == buffer) {
       buffer_bindings_[ii].Reset();
       UpdateMaxNonNullBindingIndex(ii);
+      if (have_context) {
+        glBindBufferBase(target, ii, 0);
+        need_to_recover_generic_binding = true;
+      }
     }
   }
+  if (need_to_recover_generic_binding && target_generic_bound_buffer)
+    glBindBuffer(target, target_generic_bound_buffer->service_id());
 }
 
 void IndexedBufferBindingHost::SetIsBound(bool is_bound) {
@@ -205,9 +217,9 @@ void IndexedBufferBindingHost::SetIsBound(bool is_bound) {
     for (auto& bb : buffer_bindings_) {
       if (bb.buffer) {
         if (is_bound_) {
-          bb.buffer->OnBind(target_);
+          bb.buffer->OnBind(target_, true);
         } else {
-          bb.buffer->OnUnbind(target_);
+          bb.buffer->OnUnbind(target_, true);
         }
       }
     }

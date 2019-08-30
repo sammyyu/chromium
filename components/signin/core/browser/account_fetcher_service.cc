@@ -21,13 +21,12 @@
 #include "components/signin/core/browser/signin_client.h"
 #include "components/signin/core/browser/signin_switches.h"
 #include "net/url_request/url_request_context_getter.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 
 namespace {
 
 const base::TimeDelta kRefreshFromTokenServiceDelay =
     base::TimeDelta::FromHours(24);
-
-constexpr int kAccountImageDownloadSize = 64;
 
 bool AccountSupportsUserInfo(const std::string& account_id) {
   // Supervised users use a specially scoped token which when used for general
@@ -42,6 +41,8 @@ bool AccountSupportsUserInfo(const std::string& account_id) {
 // This pref used to be in the AccountTrackerService, hence its string value.
 const char AccountFetcherService::kLastUpdatePref[] =
     "account_tracker_service_last_update";
+
+const int AccountFetcherService::kAccountImageDownloadSize = 64;
 
 // AccountFetcherService implementation
 AccountFetcherService::AccountFetcherService()
@@ -188,7 +189,7 @@ void AccountFetcherService::ScheduleNextRefresh() {
   DCHECK(network_fetches_enabled_);
 
   const base::TimeDelta time_since_update = base::Time::Now() - last_updated_;
-  if(time_since_update > kRefreshFromTokenServiceDelay) {
+  if (time_since_update > kRefreshFromTokenServiceDelay) {
     RefreshAllAccountsAndScheduleNext();
   } else {
     timer_.Start(FROM_HERE, kRefreshFromTokenServiceDelay - time_since_update,
@@ -221,7 +222,7 @@ void AccountFetcherService::StartFetchingChildInfo(
     const std::string& account_id) {
   child_info_request_ = ChildAccountInfoFetcher::CreateFrom(
       child_request_account_id_, this, token_service_,
-      signin_client_->GetURLRequestContext(), invalidation_service_);
+      signin_client_->GetURLLoaderFactory(), invalidation_service_);
 }
 
 void AccountFetcherService::ResetChildInfo() {
@@ -266,8 +267,7 @@ AccountFetcherService::GetOrCreateImageFetcher() {
   // not be available yet when |Initialize| is called.
   if (!image_fetcher_) {
     image_fetcher_ = std::make_unique<image_fetcher::ImageFetcherImpl>(
-        std::move(image_decoder_), signin_client_->GetURLRequestContext());
-    image_fetcher_->SetImageFetcherDelegate(this);
+        std::move(image_decoder_), signin_client_->GetURLLoaderFactory());
   }
   return image_fetcher_.get();
 }
@@ -305,9 +305,10 @@ void AccountFetcherService::FetchAccountImage(const std::string& account_id) {
         })");
   GURL image_url_with_size(signin::GetAvatarImageURLWithOptions(
       picture_url, kAccountImageDownloadSize, true /* no_silhouette */));
-  GetOrCreateImageFetcher()->StartOrQueueNetworkRequest(
-      account_id, image_url_with_size,
-      image_fetcher::ImageFetcher::ImageFetcherCallback(), traffic_annotation);
+  auto callback = base::BindRepeating(&AccountFetcherService::OnImageFetched,
+                                      base::Unretained(this));
+  GetOrCreateImageFetcher()->FetchImage(account_id, image_url_with_size,
+                                        callback, traffic_annotation);
 }
 
 void AccountFetcherService::SetIsChildAccount(const std::string& account_id,
@@ -326,8 +327,7 @@ void AccountFetcherService::OnUserInfoFetchFailure(
 void AccountFetcherService::OnRefreshTokenAvailable(
     const std::string& account_id) {
   TRACE_EVENT1("AccountFetcherService",
-               "AccountFetcherService::OnRefreshTokenAvailable",
-               "account_id",
+               "AccountFetcherService::OnRefreshTokenAvailable", "account_id",
                account_id);
   DVLOG(1) << "AVAILABLE " << account_id;
 
@@ -347,8 +347,7 @@ void AccountFetcherService::OnRefreshTokenAvailable(
 void AccountFetcherService::OnRefreshTokenRevoked(
     const std::string& account_id) {
   TRACE_EVENT1("AccountFetcherService",
-               "AccountFetcherService::OnRefreshTokenRevoked",
-               "account_id",
+               "AccountFetcherService::OnRefreshTokenRevoked", "account_id",
                account_id);
   DVLOG(1) << "REVOKED " << account_id;
 
@@ -367,7 +366,9 @@ void AccountFetcherService::OnRefreshTokensLoaded() {
   MaybeEnableNetworkFetches();
 }
 
-void AccountFetcherService::OnImageFetched(const std::string& id,
-                                           const gfx::Image& image) {
+void AccountFetcherService::OnImageFetched(
+    const std::string& id,
+    const gfx::Image& image,
+    const image_fetcher::RequestMetadata&) {
   account_tracker_service_->SetAccountImage(id, image);
 }

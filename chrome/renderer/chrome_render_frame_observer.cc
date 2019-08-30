@@ -26,27 +26,28 @@
 #include "chrome/renderer/prerender/prerender_helper.h"
 #include "chrome/renderer/web_apps.h"
 #include "components/crash/core/common/crash_key.h"
+#include "components/offline_pages/buildflags/buildflags.h"
 #include "components/translate/content/renderer/translate_helper.h"
 #include "content/public/common/bindings_policy.h"
 #include "content/public/renderer/render_frame.h"
 #include "content/public/renderer/render_view.h"
 #include "content/public/renderer/window_features_converter.h"
 #include "extensions/common/constants.h"
-#include "printing/features/features.h"
+#include "printing/buildflags/buildflags.h"
 #include "services/service_manager/public/cpp/binder_registry.h"
 #include "skia/ext/image_operations.h"
-#include "third_party/WebKit/public/common/associated_interfaces/associated_interface_provider.h"
-#include "third_party/WebKit/public/common/associated_interfaces/associated_interface_registry.h"
-#include "third_party/WebKit/public/platform/WebImage.h"
-#include "third_party/WebKit/public/platform/WebURLRequest.h"
-#include "third_party/WebKit/public/web/WebDocument.h"
-#include "third_party/WebKit/public/web/WebDocumentLoader.h"
-#include "third_party/WebKit/public/web/WebElement.h"
-#include "third_party/WebKit/public/web/WebFrameContentDumper.h"
-#include "third_party/WebKit/public/web/WebLocalFrame.h"
-#include "third_party/WebKit/public/web/WebNode.h"
-#include "third_party/WebKit/public/web/WebSecurityPolicy.h"
-#include "third_party/WebKit/public/web/WebView.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_provider.h"
+#include "third_party/blink/public/common/associated_interfaces/associated_interface_registry.h"
+#include "third_party/blink/public/platform/web_image.h"
+#include "third_party/blink/public/platform/web_url_request.h"
+#include "third_party/blink/public/web/web_document.h"
+#include "third_party/blink/public/web/web_document_loader.h"
+#include "third_party/blink/public/web/web_element.h"
+#include "third_party/blink/public/web/web_frame_content_dumper.h"
+#include "third_party/blink/public/web/web_local_frame.h"
+#include "third_party/blink/public/web/web_node.h"
+#include "third_party/blink/public/web/web_security_policy.h"
+#include "third_party/blink/public/web/web_view.h"
 #include "third_party/skia/include/core/SkBitmap.h"
 #include "ui/gfx/codec/jpeg_codec.h"
 #include "ui/gfx/codec/png_codec.h"
@@ -59,6 +60,10 @@
 
 #if defined(FULL_SAFE_BROWSING)
 #include "chrome/renderer/safe_browsing/phishing_classifier_delegate.h"
+#endif
+
+#if BUILDFLAG(ENABLE_OFFLINE_PAGES)
+#include "chrome/common/mhtml_page_notifier.mojom.h"
 #endif
 
 #if BUILDFLAG(ENABLE_PRINTING)
@@ -95,20 +100,20 @@ namespace {
 // |thumbnail_min_area_pixels|, we return the image unmodified.  Otherwise, we
 // scale down the image so that the width and height do not exceed
 // |thumbnail_max_size_pixels|, preserving the original aspect ratio.
-SkBitmap Downscale(const blink::WebImage& image,
+SkBitmap Downscale(const SkBitmap& image,
                    int thumbnail_min_area_pixels,
                    const gfx::Size& thumbnail_max_size_pixels) {
-  if (image.IsNull())
+  if (image.isNull())
     return SkBitmap();
 
-  gfx::Size image_size = image.Size();
+  gfx::Size image_size(image.width(), image.height());
 
   if (image_size.GetArea() < thumbnail_min_area_pixels)
-    return image.GetSkBitmap();
+    return image;
 
   if (image_size.width() <= thumbnail_max_size_pixels.width() &&
       image_size.height() <= thumbnail_max_size_pixels.height())
-    return image.GetSkBitmap();
+    return image;
 
   gfx::SizeF scaled_size = gfx::SizeF(image_size);
 
@@ -121,7 +126,7 @@ SkBitmap Downscale(const blink::WebImage& image,
         thumbnail_max_size_pixels.height() / scaled_size.height());
   }
 
-  return skia::ImageOperations::Resize(image.GetSkBitmap(),
+  return skia::ImageOperations::Resize(image,
                                        skia::ImageOperations::RESIZE_GOOD,
                                        static_cast<int>(scaled_size.width()),
                                        static_cast<int>(scaled_size.height()));
@@ -217,9 +222,8 @@ void ChromeRenderFrameObserver::RequestThumbnailForContextNode(
   SkBitmap thumbnail;
   gfx::Size original_size;
   if (!context_node.IsNull() && context_node.IsElementNode()) {
-    blink::WebImage image =
-        context_node.To<WebElement>().ImageContents();
-    original_size = image.Size();
+    SkBitmap image = context_node.To<WebElement>().ImageContents();
+    original_size = gfx::Size(image.width(), image.height());
     thumbnail = Downscale(image,
                           thumbnail_min_area_pixels,
                           thumbnail_max_size_pixels);
@@ -339,6 +343,31 @@ void ChromeRenderFrameObserver::DidFinishLoad() {
   }
 }
 
+void ChromeRenderFrameObserver::DidCreateNewDocument() {
+#if BUILDFLAG(ENABLE_OFFLINE_PAGES)
+  DCHECK(render_frame());
+  if (!render_frame()->IsMainFrame())
+    return;
+
+  DCHECK(render_frame()->GetWebFrame());
+  blink::WebDocumentLoader* doc_loader =
+      render_frame()->GetWebFrame()->GetDocumentLoader();
+  DCHECK(doc_loader);
+  if (!doc_loader->IsArchive())
+    return;
+
+  // Connect to Mojo service on browser to notify it of the page's archive
+  // properties.
+  offline_pages::mojom::MhtmlPageNotifierAssociatedPtr mhtml_notifier;
+  render_frame()->GetRemoteAssociatedInterfaces()->GetInterface(
+      &mhtml_notifier);
+  DCHECK(mhtml_notifier);
+  blink::WebArchiveInfo info = doc_loader->GetArchiveInfo();
+
+  mhtml_notifier->NotifyIsMhtmlPage(info.url, info.date);
+#endif
+}
+
 void ChromeRenderFrameObserver::DidStartProvisionalLoad(
     WebDocumentLoader* document_loader) {
   // Let translate_helper do any preparatory work for loading a URL.
@@ -363,8 +392,8 @@ void ChromeRenderFrameObserver::DidCommitProvisionalLoad(
       base::NumberToString(content::RenderView::GetRenderViewCount()));
 
 #if !defined(OS_ANDROID)
-  if ((render_frame()->GetEnabledBindings() &
-       content::BINDINGS_POLICY_WEB_UI)) {
+  if (render_frame()->GetEnabledBindings() &
+      content::kWebUIBindingsPolicyMask) {
     for (const auto& script : webui_javascript_)
       render_frame()->ExecuteJavaScript(script);
     webui_javascript_.clear();

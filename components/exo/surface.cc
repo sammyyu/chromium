@@ -42,6 +42,7 @@
 #include "ui/gfx/geometry/size_conversions.h"
 #include "ui/gfx/gpu_memory_buffer.h"
 #include "ui/gfx/path.h"
+#include "ui/gfx/presentation_feedback.h"
 #include "ui/gfx/transform_util.h"
 #include "ui/views/widget/widget.h"
 
@@ -215,7 +216,7 @@ Surface::~Surface() {
   presentation_callbacks_.splice(presentation_callbacks_.end(),
                                  pending_presentation_callbacks_);
   for (const auto& presentation_callback : presentation_callbacks_)
-    presentation_callback.Run(base::TimeTicks(), base::TimeDelta(), 0);
+    presentation_callback.Run(gfx::PresentationFeedback());
 
   WMHelper::GetInstance()->ResetDragDropDelegate(window_.get());
 }
@@ -447,6 +448,21 @@ void Surface::SetFrameColors(SkColor active_color, SkColor inactive_color) {
     delegate_->OnSetFrameColors(active_color, inactive_color);
 }
 
+void Surface::SetStartupId(const char* startup_id) {
+  TRACE_EVENT1("exo", "Surface::SetStartupId", "startup_id", startup_id);
+
+  if (delegate_)
+    delegate_->OnSetStartupId(startup_id);
+}
+
+void Surface::SetApplicationId(const char* application_id) {
+  TRACE_EVENT1("exo", "Surface::SetApplicationId", "application_id",
+               application_id);
+
+  if (delegate_)
+    delegate_->OnSetApplicationId(application_id);
+}
+
 void Surface::SetParent(Surface* parent, const gfx::Point& position) {
   TRACE_EVENT2("exo", "Surface::SetParent", "parent", !!parent, "position",
                position.ToString());
@@ -561,8 +577,9 @@ void Surface::CommitSurfaceHierarchy(bool synchronized) {
   if (state_.input_region) {
     hit_test_region_ = *state_.input_region;
     hit_test_region_.Intersect(surface_hierarchy_content_bounds_);
-  } else
+  } else {
     hit_test_region_ = surface_hierarchy_content_bounds_;
+  }
 
   int outset = state_.input_outset;
   if (outset > 0) {
@@ -712,7 +729,7 @@ Surface::State::State() {}
 
 Surface::State::~State() = default;
 
-bool Surface::State::operator==(const State& other) {
+bool Surface::State::operator==(const State& other) const {
   return other.opaque_region == opaque_region &&
          other.input_region == input_region &&
          other.buffer_scale == buffer_scale &&
@@ -827,9 +844,6 @@ void Surface::AppendContentsToFrame(const gfx::Point& origin,
     render_pass->damage_rect.Union(
         gfx::ConvertRectToPixel(device_scale_factor, damage_rect));
   }
-
-  render_pass->output_rect.Union(
-      gfx::ConvertRectToPixel(device_scale_factor, output_rect));
 
   // Compute the total transformation from post-transform buffer coordinates to
   // target coordinates.

@@ -56,15 +56,17 @@ GpuVideoAcceleratorFactoriesImpl::Create(
     const scoped_refptr<base::SingleThreadTaskRunner>& main_thread_task_runner,
     const scoped_refptr<base::SingleThreadTaskRunner>& task_runner,
     const scoped_refptr<ui::ContextProviderCommandBuffer>& context_provider,
-    bool enable_gpu_memory_buffer_video_frames,
+    bool enable_video_gpu_memory_buffers,
+    bool enable_media_stream_gpu_memory_buffers,
     bool enable_video_accelerator,
     media::mojom::VideoEncodeAcceleratorProviderPtrInfo unbound_vea_provider) {
   RecordContextProviderPhaseUmaEnum(
       ContextProviderPhase::CONTEXT_PROVIDER_ACQUIRED);
   return base::WrapUnique(new GpuVideoAcceleratorFactoriesImpl(
       std::move(gpu_channel_host), main_thread_task_runner, task_runner,
-      context_provider, enable_gpu_memory_buffer_video_frames,
-      enable_video_accelerator, std::move(unbound_vea_provider)));
+      context_provider, enable_video_gpu_memory_buffers,
+      enable_media_stream_gpu_memory_buffers, enable_video_accelerator,
+      std::move(unbound_vea_provider)));
 }
 
 GpuVideoAcceleratorFactoriesImpl::GpuVideoAcceleratorFactoriesImpl(
@@ -72,22 +74,28 @@ GpuVideoAcceleratorFactoriesImpl::GpuVideoAcceleratorFactoriesImpl(
     const scoped_refptr<base::SingleThreadTaskRunner>& main_thread_task_runner,
     const scoped_refptr<base::SingleThreadTaskRunner>& task_runner,
     const scoped_refptr<ui::ContextProviderCommandBuffer>& context_provider,
-    bool enable_gpu_memory_buffer_video_frames,
+    bool enable_video_gpu_memory_buffers,
+    bool enable_media_stream_gpu_memory_buffers,
     bool enable_video_accelerator,
     media::mojom::VideoEncodeAcceleratorProviderPtrInfo unbound_vea_provider)
     : main_thread_task_runner_(main_thread_task_runner),
       task_runner_(task_runner),
       gpu_channel_host_(std::move(gpu_channel_host)),
-      context_provider_refptr_(context_provider),
-      context_provider_(context_provider.get()),
-      enable_gpu_memory_buffer_video_frames_(
-          enable_gpu_memory_buffer_video_frames),
+      context_provider_(context_provider),
+      enable_video_gpu_memory_buffers_(enable_video_gpu_memory_buffers),
+      enable_media_stream_gpu_memory_buffers_(
+          enable_media_stream_gpu_memory_buffers),
       video_accelerator_enabled_(enable_video_accelerator),
       gpu_memory_buffer_manager_(
           RenderThreadImpl::current()->GetGpuMemoryBufferManager()),
       thread_safe_sender_(ChildThreadImpl::current()->thread_safe_sender()) {
   DCHECK(main_thread_task_runner_);
   DCHECK(gpu_channel_host_);
+
+  task_runner->PostTask(
+      FROM_HERE,
+      base::BindOnce(&GpuVideoAcceleratorFactoriesImpl::BindContextToTaskRunner,
+                     base::Unretained(this)));
 
   task_runner_->PostTask(
       FROM_HERE,
@@ -98,27 +106,36 @@ GpuVideoAcceleratorFactoriesImpl::GpuVideoAcceleratorFactoriesImpl(
 
 GpuVideoAcceleratorFactoriesImpl::~GpuVideoAcceleratorFactoriesImpl() {}
 
+void GpuVideoAcceleratorFactoriesImpl::BindContextToTaskRunner() {
+  DCHECK(task_runner_->BelongsToCurrentThread());
+  DCHECK(context_provider_);
+  if (context_provider_->BindToCurrentThread() !=
+      gpu::ContextResult::kSuccess) {
+    SetContextProviderLost();
+  }
+}
+
 bool GpuVideoAcceleratorFactoriesImpl::CheckContextLost() {
   DCHECK(task_runner_->BelongsToCurrentThread());
-  if (context_provider_) {
-    bool release_context_provider = false;
-    {
-      viz::ContextProvider::ScopedContextLock lock(context_provider_);
-      if (lock.ContextGL()->GetGraphicsResetStatusKHR() != GL_NO_ERROR) {
-        context_provider_ = nullptr;
-        release_context_provider = true;
-      }
-    }
-    if (release_context_provider) {
-      // Drop the reference on the main thread.
-      main_thread_task_runner_->PostTask(
-          FROM_HERE,
-          base::BindOnce(
-              &GpuVideoAcceleratorFactoriesImpl::ReleaseContextProvider,
-              base::Unretained(this)));
-    }
+  if (context_provider_lost_on_media_thread_)
+    return true;
+  if (context_provider_->ContextGL()->GetGraphicsResetStatusKHR() !=
+      GL_NO_ERROR) {
+    SetContextProviderLost();
+    return true;
   }
-  return !context_provider_;
+  return false;
+}
+
+void GpuVideoAcceleratorFactoriesImpl::DestroyContext() {
+  DCHECK(task_runner_->BelongsToCurrentThread());
+  DCHECK(context_provider_lost_on_media_thread_);
+
+  if (!context_provider_)
+    return;
+  context_provider_ = nullptr;
+  RecordContextProviderPhaseUmaEnum(
+      ContextProviderPhase::CONTEXT_PROVIDER_RELEASED);
 }
 
 bool GpuVideoAcceleratorFactoriesImpl::IsGpuVideoAcceleratorEnabled() {
@@ -190,8 +207,7 @@ bool GpuVideoAcceleratorFactoriesImpl::CreateTextures(
 
   if (CheckContextLost())
     return false;
-  viz::ContextProvider::ScopedContextLock lock(context_provider_);
-  gpu::gles2::GLES2Interface* gles2 = lock.ContextGL();
+  gpu::gles2::GLES2Interface* gles2 = context_provider_->ContextGL();
   texture_ids->resize(count);
   texture_mailboxes->resize(count);
   gles2->GenTextures(count, &texture_ids->at(0));
@@ -207,7 +223,6 @@ bool GpuVideoAcceleratorFactoriesImpl::CreateTextures(
       gles2->TexImage2D(texture_target, 0, GL_RGBA, size.width(), size.height(),
                         0, GL_RGBA, GL_UNSIGNED_BYTE, nullptr);
     }
-    gles2->GenMailboxCHROMIUM(texture_mailboxes->at(i).name);
     gles2->ProduceTextureDirectCHROMIUM(texture_id,
                                         texture_mailboxes->at(i).name);
   }
@@ -226,17 +241,14 @@ void GpuVideoAcceleratorFactoriesImpl::DeleteTexture(uint32_t texture_id) {
   if (CheckContextLost())
     return;
 
-  viz::ContextProvider::ScopedContextLock lock(context_provider_);
-  gpu::gles2::GLES2Interface* gles2 = lock.ContextGL();
+  gpu::gles2::GLES2Interface* gles2 = context_provider_->ContextGL();
   gles2->DeleteTextures(1, &texture_id);
   DCHECK_EQ(gles2->GetError(), static_cast<GLenum>(GL_NO_ERROR));
 }
 
 gpu::SyncToken GpuVideoAcceleratorFactoriesImpl::CreateSyncToken() {
-  viz::ContextProvider::ScopedContextLock lock(context_provider_);
-  gpu::gles2::GLES2Interface* gl = lock.ContextGL();
   gpu::SyncToken sync_token;
-  gl->GenSyncTokenCHROMIUM(sync_token.GetData());
+  context_provider_->ContextGL()->GenSyncTokenCHROMIUM(sync_token.GetData());
   return sync_token;
 }
 
@@ -246,8 +258,7 @@ void GpuVideoAcceleratorFactoriesImpl::WaitSyncToken(
   if (CheckContextLost())
     return;
 
-  viz::ContextProvider::ScopedContextLock lock(context_provider_);
-  gpu::gles2::GLES2Interface* gles2 = lock.ContextGL();
+  gpu::gles2::GLES2Interface* gles2 = context_provider_->ContextGL();
   gles2->WaitSyncTokenCHROMIUM(sync_token.GetConstData());
 
   // Callers expect the WaitSyncToken to affect the next IPCs. Make sure to
@@ -260,9 +271,7 @@ void GpuVideoAcceleratorFactoriesImpl::ShallowFlushCHROMIUM() {
   if (CheckContextLost())
     return;
 
-  viz::ContextProvider::ScopedContextLock lock(context_provider_);
-  gpu::gles2::GLES2Interface* gles2 = lock.ContextGL();
-  gles2->ShallowFlushCHROMIUM();
+  context_provider_->ContextGL()->ShallowFlushCHROMIUM();
 }
 
 std::unique_ptr<gfx::GpuMemoryBuffer>
@@ -273,9 +282,10 @@ GpuVideoAcceleratorFactoriesImpl::CreateGpuMemoryBuffer(
   return gpu_memory_buffer_manager_->CreateGpuMemoryBuffer(
       size, format, usage, gpu::kNullSurfaceHandle);
 }
-bool GpuVideoAcceleratorFactoriesImpl::ShouldUseGpuMemoryBuffersForVideoFrames()
-    const {
-  return enable_gpu_memory_buffer_video_frames_;
+bool GpuVideoAcceleratorFactoriesImpl::ShouldUseGpuMemoryBuffersForVideoFrames(
+    bool for_media_stream) const {
+  return for_media_stream ? enable_media_stream_gpu_memory_buffers_
+                          : enable_video_gpu_memory_buffers_;
 }
 
 unsigned GpuVideoAcceleratorFactoriesImpl::ImageTextureTarget(
@@ -291,7 +301,6 @@ GpuVideoAcceleratorFactoriesImpl::VideoFrameOutputFormat(size_t bit_depth) {
   DCHECK(task_runner_->BelongsToCurrentThread());
   if (CheckContextLost())
     return media::GpuVideoAcceleratorFactories::OutputFormat::UNDEFINED;
-  viz::ContextProvider::ScopedContextLock lock(context_provider_);
   auto capabilities = context_provider_->ContextCapabilities();
   if (bit_depth > 8) {
     // If high bit depth rendering is enabled, bail here, otherwise try and use
@@ -302,9 +311,8 @@ GpuVideoAcceleratorFactoriesImpl::VideoFrameOutputFormat(size_t bit_depth) {
     if (rendering_color_space_.IsHDR())
       return media::GpuVideoAcceleratorFactories::OutputFormat::UNDEFINED;
 
-#if defined(OS_MACOSX) || defined(OS_LINUX)
-    // TODO(mcasas): enable other platforms https://crbug.com/776093
-    // https://crbug.com/803451.
+#if !defined(OS_WIN)
+    // TODO(mcasas): enable Win https://crbug.com/803451.
     // TODO(mcasas): remove the |bit_depth| check when libyuv supports more than
     // just x010ToAR30 conversions, https://crbug.com/libyuv/751.
     if (bit_depth == 10) {
@@ -329,24 +337,8 @@ GpuVideoAcceleratorFactoriesImpl::VideoFrameOutputFormat(size_t bit_depth) {
   return media::GpuVideoAcceleratorFactories::OutputFormat::UNDEFINED;
 }
 
-namespace {
-class ScopedGLContextLockImpl
-    : public media::GpuVideoAcceleratorFactories::ScopedGLContextLock {
- public:
-  ScopedGLContextLockImpl(viz::ContextProvider* context_provider)
-      : lock_(context_provider) {}
-  gpu::gles2::GLES2Interface* ContextGL() override { return lock_.ContextGL(); }
-
- private:
-  viz::ContextProvider::ScopedContextLock lock_;
-};
-}  // namespace
-
-std::unique_ptr<media::GpuVideoAcceleratorFactories::ScopedGLContextLock>
-GpuVideoAcceleratorFactoriesImpl::GetGLContextLock() {
-  if (CheckContextLost())
-    return nullptr;
-  return std::make_unique<ScopedGLContextLockImpl>(context_provider_);
+gpu::gles2::GLES2Interface* GpuVideoAcceleratorFactoriesImpl::ContextGL() {
+  return CheckContextLost() ? nullptr : context_provider_->ContextGL();
 }
 
 std::unique_ptr<base::SharedMemory>
@@ -376,7 +368,7 @@ GpuVideoAcceleratorFactoriesImpl::GetVideoEncodeAcceleratorSupportedProfiles() {
           .video_encode_accelerator_supported_profiles);
 }
 
-viz::ContextProvider*
+scoped_refptr<ui::ContextProviderCommandBuffer>
 GpuVideoAcceleratorFactoriesImpl::GetMediaContextProvider() {
   return CheckContextLost() ? nullptr : context_provider_;
 }
@@ -386,17 +378,9 @@ void GpuVideoAcceleratorFactoriesImpl::SetRenderingColorSpace(
   rendering_color_space_ = color_space;
 }
 
-void GpuVideoAcceleratorFactoriesImpl::ReleaseContextProvider() {
+bool GpuVideoAcceleratorFactoriesImpl::CheckContextProviderLostOnMainThread() {
   DCHECK(main_thread_task_runner_->BelongsToCurrentThread());
-  RecordContextProviderPhaseUmaEnum(
-      ContextProviderPhase::CONTEXT_PROVIDER_RELEASED);
-  context_provider_refptr_ = nullptr;
-}
-
-scoped_refptr<ui::ContextProviderCommandBuffer>
-GpuVideoAcceleratorFactoriesImpl::ContextProviderMainThread() {
-  DCHECK(main_thread_task_runner_->BelongsToCurrentThread());
-  return context_provider_refptr_;
+  return context_provider_lost_;
 }
 
 void GpuVideoAcceleratorFactoriesImpl::
@@ -405,7 +389,28 @@ void GpuVideoAcceleratorFactoriesImpl::
             unbound_vea_provider) {
   DCHECK(task_runner_->BelongsToCurrentThread());
   DCHECK(!vea_provider_.is_bound());
-  vea_provider_.Bind(std::move(unbound_vea_provider));
+  vea_provider_.Bind(std::move(unbound_vea_provider), task_runner_);
+}
+
+void GpuVideoAcceleratorFactoriesImpl::SetContextProviderLost() {
+  DCHECK(task_runner_->BelongsToCurrentThread());
+
+  // Don't delete the |context_provider_| here, we could be in the middle of
+  // it notifying about the loss, and we'd be destroying it while it's on
+  // the stack.
+  context_provider_lost_on_media_thread_ = true;
+  // Inform the main thread of the loss as well, so that this class can be
+  // replaced.
+  main_thread_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          &GpuVideoAcceleratorFactoriesImpl::SetContextProviderLostOnMainThread,
+          base::Unretained(this)));
+}
+
+void GpuVideoAcceleratorFactoriesImpl::SetContextProviderLostOnMainThread() {
+  DCHECK(main_thread_task_runner_->BelongsToCurrentThread());
+  context_provider_lost_ = true;
 }
 
 }  // namespace content

@@ -12,8 +12,8 @@ import org.junit.Test;
 import org.junit.runner.RunWith;
 import org.junit.runners.BlockJUnit4ClassRunner;
 
-import org.chromium.chromecast.base.TestUtils.Base;
-import org.chromium.chromecast.base.TestUtils.Derived;
+import org.chromium.chromecast.base.Inheritance.Base;
+import org.chromium.chromecast.base.Inheritance.Derived;
 
 import java.util.ArrayList;
 import java.util.List;
@@ -124,10 +124,10 @@ public class ScopeFactoriesTest {
     public void testHowUsingBothOnEnterAndOnExitLooks() {
         Controller<Derived> controller = new Controller<>();
         List<String> result = new ArrayList<>();
-        controller.watch(ScopeFactories.onEnter((Base base) -> result.add("enter " + base)))
-                .watch(ScopeFactories.onExit((Base base) -> result.add("exit " + base)))
-                .watch(ScopeFactories.onEnter(() -> result.add("enter and ignore data")))
-                .watch(ScopeFactories.onExit(() -> result.add("exit and ignore data")));
+        controller.watch(ScopeFactories.onEnter((Base base) -> result.add("enter " + base)));
+        controller.watch(ScopeFactories.onExit((Base base) -> result.add("exit " + base)));
+        controller.watch(ScopeFactories.onEnter(() -> result.add("enter and ignore data")));
+        controller.watch(ScopeFactories.onExit(() -> result.add("exit and ignore data")));
         controller.set(new Derived());
         controller.reset();
         assertThat(result,

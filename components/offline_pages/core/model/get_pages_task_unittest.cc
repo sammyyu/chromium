@@ -56,11 +56,13 @@ void GetPagesTaskTest::OnGetPageDone(const OfflinePageItem* page) {
 }
 
 MultipleOfflinePageItemCallback GetPagesTaskTest::get_pages_callback() {
-  return base::Bind(&GetPagesTaskTest::OnGetPagesDone, base::Unretained(this));
+  return base::BindOnce(&GetPagesTaskTest::OnGetPagesDone,
+                        base::Unretained(this));
 }
 
 SingleOfflinePageItemCallback GetPagesTaskTest::get_single_page_callback() {
-  return base::Bind(&GetPagesTaskTest::OnGetPageDone, base::Unretained(this));
+  return base::BindOnce(&GetPagesTaskTest::OnGetPageDone,
+                        base::Unretained(this));
 }
 
 TEST_F(GetPagesTaskTest, GetAllPages) {
@@ -213,6 +215,20 @@ TEST_F(GetPagesTaskTest, GetPageByOfflineId) {
 
   RunTask(GetPagesTask::CreateTaskMatchingOfflineId(
       store(), get_single_page_callback(), item_1.offline_id));
+
+  EXPECT_EQ(item_1, single_page_result());
+}
+
+TEST_F(GetPagesTaskTest, GetPageByGuid) {
+  OfflinePageItem item_1 = generator()->CreateItem();
+  store_test_util()->InsertItem(item_1);
+  OfflinePageItem item_2 = generator()->CreateItem();
+  store_test_util()->InsertItem(item_2);
+  OfflinePageItem item_3 = generator()->CreateItem();
+  store_test_util()->InsertItem(item_3);
+
+  RunTask(GetPagesTask::CreateTaskMatchingGuid(
+      store(), get_single_page_callback(), item_1.client_id.id));
 
   EXPECT_EQ(item_1, single_page_result());
 }

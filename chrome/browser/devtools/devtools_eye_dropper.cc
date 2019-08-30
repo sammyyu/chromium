@@ -4,6 +4,8 @@
 
 #include "chrome/browser/devtools/devtools_eye_dropper.h"
 
+#include <utility>
+
 #include "base/bind.h"
 #include "build/build_config.h"
 #include "cc/paint/skia_paint_canvas.h"
@@ -12,11 +14,12 @@
 #include "content/public/browser/render_widget_host.h"
 #include "content/public/browser/render_widget_host_view.h"
 #include "content/public/browser/web_contents.h"
+#include "content/public/common/content_features.h"
 #include "content/public/common/cursor_info.h"
 #include "content/public/common/screen_info.h"
 #include "media/base/limits.h"
-#include "third_party/WebKit/public/platform/WebInputEvent.h"
-#include "third_party/WebKit/public/platform/WebMouseEvent.h"
+#include "third_party/blink/public/platform/web_input_event.h"
+#include "third_party/blink/public/platform/web_mouse_event.h"
 #include "third_party/skia/include/core/SkCanvas.h"
 #include "third_party/skia/include/core/SkColorSpaceXform.h"
 #include "third_party/skia/include/core/SkPaint.h"
@@ -30,9 +33,10 @@ DevToolsEyeDropper::DevToolsEyeDropper(content::WebContents* web_contents,
       last_cursor_x_(-1),
       last_cursor_y_(-1),
       host_(nullptr),
-      video_consumer_binding_(this),
-      enable_viz_(
-          base::FeatureList::IsEnabled(features::kVizDisplayCompositor)),
+      use_video_capture_api_(
+          base::FeatureList::IsEnabled(features::kVizDisplayCompositor) ||
+          base::FeatureList::IsEnabled(
+              features::kUseVideoCaptureApiForDevToolsSnapshots)),
       weak_factory_(this) {
   mouse_event_callback_ =
       base::Bind(&DevToolsEyeDropper::HandleMouseEvent, base::Unretained(this));
@@ -51,8 +55,12 @@ void DevToolsEyeDropper::AttachToHost(content::RenderWidgetHost* host) {
   host_ = host;
   host_->AddMouseEventCallback(mouse_event_callback_);
 
-  // TODO(crbug.com/813929): Use video capturer even if viz is not enabled.
-  if (!enable_viz_)
+  if (!use_video_capture_api_)
+    return;
+
+  // The view can be null if the renderer process has crashed.
+  // (https://crbug.com/847363)
+  if (!host_->GetView())
     return;
 
   // Capturing a full-page screenshot can be costly so we shouldn't do it too
@@ -63,16 +71,15 @@ void DevToolsEyeDropper::AttachToHost(content::RenderWidgetHost* host) {
   // Create and configure the video capturer.
   video_capturer_ = host_->GetView()->CreateVideoCapturer();
   video_capturer_->SetResolutionConstraints(
-      gfx::Size(1, 1),
-      gfx::Size(media::limits::kMaxDimension, media::limits::kMaxDimension),
-      false);
+      host_->GetView()->GetViewBounds().size(),
+      host_->GetView()->GetViewBounds().size(), true);
+  video_capturer_->SetAutoThrottlingEnabled(false);
+  video_capturer_->SetMinSizeChangePeriod(base::TimeDelta());
+  video_capturer_->SetFormat(media::PIXEL_FORMAT_ARGB,
+                             media::COLOR_SPACE_UNSPECIFIED);
   video_capturer_->SetMinCapturePeriod(base::TimeDelta::FromSeconds(1) /
                                        kMaxFrameRate);
-
-  // Start video capture.
-  viz::mojom::FrameSinkVideoConsumerPtr consumer;
-  video_consumer_binding_.Bind(mojo::MakeRequest(&consumer));
-  video_capturer_->Start(std::move(consumer));
+  video_capturer_->Start(this);
 }
 
 void DevToolsEyeDropper::DetachFromHost() {
@@ -82,7 +89,6 @@ void DevToolsEyeDropper::DetachFromHost() {
   content::CursorInfo cursor_info;
   cursor_info.type = blink::WebCursorInfo::kTypePointer;
   host_->SetCursor(cursor_info);
-  video_consumer_binding_.Close();
   video_capturer_.reset();
   host_ = nullptr;
 }
@@ -116,7 +122,7 @@ void DevToolsEyeDropper::DidReceiveCompositorFrame() {
 }
 
 void DevToolsEyeDropper::UpdateFrame() {
-  if (enable_viz_ || !host_ || !host_->GetView())
+  if (use_video_capture_api_ || !host_ || !host_->GetView())
     return;
 
   // TODO(miu): This is the wrong size. It's the size of the view on-screen, and
@@ -137,7 +143,7 @@ void DevToolsEyeDropper::ResetFrame() {
 }
 
 void DevToolsEyeDropper::FrameUpdated(const SkBitmap& bitmap) {
-  DCHECK(!enable_viz_);
+  DCHECK(!use_video_capture_api_);
   if (bitmap.drawsNothing())
     return;
   frame_ = bitmap;
@@ -311,6 +317,13 @@ void DevToolsEyeDropper::OnFrameCaptured(
     const gfx::Rect& update_rect,
     const gfx::Rect& content_rect,
     viz::mojom::FrameSinkVideoConsumerFrameCallbacksPtr callbacks) {
+  gfx::Size view_size = host_->GetView()->GetViewBounds().size();
+  if (view_size != content_rect.size()) {
+    video_capturer_->SetResolutionConstraints(view_size, view_size, true);
+    video_capturer_->RequestRefreshFrame();
+    return;
+  }
+
   if (!buffer.is_valid()) {
     callbacks->Done();
     return;
@@ -320,25 +333,18 @@ void DevToolsEyeDropper::OnFrameCaptured(
     DLOG(ERROR) << "Shared memory mapping failed.";
     return;
   }
-  scoped_refptr<media::VideoFrame> frame = media::VideoFrame::WrapExternalData(
-      info->pixel_format, info->coded_size, info->visible_rect,
-      info->visible_rect.size(), static_cast<uint8_t*>(mapping.get()),
-      buffer_size, info->timestamp);
-  if (!frame)
-    return;
-  frame->AddDestructionObserver(base::BindOnce(
-      [](mojo::ScopedSharedBufferMapping mapping) {}, std::move(mapping)));
 
-  SkBitmap skbitmap;
-  skbitmap.allocN32Pixels(info->visible_rect.width(),
-                          info->visible_rect.height());
-  cc::SkiaPaintCanvas canvas(skbitmap);
-  video_renderer_.Copy(frame, &canvas, media::Context3D());
+  SkImageInfo image_info = SkImageInfo::MakeN32(
+      content_rect.width(), content_rect.height(), kPremul_SkAlphaType);
+  SkPixmap pixmap(image_info, mapping.get(),
+                  media::VideoFrame::RowBytes(media::VideoFrame::kARGBPlane,
+                                              info->pixel_format,
+                                              info->coded_size.width()));
+  frame_.installPixels(pixmap);
+  shared_memory_mapping_ = std::move(mapping);
+  shared_memory_releaser_ = std::move(callbacks);
 
-  frame_ = skbitmap;
   UpdateCursor();
 }
-
-void DevToolsEyeDropper::OnTargetLost(const viz::FrameSinkId& frame_sink_id) {}
 
 void DevToolsEyeDropper::OnStopped() {}

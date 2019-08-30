@@ -15,10 +15,12 @@ namespace switches {
 #if defined(OS_MACOSX) && !defined(OS_IOS)
 UI_BASE_EXPORT extern const char kDisableAVFoundationOverlays[];
 UI_BASE_EXPORT extern const char kDisableMacOverlays[];
+UI_BASE_EXPORT extern const char kDisableModalAnimations[];
 UI_BASE_EXPORT extern const char kDisableRemoteCoreAnimation[];
 UI_BASE_EXPORT extern const char kShowMacOverlayBorders[];
 #endif
 
+UI_BASE_EXPORT extern const char kAnimationDurationScale[];
 UI_BASE_EXPORT extern const char kDisableCompositedAntialiasing[];
 UI_BASE_EXPORT extern const char kDisableDwmComposition[];
 UI_BASE_EXPORT extern const char kDisableTouchAdjustment[];
@@ -38,9 +40,9 @@ UI_BASE_EXPORT extern const char kTopChromeMDMaterial[];
 UI_BASE_EXPORT extern const char kTopChromeMDMaterialAuto[];
 UI_BASE_EXPORT extern const char kTopChromeMDMaterialHybrid[];
 UI_BASE_EXPORT extern const char kTopChromeMDMaterialTouchOptimized[];
-UI_BASE_EXPORT extern const char kTopChromeMDNonMaterial[];
+UI_BASE_EXPORT extern const char kTopChromeMDMaterialRefresh[];
+UI_BASE_EXPORT extern const char kTopChromeMDMaterialRefreshTouchOptimized[];
 UI_BASE_EXPORT extern const char kUIDisablePartialSwap[];
-UI_BASE_EXPORT extern const char kUseSkiaRenderer[];
 
 // Test related.
 UI_BASE_EXPORT extern const char kDisallowNonExactResourceReuse[];

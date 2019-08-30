@@ -13,9 +13,12 @@
 #include "components/omnibox/browser/omnibox_edit_model.h"
 #include "components/search_engines/util.h"
 #include "components/strings/grit/components_strings.h"
+#include "components/variations/net/variations_http_headers.h"
 #include "ios/chrome/browser/autocomplete/autocomplete_scheme_classifier_impl.h"
 #include "ios/chrome/browser/browser_state/chrome_browser_state.h"
 #include "ios/chrome/browser/search_engines/template_url_service_factory.h"
+#import "ios/chrome/browser/ui/commands/command_dispatcher.h"
+#import "ios/chrome/browser/ui/commands/load_query_commands.h"
 #import "ios/chrome/browser/ui/location_bar/location_bar_constants.h"
 #import "ios/chrome/browser/ui/location_bar/location_bar_legacy_consumer.h"
 #import "ios/chrome/browser/ui/location_bar/location_bar_legacy_mediator.h"
@@ -33,6 +36,7 @@
 #import "ios/chrome/browser/ui/url_loader.h"
 #import "ios/chrome/browser/web_state_list/web_state_list.h"
 #import "ios/third_party/material_components_ios/src/components/Typography/src/MaterialTypography.h"
+#import "ios/web/public/navigation_manager.h"
 #import "ios/web/public/referrer.h"
 #include "url/gurl.h"
 
@@ -48,7 +52,8 @@ const char* const kOmniboxQueryLocationAuthorizationStatusHistogram =
 const int kLocationAuthorizationStatusCount = 4;
 }  // namespace
 
-@interface LocationBarLegacyCoordinator ()<LocationBarLegacyConsumer,
+@interface LocationBarLegacyCoordinator ()<LoadQueryCommands,
+                                           LocationBarLegacyConsumer,
                                            LocationBarDelegate> {
   std::unique_ptr<LocationBarControllerImpl> _locationBarController;
 }
@@ -58,12 +63,13 @@ const int kLocationAuthorizationStatusCount = 4;
 // Coordinator for the omnibox popup.
 @property(nonatomic, strong) OmniboxPopupCoordinator* omniboxPopupCoordinator;
 @property(nonatomic, strong) LocationBarLegacyMediator* mediator;
-// Redefined as readwrite and as LocationBarView.
+// Redefined as readwrite and as LocationBarEditView.
 @property(nonatomic, strong, readwrite) LocationBarLegacyView* locationBarView;
 
 @end
 
 @implementation LocationBarLegacyCoordinator
+@synthesize commandDispatcher = _commandDispatcher;
 @synthesize locationBarView = _locationBarView;
 @synthesize mediator = _mediator;
 @synthesize keyboardDelegate = _keyboardDelegate;
@@ -82,6 +88,14 @@ const int kLocationAuthorizationStatusCount = 4;
 }
 
 - (void)start {
+  DCHECK(self.commandDispatcher);
+
+  [self.commandDispatcher startDispatchingToTarget:self
+                                       forProtocol:@protocol(OmniboxFocuser)];
+  [self.commandDispatcher
+      startDispatchingToTarget:self
+                   forProtocol:@protocol(LoadQueryCommands)];
+
   BOOL isIncognito = self.browserState->IsOffTheRecord();
 
   UIColor* textColor =
@@ -188,25 +202,18 @@ const int kLocationAuthorizationStatusCount = 4;
   [self cancelOmniboxEdit];
 }
 
-#pragma mark - VoiceSearchControllerDelegate
+#pragma mark - LoadQueryCommands
 
-- (void)receiveVoiceSearchResult:(NSString*)result {
-  DCHECK(result);
-  [self loadURLForQuery:result];
-}
-
-#pragma mark - QRScannerResultLoading
-
-- (void)receiveQRScannerResult:(NSString*)result loadImmediately:(BOOL)load {
-  DCHECK(result);
-  if (load) {
-    [self loadURLForQuery:result];
+- (void)loadQuery:(NSString*)query immediately:(BOOL)immediately {
+  DCHECK(query);
+  if (immediately) {
+    [self loadURLForQuery:query];
   } else {
     [self focusOmnibox];
-    [self.locationBarView.textField insertTextWhileEditing:result];
+    [self.locationBarView.textField insertTextWhileEditing:query];
     // The call to |setText| shouldn't be needed, but without it the "Go" button
     // of the keyboard is disabled.
-    [self.locationBarView.textField setText:result];
+    [self.locationBarView.textField setText:query];
     // Notify the accessibility system to start reading the new contents of the
     // Omnibox.
     UIAccessibilityPostNotification(UIAccessibilityScreenChangedNotification,
@@ -231,10 +238,10 @@ const int kLocationAuthorizationStatusCount = 4;
     // |loadURL|?  It doesn't seem to be causing major problems.  If we call
     // cancel before load, then any prerendered pages get destroyed before the
     // call to load.
-    [self.URLLoader loadURL:url
-                   referrer:web::Referrer()
-                 transition:transition
-          rendererInitiated:NO];
+    web::NavigationManager::WebLoadParams params(url);
+    params.transition_type = transition;
+    params.extra_headers = [self variationHeadersForURL:url];
+    [self.URLLoader loadURLWithParams:params];
 
     if (google_util::IsGoogleSearchUrl(url)) {
       UMA_HISTOGRAM_ENUMERATION(
@@ -249,6 +256,12 @@ const int kLocationAuthorizationStatusCount = 4;
 // This will be OmniboxFocuser implementation, but it's not yet ready. Some
 // methods are already necessary though.
 #pragma mark - OmniboxFocuser
+
+- (void)focusOmniboxFromSearchButton {
+  OmniboxEditModel* model = _locationBarController->GetLocationEntry()->model();
+  model->set_focus_source(OmniboxEditModel::FocusSource::SEARCH_BUTTON);
+  [self focusOmnibox];
+}
 
 - (void)focusOmnibox {
   [self.locationBarView.textField becomeFirstResponder];
@@ -283,6 +296,24 @@ const int kLocationAuthorizationStatusCount = 4;
 
 #pragma mark - private
 
+// Returns a dictionary with variation headers for qualified URLs. Can be empty.
+- (NSDictionary*)variationHeadersForURL:(const GURL&)URL {
+  net::HttpRequestHeaders variation_headers;
+  variations::AppendVariationHeadersUnknownSignedIn(
+      URL,
+      self.browserState->IsOffTheRecord() ? variations::InIncognito::kYes
+                                          : variations::InIncognito::kNo,
+      &variation_headers);
+  NSMutableDictionary* result = [NSMutableDictionary dictionary];
+  net::HttpRequestHeaders::Iterator header_iterator(variation_headers);
+  while (header_iterator.GetNext()) {
+    NSString* name = base::SysUTF8ToNSString(header_iterator.name());
+    NSString* value = base::SysUTF8ToNSString(header_iterator.value());
+    result[name] = value;
+  }
+  return [result copy];
+}
+
 // Navigate to |query| from omnibox.
 - (void)loadURLForQuery:(NSString*)query {
   GURL searchURL;
@@ -298,12 +329,10 @@ const int kLocationAuthorizationStatusCount = 4;
     // It is necessary to include PAGE_TRANSITION_FROM_ADDRESS_BAR in the
     // transition type is so that query-in-the-omnibox is triggered for the
     // URL.
-    ui::PageTransition transition = ui::PageTransitionFromInt(
+    web::NavigationManager::WebLoadParams params(searchURL);
+    params.transition_type = ui::PageTransitionFromInt(
         ui::PAGE_TRANSITION_LINK | ui::PAGE_TRANSITION_FROM_ADDRESS_BAR);
-    [self.URLLoader loadURL:GURL(searchURL)
-                   referrer:web::Referrer()
-                 transition:transition
-          rendererInitiated:NO];
+    [self.URLLoader loadURLWithParams:params];
   }
 }
 

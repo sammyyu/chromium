@@ -46,7 +46,7 @@ class CountingNetworkDelegate : public net::NetworkDelegateImpl {
   }
 
   int OnBeforeURLRequest(net::URLRequest* request,
-                         const net::CompletionCallback& callback,
+                         net::CompletionOnceCallback callback,
                          GURL* new_url) final {
     created_requests_++;
     return net::OK;
@@ -114,7 +114,7 @@ TEST_F(DataReductionProxyIODataTest, TestConstruction) {
 
   // Check that the SimpleURLRequestContextGetter uses vanilla HTTP.
   net::URLRequestContext* request_context =
-      io_data->basic_url_request_context_getter_.get()->GetURLRequestContext();
+      io_data->basic_url_request_context_getter_->GetURLRequestContext();
   const net::HttpNetworkSession::Params* http_params =
       request_context->GetNetworkSessionParams();
   EXPECT_FALSE(http_params->enable_http2);

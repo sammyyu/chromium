@@ -15,7 +15,6 @@
 #include "base/files/file_path.h"
 #include "base/json/json_file_value_serializer.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/no_destructor.h"
 #include "base/sha1.h"
 #include "base/stl_util.h"
@@ -23,16 +22,19 @@
 #include "base/strings/string_util.h"
 #include "base/task_runner_util.h"
 #include "base/task_scheduler/post_task.h"
+#include "chrome/browser/browser_process.h"
 #include "chrome/browser/supervised_user/experimental/supervised_user_blacklist.h"
 #include "components/google/core/browser/google_util.h"
 #include "components/policy/core/browser/url_blacklist_manager.h"
 #include "components/url_formatter/url_fixer.h"
 #include "components/url_matcher/url_matcher.h"
+#include "components/variations/service/variations_service.h"
 #include "content/public/browser/browser_thread.h"
 #include "extensions/buildflags/buildflags.h"
 #include "net/base/escape.h"
 #include "net/base/registry_controlled_domains/registry_controlled_domain.h"
 #include "net/base/url_util.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "url/gurl.h"
 #include "url/url_constants.h"
 
@@ -60,11 +62,11 @@ struct HashHostnameHash {
 
 SupervisedUserURLFilter::FilteringBehavior
 GetBehaviorFromSafeSearchClassification(
-    SafeSearchURLChecker::Classification classification) {
+    safe_search_api::Classification classification) {
   switch (classification) {
-    case SafeSearchURLChecker::Classification::SAFE:
+    case safe_search_api::Classification::SAFE:
       return SupervisedUserURLFilter::ALLOW;
-    case SafeSearchURLChecker::Classification::UNSAFE:
+    case safe_search_api::Classification::UNSAFE:
       return SupervisedUserURLFilter::BLOCK;
   }
   NOTREACHED();
@@ -97,7 +99,8 @@ const char* const kCrxDownloadUrls[] = {
 #endif
 
 // Whitelisted origins:
-const char kFamiliesUrl[] = "https://families.google.com/";
+const char kFamiliesSecureUrl[] = "https://families.google.com/";
+const char kFamiliesUrl[] = "http://families.google.com/";
 
 // This class encapsulates all the state that is required during construction of
 // a new SupervisedUserURLFilter::Contents.
@@ -368,7 +371,8 @@ SupervisedUserURLFilter::GetFilteringBehaviorForURL(
 
   // Allow navigations to whitelisted origins (currently families.google.com).
   static const base::NoDestructor<base::flat_set<GURL>> kWhitelistedOrigins(
-      base::flat_set<GURL>({GURL(kFamiliesUrl).GetOrigin()}));
+      base::flat_set<GURL>({GURL(kFamiliesUrl).GetOrigin(),
+                            GURL(kFamiliesSecureUrl).GetOrigin()}));
   if (base::ContainsKey(*kWhitelistedOrigins, effective_url.GetOrigin()))
     return ALLOW;
 
@@ -529,7 +533,7 @@ void SupervisedUserURLFilter::SetManualURLs(std::map<GURL, bool> url_map) {
 }
 
 void SupervisedUserURLFilter::InitAsyncURLChecker(
-    net::URLRequestContextGetter* context) {
+    scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory) {
   net::NetworkTrafficAnnotationTag traffic_annotation =
       net::DefineNetworkTrafficAnnotation("supervised_user_url_filter", R"(
         semantics {
@@ -551,8 +555,19 @@ void SupervisedUserURLFilter::InitAsyncURLChecker(
             "family dashboard."
           policy_exception_justification: "Not implemented."
         })");
-  async_url_checker_.reset(
-      new SafeSearchURLChecker(context, traffic_annotation));
+
+  // Prefer using the permanent stored country, which may be unavailable during
+  // the first run. In that case, try to use the latest country instead.
+  std::string country;
+  variations::VariationsService* variations_service =
+      g_browser_process->variations_service();
+  if (variations_service) {
+    country = variations_service->GetStoredPermanentCountry();
+    if (country.empty())
+      country = variations_service->GetLatestCountry();
+  }
+  async_url_checker_ = std::make_unique<safe_search_api::URLChecker>(
+      std::move(url_loader_factory), traffic_annotation, country);
 }
 
 void SupervisedUserURLFilter::ClearAsyncURLChecker() {
@@ -673,7 +688,7 @@ void SupervisedUserURLFilter::SetContents(std::unique_ptr<Contents> contents) {
 void SupervisedUserURLFilter::CheckCallback(
     FilteringBehaviorCallback callback,
     const GURL& url,
-    SafeSearchURLChecker::Classification classification,
+    safe_search_api::Classification classification,
     bool uncertain) const {
   DCHECK(default_behavior_ != BLOCK);
 

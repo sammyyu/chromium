@@ -5,13 +5,13 @@
 module ash.mojom;
 
 import "ash/public/interfaces/user_info.mojom";
-import "components/signin/public/interfaces/account_id.mojom";
-import "mojo/common/time.mojom";
+import "components/account_id/interfaces/account_id.mojom";
 import "mojo/public/mojom/base/file_path.mojom";
-import "skia/public/interfaces/bitmap.mojom";
+import "mojo/public/mojom/base/time.mojom";
+import "ui/gfx/image/mojo/image.mojom";
 import "url/mojom/url.mojom";
 
-// These values match wallpaper::WallpaperLayout.
+// These values match ash::WallpaperLayout.
 enum WallpaperLayout {
   CENTER,
   CENTER_CROPPED,
@@ -51,12 +51,15 @@ interface WallpaperController {
   //                             reside.
   // |chromeos_custom_wallpapers_path|: Directory where custom wallpapers
   //                                    reside.
+  // |device_policy_wallpaper_path|: The file path of the device policy
+  //                                 wallpaper (if any).
   // |is_device_wallpaper_policy_enforced|: Whether the device wallpaper policy
   //                                        is enforced on the device.
   Init(WallpaperControllerClient client,
        mojo_base.mojom.FilePath user_data_path,
        mojo_base.mojom.FilePath chromeos_wallpapers_path,
        mojo_base.mojom.FilePath chromeos_custom_wallpapers_path,
+       mojo_base.mojom.FilePath device_policy_wallpaper_path,
        bool is_device_wallpaper_policy_enforced);
 
   // Sets wallpaper from a local file and updates the saved wallpaper info for
@@ -73,24 +76,42 @@ interface WallpaperController {
                      string wallpaper_files_id,
                      string file_name,
                      WallpaperLayout layout,
-                     skia.mojom.Bitmap image,
+                     gfx.mojom.ImageSkia image,
                      bool preview_mode);
 
-  // Sets wallpaper from the wallpaper picker selection, i.e., the wallpaper
-  // type is ONLINE.
+  // Sets wallpaper from the Chrome OS wallpaper picker. If the wallpaper file
+  // corresponding to |url| already exists in local file system (i.e.
+  // |SetOnlineWallpaperFromData| was called earlier with the same |url|),
+  // returns true and sets wallpaper for the user, otherwise returns false.
   // |user_info|: The user's information related to wallpaper.
-  // |image|: The wallpaper image.
-  // |url|: The url corresponding to this wallpaper. Used as a placeholder for
-  //        the location in WallpaperInfo.
+  // |url|: The wallpaper url.
   // |layout|: The layout of the wallpaper, used for wallpaper resizing.
   // |preview_mode|: If true, show the wallpaper immediately but doesn't change
   //                 the user wallpaper info until |ConfirmPreviewWallpaper| is
   //                 called.
-  SetOnlineWallpaper(WallpaperUserInfo user_info,
-                     skia.mojom.Bitmap image,
-                     string url,
-                     WallpaperLayout layout,
-                     bool preview_mode);
+  // |file_exists|: If the wallpaper file exists in local file system.
+  SetOnlineWallpaperIfExists(WallpaperUserInfo user_info,
+                             string url,
+                             WallpaperLayout layout,
+                             bool preview_mode) => (bool file_exists);
+
+  // Sets wallpaper from the Chrome OS wallpaper picker and saves the wallpaper
+  // to local file system. After this, |SetOnlineWallpaperIfExists| will return
+  // true for the same |url|, so that there's no need to provide |image_data|
+  // when the same wallpaper needs to be set again or for another user.
+  // |user_info|: The user's information related to wallpaper.
+  // |url|: The wallpaper url.
+  // |layout|: The layout of the wallpaper, used for wallpaper resizing.
+  // |preview_mode|: If true, show the wallpaper immediately but doesn't change
+  //                 the user wallpaper info until |ConfirmPreviewWallpaper| is
+  //                 called.
+  // |success|: If the wallpaper is set successfully (i.e. no decoding error
+  //            etc.).
+  SetOnlineWallpaperFromData(WallpaperUserInfo user_info,
+                             string image_data,
+                             string url,
+                             WallpaperLayout layout,
+                             bool preview_mode) => (bool success);
 
   // Sets the user's wallpaper to be the default wallpaper. Note: different user
   // types may have different default wallpapers.
@@ -127,6 +148,29 @@ interface WallpaperController {
   // Sets whether device wallpaper policy is enforced on this device. Updates/
   // clears the device policy controlled wallpaper if applicable.
   SetDeviceWallpaperPolicyEnforced(bool enforced);
+
+  // Sets wallpaper from a third-party app (as opposed to the Chrome OS
+  // wallpaper picker).
+  // |user_info|: The user's information related to wallpaper.
+  // |wallpaper_files_id|: The file id for user_info.account_id.
+  // |file_name|: The name of the wallpaper file.
+  // |layout|: The layout of the wallpaper, used for wallpaper resizing.
+  // |image|: The wallpaper image.
+  // |allowed|: If the wallpaper is allowed to be shown on screen. It's false if
+  //            1) the user is not permitted to change wallpaper, or
+  //            2) updating the on-screen wallpaper is not allowed at the
+  //               given moment.
+  // |image_id|: A unique id assigned to the image. Clients may be interested in
+  //             observing all wallpaper changes and acting differently based on
+  //             if the wallpaper change is due to their own request. In order
+  //             to do so, they should compare this value with the one that's
+  //             returned by |OnWallpaperChanged|.
+  SetThirdPartyWallpaper(WallpaperUserInfo user_info,
+                         string wallpaper_files_id,
+                         string file_name,
+                         WallpaperLayout layout,
+                         gfx.mojom.ImageSkia image)
+                         => (bool allowed, uint32 image_id);
 
   // Confirms the wallpaper being previewed to be set as the actual user
   // wallpaper. Must be called in preview mode.
@@ -168,25 +212,51 @@ interface WallpaperController {
   // |wallpaper_files_id|: The file id for user_info.account_id.
   RemovePolicyWallpaper(WallpaperUserInfo user_info, string wallpaper_files_id);
 
+  // Returns the urls of the wallpapers that exist in local file system (i.e.
+  // |SetOnlineWallpaperFromData| was called earlier). The url is used as id
+  // to identify which wallpapers are available to be set offline.
+  GetOfflineWallpaperList() => (array<string> url_list);
+
   // Sets wallpaper animation duration. Passing an empty value disables the
   // animation.
-  SetAnimationDuration(mojo.common.mojom.TimeDelta animation_duration);
+  SetAnimationDuration(mojo_base.mojom.TimeDelta animation_duration);
 
   // Opens the wallpaper picker if the active user is not controlled by policy
   // and it's allowed to change wallpaper per the user type and the login state.
   OpenWallpaperPickerIfAllowed();
 
+  // Minimizes all windows except the active window.
+  // |user_id_hash|: The hash value corresponding to |User::username_hash|.
+  MinimizeInactiveWindows(string user_id_hash);
+
+  // Restores all minimized windows to their previous states. This should only
+  // be called after calling |MinimizeInactiveWindows|.
+  // |user_id_hash|: The hash value corresponding to |User::username_hash|.
+  RestoreMinimizedWindows(string user_id_hash);
+
   // Calling this method triggers an initial notification of the wallpaper
   // state. Observers are automatically removed as their connections are closed.
   AddObserver(associated WallpaperObserver observer);
 
-  // Runs to get wallpaper prominent colors.
+  // Returns the wallpaper image currently being shown.
+  GetWallpaperImage() => (gfx.mojom.ImageSkia image);
+
+  // Returns the wallpaper prominent colors.
   GetWallpaperColors() => (array<uint32> prominent_colors);
+
+  // Returns whether the current wallpaper is blurred.
+  IsWallpaperBlurred() => (bool blurred);
 
   // Returns true if the wallpaper of the currently active user (if any) is
   // controlled by policy (excluding device policy). If there's no active user,
   // returns false.
   IsActiveUserWallpaperControlledByPolicy() => (bool controlled);
+
+  // Returns the location and the layout of the active user's wallpaper. The
+  // location is either a url or a file path, corresponding to
+  // |WallpaperInfo.location|. Returns an empty string and an invalid layout if
+  // there's no active user.
+  GetActiveUserWallpaperInfo() => (string location, WallpaperLayout layout);
 
   // Returns true if the wallpaper setting (used to open the wallpaper picker)
   // should be visible.
@@ -202,8 +272,8 @@ interface WallpaperControllerClient {
   // able to decide whatever the first wallpaper it wants to display.
   OnReadyToSetWallpaper();
 
-  // TODO(crbug.com/784495, 776464): Consider removing this after views-based
-  // login is enabled.
+  // TODO(wzang|784495): Consider removing this after views-based login is
+  // enabled.
   // Notifies the client that the animation of the first wallpaper since
   // the controller initialization has completed.
   OnFirstWallpaperAnimationFinished();
@@ -211,9 +281,18 @@ interface WallpaperControllerClient {
 
 // Used to listen for wallpaper state changed.
 interface WallpaperObserver {
-  // Called when the colors extracted from the current wallpaper change. May
-  // be called as a side effect of changing the wallpaper on the
-  // WallpaperController, e.g. WallpaperController::SetWallpaperImage().
-  // Colors are ordered and are referenced in wallpaper::ColorProfileType.
+  // Invoked when the wallpaper is changed. |image_id| is the unique id assigned
+  // to the current wallpaper image. It should only be used to compare against
+  // the value returned by a setting wallpaper request earlier
+  // (e.g. SetThirdPartyWallpaper). This value is unique to each |ImageSkia|
+  // object and is different for two objects with the same pixels.
+  OnWallpaperChanged(uint32 image_id);
+
+  // Invoked when the colors extracted from the current wallpaper change. Colors
+  // are ordered and are referenced in wallpaper::ColorProfileType.
   OnWallpaperColorsChanged(array<uint32> prominent_colors);
+
+  // TODO(wzang|784495): Remove this after views-based login is enabled.
+  // Invoked when the blur state of the wallpaper changes.
+  OnWallpaperBlurChanged(bool blurred);
 };

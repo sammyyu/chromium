@@ -16,7 +16,6 @@
 #include "base/command_line.h"
 #include "base/json/json_string_value_serializer.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
@@ -39,6 +38,7 @@
 #include "chrome/test/base/in_process_browser_test.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/prefs/pref_service.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/browsing_data_remover.h"
 #include "content/public/common/content_switches.h"
 #include "content/public/test/browser_test_utils.h"
@@ -116,6 +116,27 @@ const char kInvalidLongUrl[] =
     "00000000000000000000000000000000000000000000000000000000000000000000000000"
     "00000000000000000000000000000000000000000000000000000000000000000000000000"
     "0000000000000000000000000000000000000000000000000000.org";
+
+// Returns a motivation_list if we can find one for the given motivating_host
+// (or nullptr if a match is not found).
+static const base::ListValue* FindSerializationMotivation(
+    const GURL& motivation,
+    const base::ListValue* referral_list) {
+  CHECK_LT(0u, referral_list->GetSize());  // Room for version.
+  int format_version = -1;
+  CHECK(referral_list->GetInteger(0, &format_version));
+  CHECK_EQ(chrome_browser_net::Predictor::kPredictorReferrerVersion,
+           format_version);
+  const base::ListValue* motivation_list = nullptr;
+  for (size_t i = 1; i < referral_list->GetSize(); ++i) {
+    referral_list->GetList(i, &motivation_list);
+    std::string existing_spec;
+    EXPECT_TRUE(motivation_list->GetString(0, &existing_spec));
+    if (motivation == GURL(existing_spec))
+      return motivation_list;
+  }
+  return nullptr;
+}
 
 // Gets notified by the EmbeddedTestServer on incoming connections being
 // accepted or read from, keeps track of them and exposes that info to
@@ -881,10 +902,11 @@ IN_PROC_BROWSER_TEST_F(PredictorBrowserTest,
 
   // Flood with delayed requests, then wait.
   FloodResolveRequestsOnUIThread(names);
+  base::RunLoop run_loop;
   base::ThreadTaskRunnerHandle::Get()->PostDelayedTask(
-      FROM_HERE, base::MessageLoop::QuitWhenIdleClosure(),
+      FROM_HERE, run_loop.QuitClosure(),
       base::TimeDelta::FromMilliseconds(500));
-  base::RunLoop().Run();
+  run_loop.Run();
 
   ExpectUrlLookupIsInProgressOnUIThread(delayed_url);
   EXPECT_FALSE(observer()->HasHostBeenLookedUp(delayed_url));
@@ -1505,25 +1527,29 @@ IN_PROC_BROWSER_TEST_F(PredictorBrowserTest, ClearData) {
 IN_PROC_BROWSER_TEST_F(PredictorBrowserTest, DoNotEvictRecentlyUsed) {
   observer()->SetStrict(false);
   for (int i = 0; i < Predictor::kMaxReferrers; ++i) {
-    LearnFromNavigation(
-        GURL(base::StringPrintf("http://www.source%d.test", i)),
-        GURL(base::StringPrintf("http://www.target%d.test", i)));
+    LearnFromNavigation(GURL(base::StringPrintf("http://source%d.test", i)),
+                        GURL(base::StringPrintf("http://target%d.test", i)));
   }
   ui_test_utils::NavigateToURL(browser(), GURL("http://source0.test"));
 
   // This will evict http://source1.test.
   LearnFromNavigation(GURL("http://new_source"), GURL("http://new_target"));
 
-  std::string html;
+  base::ListValue referral_list;
   base::RunLoop run_loop;
   BrowserThread::PostTaskAndReply(
       BrowserThread::IO, FROM_HERE,
-      base::BindOnce(&Predictor::PredictorGetHtmlInfo, predictor(), &html),
+      base::BindOnce(&Predictor::SerializeReferrers,
+                     base::Unretained(predictor()), &referral_list),
       run_loop.QuitClosure());
   run_loop.Run();
 
-  EXPECT_NE(html.find("http://source0.test"), std::string::npos);
-  EXPECT_EQ(html.find("http://source1.test"), std::string::npos);
+  EXPECT_NE(
+      FindSerializationMotivation(GURL("http://source0.test"), &referral_list),
+      nullptr);
+  EXPECT_EQ(
+      FindSerializationMotivation(GURL("http://source1.test"), &referral_list),
+      nullptr);
 }
 
 IN_PROC_BROWSER_TEST_F(PredictorBrowserTest, DnsPrefetch) {

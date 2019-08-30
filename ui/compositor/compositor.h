@@ -30,6 +30,7 @@
 #include "ui/compositor/compositor_export.h"
 #include "ui/compositor/compositor_lock.h"
 #include "ui/compositor/compositor_observer.h"
+#include "ui/compositor/external_begin_frame_client.h"
 #include "ui/compositor/layer_animator_collection.h"
 #include "ui/gfx/color_space.h"
 #include "ui/gfx/geometry/size.h"
@@ -52,6 +53,7 @@ class TaskGraphRunner;
 }
 
 namespace gfx {
+struct PresentationFeedback;
 class Rect;
 class ScrollOffset;
 class Size;
@@ -77,6 +79,7 @@ class LatencyInfo;
 class Layer;
 class Reflector;
 class ScopedAnimationDurationScaleMode;
+class ScrollInputHandler;
 
 constexpr int kCompositorLockTimeoutMs = 67;
 
@@ -97,6 +100,8 @@ class COMPOSITOR_EXPORT ContextFactoryObserver {
 // This is privileged interface to the compositor. It is a global object.
 class COMPOSITOR_EXPORT ContextFactoryPrivate {
  public:
+  virtual ~ContextFactoryPrivate() {}
+
   // Creates a reflector that copies the content of the |mirrored_compositor|
   // onto |mirroring_layer|.
   virtual std::unique_ptr<Reflector> CreateReflector(
@@ -123,6 +128,10 @@ class COMPOSITOR_EXPORT ContextFactoryPrivate {
   // Resize the display corresponding to this compositor to a particular size.
   virtual void ResizeDisplay(ui::Compositor* compositor,
                              const gfx::Size& size) = 0;
+
+  // Attempts to immediately swap a frame with the current size if possible,
+  // then will no longer swap until ResizeDisplay() is called.
+  virtual void DisableSwapUntilResize(ui::Compositor* compositor) = 0;
 
   // Sets the color matrix used to transform how all output is drawn to the
   // display underlying this ui::Compositor.
@@ -180,6 +189,8 @@ class COMPOSITOR_EXPORT ContextFactory {
   virtual void AddObserver(ContextFactoryObserver* observer) = 0;
 
   virtual void RemoveObserver(ContextFactoryObserver* observer) = 0;
+
+  virtual bool SyncTokensRequiredForDisplayCompositor() = 0;
 };
 
 // Compositor object to take care of GPU painting.
@@ -190,7 +201,8 @@ class COMPOSITOR_EXPORT ContextFactory {
 class COMPOSITOR_EXPORT Compositor : public cc::LayerTreeHostClient,
                                      public cc::LayerTreeHostSingleThreadClient,
                                      public CompositorLockManagerClient,
-                                     public viz::HostFrameSinkClient {
+                                     public viz::HostFrameSinkClient,
+                                     public ExternalBeginFrameClient {
  public:
   Compositor(const viz::FrameSinkId& frame_sink_id,
              ui::ContextFactory* context_factory,
@@ -260,6 +272,7 @@ class COMPOSITOR_EXPORT Compositor : public cc::LayerTreeHostClient,
   // Finishes all outstanding rendering and disables swapping on this surface
   // until it is resized.
   void DisableSwapUntilResize();
+  void ReenableSwap();
 
   void SetLatencyInfo(const LatencyInfo& latency_info);
 
@@ -324,14 +337,6 @@ class COMPOSITOR_EXPORT Compositor : public cc::LayerTreeHostClient,
   // given |args|.
   void IssueExternalBeginFrame(const viz::BeginFrameArgs& args);
 
-  // Called by the ContextFactory when a BeginFrame was completed by the Display
-  // if the enable_external_begin_frames setting is true.
-  void OnDisplayDidFinishFrame(const viz::BeginFrameAck& ack);
-
-  // Called by the ContextFactory to signal whether BeginFrames are needed by
-  // the compositor if the enable_external_begin_frames setting is true.
-  void OnNeedsExternalBeginFrames(bool needs_begin_frames);
-
   // This flag is used to force a compositor into software compositing even tho
   // in general chrome is using gpu compositing. This allows the compositor to
   // be created without a gpu context, and does not go through the gpu path at
@@ -372,8 +377,12 @@ class COMPOSITOR_EXPORT Compositor : public cc::LayerTreeHostClient,
   // See ui/gfx/presentation_feedback.h for details on the args (TimeTicks is
   // always non-zero).
   using PresentationTimeCallback =
-      base::OnceCallback<void(base::TimeTicks, base::TimeDelta, uint32_t)>;
+      base::OnceCallback<void(const gfx::PresentationFeedback&)>;
   void RequestPresentationTimeForNextFrame(PresentationTimeCallback callback);
+
+  // ExternalBeginFrameClient implementation.
+  void OnDisplayDidFinishFrame(const viz::BeginFrameAck& ack) override;
+  void OnNeedsExternalBeginFrames(bool needs_begin_frames) override;
 
   // LayerTreeHostClient implementation.
   void WillBeginMainFrame() override {}
@@ -397,8 +406,9 @@ class COMPOSITOR_EXPORT Compositor : public cc::LayerTreeHostClient,
   void DidCommitAndDrawFrame() override {}
   void DidReceiveCompositorFrameAck() override;
   void DidCompletePageScaleAnimation() override {}
-
-  bool IsForSubframe() override;
+  void DidPresentCompositorFrame(
+      uint32_t frame_token,
+      const gfx::PresentationFeedback& feedback) override {}
 
   // cc::LayerTreeHostSingleThreadClient implementation.
   void DidSubmitCompositorFrame() override;
@@ -432,6 +442,10 @@ class COMPOSITOR_EXPORT Compositor : public cc::LayerTreeHostClient,
 
   // If true, all paint commands are recorded at pixel size instead of DIP.
   bool is_pixel_canvas() const { return is_pixel_canvas_; }
+
+  ScrollInputHandler* scroll_input_handler() const {
+    return scroll_input_handler_.get();
+  }
 
  private:
   friend class base::RefCounted<Compositor>;
@@ -493,6 +507,11 @@ class COMPOSITOR_EXPORT Compositor : public cc::LayerTreeHostClient,
   const bool is_pixel_canvas_;
 
   CompositorLockManager lock_manager_;
+
+  std::unique_ptr<ScrollInputHandler> scroll_input_handler_;
+
+  // Set in DisableSwapUntilResize and reset when a resize happens.
+  bool disabled_swap_until_resize_ = false;
 
   base::WeakPtrFactory<Compositor> context_creation_weak_ptr_factory_;
 

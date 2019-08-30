@@ -8,9 +8,11 @@
 #include "ash/public/cpp/ash_switches.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
+#include "ash/wm/overview/cleanup_animation_observer.h"
+#include "ash/wm/overview/scoped_overview_animation_settings.h"
+#include "ash/wm/overview/window_selector_controller.h"
 #include "ash/wm/splitview/split_view_controller.h"
 #include "ash/wm/window_state.h"
-#include "base/command_line.h"
 #include "base/optional.h"
 #include "third_party/skia/include/pathops/SkPathOps.h"
 #include "ui/aura/client/aura_constants.h"
@@ -25,11 +27,6 @@
 namespace ash {
 
 namespace {
-
-// Cache the result of the command line lookup so the command line is only
-// looked up once.
-base::Optional<bool> g_enable_new_overview_animations = base::nullopt;
-base::Optional<bool> g_enable_new_overview_ui = base::nullopt;
 
 // BackgroundWith1PxBorder renders a solid background color, with a one pixel
 // border with rounded corners. This accounts for the scaling of the canvas, so
@@ -104,31 +101,37 @@ bool CanCoverAvailableWorkspace(aura::Window* window) {
   return wm::GetWindowState(window)->IsMaximizedOrFullscreenOrPinned();
 }
 
-bool IsNewOverviewAnimationsEnabled() {
-  if (g_enable_new_overview_animations == base::nullopt) {
-    g_enable_new_overview_animations =
-        base::make_optional(ash::features::IsNewOverviewAnimationsEnabled());
+bool IsOverviewSwipeToCloseEnabled() {
+  return base::FeatureList::IsEnabled(features::kOverviewSwipeToClose);
+}
+
+void FadeOutWidgetOnExit(std::unique_ptr<views::Widget> widget,
+                         OverviewAnimationType animation_type) {
+  // The window selector controller may be nullptr on shutdown.
+  WindowSelectorController* controller =
+      Shell::Get()->window_selector_controller();
+  if (!controller) {
+    widget->SetOpacity(0.f);
+    return;
   }
 
-  return g_enable_new_overview_animations.value();
-}
+  widget->SetOpacity(1.f);
+  // Fade out the widget. This animation continues past the lifetime of overview
+  // mode items.
+  ScopedOverviewAnimationSettings animation_settings(animation_type,
+                                                     widget->GetNativeWindow());
+  // CleanupAnimationObserver will delete itself (and the widget) when the
+  // opacity animation is complete.
+  // Ownership over the observer is passed to the window selector controller
+  // which has longer lifetime so that animations can continue even after the
+  // overview mode is shut down.
+  views::Widget* widget_ptr = widget.get();
+  std::unique_ptr<CleanupAnimationObserver> observer(
+      new CleanupAnimationObserver(std::move(widget)));
+  animation_settings.AddObserver(observer.get());
 
-bool IsNewOverviewUi() {
-  if (g_enable_new_overview_ui == base::nullopt) {
-    g_enable_new_overview_ui =
-        base::make_optional(base::CommandLine::ForCurrentProcess()->HasSwitch(
-            ash::switches::kAshEnableNewOverviewUi));
-  }
-
-  return g_enable_new_overview_ui.value();
-}
-
-void ResetCachedOverviewAnimationsValueForTesting() {
-  g_enable_new_overview_animations = base::nullopt;
-}
-
-void ResetCachedOverviewUiValueForTesting() {
-  g_enable_new_overview_ui = base::nullopt;
+  controller->AddDelayedAnimationObserver(std::move(observer));
+  widget_ptr->SetOpacity(0.f);
 }
 
 std::unique_ptr<views::Widget> CreateBackgroundWidget(aura::Window* root_window,

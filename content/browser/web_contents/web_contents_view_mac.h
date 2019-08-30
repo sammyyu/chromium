@@ -18,7 +18,8 @@
 #include "content/browser/web_contents/web_contents_view.h"
 #include "content/common/content_export.h"
 #include "content/common/drag_event_source_info.h"
-#include "ui/base/cocoa/base_view.h"
+#import "ui/base/cocoa/accessibility_hostable.h"
+#import "ui/base/cocoa/base_view.h"
 #include "ui/gfx/geometry/size.h"
 
 @class WebDragDest;
@@ -35,8 +36,12 @@ namespace gfx {
 class Vector2d;
 }
 
+namespace ui {
+class Layer;
+}
+
 CONTENT_EXPORT
-@interface WebContentsViewCocoa : BaseView {
+@interface WebContentsViewCocoa : BaseView<AccessibilityHostable> {
  @private
   // Instances of this class are owned by both webContentsView_ and AppKit. It
   // is possible for an instance to outlive its webContentsView_. The
@@ -44,6 +49,7 @@ CONTENT_EXPORT
   content::WebContentsViewMac* webContentsView_;
   base::scoped_nsobject<WebDragSource> dragSource_;
   base::scoped_nsobject<WebDragDest> dragDest_;
+  base::scoped_nsobject<id> accessibilityParent_;
   BOOL mouseDownCanMoveWindow_;
 }
 
@@ -53,6 +59,7 @@ CONTENT_EXPORT
 // NSDraggingSource. It is supposedly deprecated, but the non-deprecated API
 // -[NSWindow dragImage:...] still relies on it.
 - (NSDragOperation)draggingSourceOperationMaskForLocal:(BOOL)isLocal;
+
 @end
 
 namespace content {
@@ -94,7 +101,9 @@ class WebContentsViewMac : public WebContentsView,
       RenderWidgetHost* render_widget_host) override;
   void SetPageTitle(const base::string16& title) override;
   void RenderViewCreated(RenderViewHost* host) override;
-  void RenderViewSwappedIn(RenderViewHost* host) override;
+  void RenderViewReady() override;
+  void RenderViewHostChanged(RenderViewHost* old_host,
+                             RenderViewHost* new_host) override;
   void SetOverscrollControllerEnabled(bool enabled) override;
   bool IsEventTracking() const override;
   void CloseTabAfterEventTracking() override;
@@ -128,6 +137,8 @@ class WebContentsViewMac : public WebContentsView,
   // CloseTabAfterEventTracking() implementation.
   void CloseTab();
 
+  void SetParentUiLayer(ui::Layer* parent_ui_layer);
+
   WebContentsImpl* web_contents() { return web_contents_; }
   WebContentsViewDelegate* delegate() { return delegate_.get(); }
 
@@ -155,6 +166,8 @@ class WebContentsViewMac : public WebContentsView,
 
   // Whether to allow other views.
   bool allow_other_views_;
+
+  ui::Layer* parent_ui_layer_ = nullptr;
 
   std::unique_ptr<PopupMenuHelper> popup_menu_helper_;
 

@@ -72,11 +72,11 @@ class RendererWindowTreeClient : public ui::mojom::WindowTreeClient,
   void SetVisible(bool visible);
 
   using LayerTreeFrameSinkCallback =
-      base::Callback<void(std::unique_ptr<cc::LayerTreeFrameSink>)>;
+      base::OnceCallback<void(std::unique_ptr<cc::LayerTreeFrameSink>)>;
   void RequestLayerTreeFrameSink(
       scoped_refptr<viz::ContextProvider> context_provider,
       gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager,
-      const LayerTreeFrameSinkCallback& callback);
+      LayerTreeFrameSinkCallback callback);
 
   // Creates a new MusEmbeddedFrame. |token| is an UnguessableToken that was
   // registered for an embedding with mus (specifically ui::mojom::WindowTree).
@@ -93,7 +93,7 @@ class RendererWindowTreeClient : public ui::mojom::WindowTreeClient,
   void RequestLayerTreeFrameSinkInternal(
       scoped_refptr<viz::ContextProvider> context_provider,
       gpu::GpuMemoryBufferManager* gpu_memory_buffer_manager,
-      const LayerTreeFrameSinkCallback& callback);
+      LayerTreeFrameSinkCallback callback);
 
   // Called from ~MusEmbeddedFrame to cleanup up internall mapping.
   void OnEmbeddedFrameDestroyed(MusEmbeddedFrame* frame);
@@ -183,9 +183,8 @@ class RendererWindowTreeClient : public ui::mojom::WindowTreeClient,
   void OnWindowCursorChanged(ui::Id window_id, ui::CursorData cursor) override;
   void OnWindowSurfaceChanged(ui::Id window_id,
                               const viz::SurfaceInfo& surface_info) override;
-  void OnDragDropStart(
-      const std::unordered_map<std::string, std::vector<uint8_t>>& mime_data)
-      override;
+  void OnDragDropStart(const base::flat_map<std::string, std::vector<uint8_t>>&
+                           mime_data) override;
   void OnDragEnter(ui::Id window_id,
                    uint32_t event_flags,
                    const gfx::Point& position,
@@ -211,6 +210,8 @@ class RendererWindowTreeClient : public ui::mojom::WindowTreeClient,
   void GetWindowManager(
       mojo::AssociatedInterfaceRequest<ui::mojom::WindowManager> internal)
       override;
+  void GetScreenProviderObserver(
+      ui::mojom::ScreenProviderObserverAssociatedRequest observer) override;
 
   const int routing_id_;
   ui::Id root_window_id_ = 0u;

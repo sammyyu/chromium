@@ -27,6 +27,24 @@ std::string GetTopVariableName(const std::string& fullname) {
 
 }  // namespace anonymous
 
+void CompileShaderWithLog(GLuint shader, const char* shader_source) {
+  glShaderSource(shader, 1, &shader_source, 0);
+  glCompileShader(shader);
+#if DCHECK_IS_ON()
+  GLint compile_status = GL_FALSE;
+  glGetShaderiv(shader, GL_COMPILE_STATUS, &compile_status);
+  if (GL_TRUE != compile_status) {
+    GLint info_log_length;
+    glGetShaderiv(shader, GL_INFO_LOG_LENGTH, &info_log_length);
+    std::vector<GLchar> info_log(info_log_length);
+    glGetShaderInfoLog(shader, info_log_length, NULL, &info_log[0]);
+    std::string log(&info_log[0], info_log_length - 1);
+    DLOG(ERROR) << "Error compiling shader: " << log;
+    DLOG(ERROR) << "Shader compilation failure.";
+  }
+#endif
+}
+
 Shader::Shader(GLuint service_id, GLenum shader_type)
       : use_count_(0),
         shader_state_(kShaderStateWaiting),
@@ -41,9 +59,7 @@ Shader::Shader(GLuint service_id, GLenum shader_type)
 Shader::~Shader() = default;
 
 void Shader::Destroy() {
-  if (service_id_) {
-    DeleteServiceID();
-  }
+  DeleteServiceID();
 }
 
 void Shader::RequestCompile(scoped_refptr<ShaderTranslatorInterface> translator,
@@ -146,32 +162,18 @@ void Shader::RefreshTranslatedShaderSource() {
   }
 }
 
-void Shader::IncUseCount() {
-  ++use_count_;
-}
-
-void Shader::DecUseCount() {
-  --use_count_;
-  DCHECK_GE(use_count_, 0);
-  if (service_id_ && use_count_ == 0 && marked_for_deletion_) {
-    DeleteServiceID();
-  }
-}
-
 void Shader::MarkForDeletion() {
   DCHECK(!marked_for_deletion_);
   DCHECK_NE(service_id_, 0u);
 
   marked_for_deletion_ = true;
-  if (use_count_ == 0) {
-    DeleteServiceID();
-  }
 }
 
 void Shader::DeleteServiceID() {
-  DCHECK_NE(service_id_, 0u);
-  glDeleteShader(service_id_);
-  service_id_ = 0;
+  if (service_id_) {
+    glDeleteShader(service_id_);
+    service_id_ = 0;
+  }
 }
 
 const sh::Attribute* Shader::GetAttribInfo(const std::string& name) const {
@@ -335,10 +337,11 @@ bool ShaderManager::IsOwned(Shader* shader) {
   return false;
 }
 
-void ShaderManager::RemoveShader(Shader* shader) {
+void ShaderManager::RemoveShaderIfUnused(Shader* shader) {
   DCHECK(shader);
   DCHECK(IsOwned(shader));
   if (shader->IsDeleted() && !shader->InUse()) {
+    shader->DeleteServiceID();
     for (ShaderMap::iterator it = shaders_.begin();
          it != shaders_.end(); ++it) {
       if (it->second.get() == shader) {
@@ -354,7 +357,7 @@ void ShaderManager::Delete(Shader* shader) {
   DCHECK(shader);
   DCHECK(IsOwned(shader));
   shader->MarkForDeletion();
-  RemoveShader(shader);
+  RemoveShaderIfUnused(shader);
 }
 
 void ShaderManager::UseShader(Shader* shader) {
@@ -367,7 +370,7 @@ void ShaderManager::UnuseShader(Shader* shader) {
   DCHECK(shader);
   DCHECK(IsOwned(shader));
   shader->DecUseCount();
-  RemoveShader(shader);
+  RemoveShaderIfUnused(shader);
 }
 
 }  // namespace gles2

@@ -82,6 +82,8 @@ void MediaCodecAudioDecoder::Initialize(
     sample_format_ = kSampleFormatAc3;
   else if (config.codec() == kCodecEAC3)
     sample_format_ = kSampleFormatEac3;
+  else if (config.codec() == kCodecMpegHAudio)
+    sample_format_ = kSampleFormatMpegHAudio;
 
   if (state_ == STATE_ERROR) {
     DVLOG(1) << "Decoder is in error state.";
@@ -153,7 +155,7 @@ bool MediaCodecAudioDecoder::CreateMediaCodecLoop() {
   return true;
 }
 
-void MediaCodecAudioDecoder::Decode(const scoped_refptr<DecoderBuffer>& buffer,
+void MediaCodecAudioDecoder::Decode(scoped_refptr<DecoderBuffer> buffer,
                                     const DecodeCB& decode_cb) {
   DecodeCB bound_decode_cb = BindToCurrentLoop(decode_cb);
 
@@ -176,7 +178,7 @@ void MediaCodecAudioDecoder::Decode(const scoped_refptr<DecoderBuffer>& buffer,
 
   DCHECK(codec_loop_);
 
-  DVLOG(2) << __func__ << " " << buffer->AsHumanReadableString();
+  DVLOG(3) << __func__ << " " << buffer->AsHumanReadableString();
 
   DCHECK_EQ(state_, STATE_READY) << " unexpected state " << AsString(state_);
 
@@ -184,13 +186,13 @@ void MediaCodecAudioDecoder::Decode(const scoped_refptr<DecoderBuffer>& buffer,
   // time".
   DCHECK(input_queue_.empty());
 
-  input_queue_.push_back(std::make_pair(buffer, bound_decode_cb));
+  input_queue_.push_back(std::make_pair(std::move(buffer), bound_decode_cb));
 
-  codec_loop_->DoPendingWork();
+  codec_loop_->ExpectWork();
 }
 
 void MediaCodecAudioDecoder::Reset(const base::Closure& closure) {
-  DVLOG(1) << __func__;
+  DVLOG(2) << __func__;
 
   ClearInputQueue(DecodeStatus::ABORTED);
 
@@ -285,9 +287,9 @@ bool MediaCodecAudioDecoder::IsAnyInputPending() const {
 }
 
 MediaCodecLoop::InputData MediaCodecAudioDecoder::ProvideInputData() {
-  DVLOG(2) << __func__;
+  DVLOG(3) << __func__;
 
-  scoped_refptr<DecoderBuffer> decoder_buffer = input_queue_.front().first;
+  const DecoderBuffer* decoder_buffer = input_queue_.front().first.get();
 
   MediaCodecLoop::InputData input_data;
   if (decoder_buffer->end_of_stream()) {
@@ -296,7 +298,9 @@ MediaCodecLoop::InputData MediaCodecAudioDecoder::ProvideInputData() {
     input_data.memory = static_cast<const uint8_t*>(decoder_buffer->data());
     input_data.length = decoder_buffer->data_size();
     const DecryptConfig* decrypt_config = decoder_buffer->decrypt_config();
-    if (decrypt_config && decrypt_config->is_encrypted()) {
+    if (decrypt_config) {
+      // TODO(crbug.com/813845): Use encryption scheme settings from
+      // DecryptConfig.
       input_data.key_id = decrypt_config->key_id();
       input_data.iv = decrypt_config->iv();
       input_data.subsamples = decrypt_config->subsamples();
@@ -334,7 +338,7 @@ void MediaCodecAudioDecoder::ClearInputQueue(DecodeStatus decode_status) {
 }
 
 void MediaCodecAudioDecoder::SetState(State new_state) {
-  DVLOG(1) << __func__ << ": " << AsString(state_) << "->"
+  DVLOG(3) << __func__ << ": " << AsString(state_) << "->"
            << AsString(new_state);
   state_ = new_state;
 }
@@ -372,7 +376,7 @@ bool MediaCodecAudioDecoder::OnDecodedEos(
 
 bool MediaCodecAudioDecoder::OnDecodedFrame(
     const MediaCodecLoop::OutputBuffer& out) {
-  DVLOG(2) << __func__ << " pts:" << out.pts;
+  DVLOG(3) << __func__ << " pts:" << out.pts;
 
   DCHECK_NE(out.size, 0U);
   DCHECK_NE(out.index, MediaCodecLoop::kInvalidBufferIndex);

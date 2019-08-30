@@ -16,6 +16,9 @@ title: test1
 	WorkerGlobalScopes
 	UACSSResources
 	RTCPeerConnections
+	ResourceFetchers
+	AdSubframes
+	DetachedScriptStates
 	LayoutCount
 	RecalcStyleCount
 	LayoutDuration
@@ -44,6 +47,9 @@ title: test1
 	WorkerGlobalScopes
 	UACSSResources
 	RTCPeerConnections
+	ResourceFetchers
+	AdSubframes
+	DetachedScriptStates
 	LayoutCount
 	RecalcStyleCount
 	LayoutDuration
@@ -72,6 +78,9 @@ title:
 	WorkerGlobalScopes
 	UACSSResources
 	RTCPeerConnections
+	ResourceFetchers
+	AdSubframes
+	DetachedScriptStates
 	LayoutCount
 	RecalcStyleCount
 	LayoutDuration

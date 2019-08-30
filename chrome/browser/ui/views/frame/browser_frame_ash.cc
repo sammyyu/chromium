@@ -7,14 +7,15 @@
 #include <memory>
 
 // This file is only instantiated in classic ash/mus. It is never used in mash.
-// See native_browser_frame_factory_chromeos.cc switches on GetAshConfig().
-#include "ash/public/cpp/window_properties.h"  // mash-ok
-#include "ash/public/cpp/window_state_type.h"  // mash-ok
-#include "ash/shell.h"                         // mash-ok
-#include "ash/wm/window_properties.h"          // mash-ok
-#include "ash/wm/window_state.h"               // mash-ok
-#include "ash/wm/window_state_delegate.h"      // mash-ok
-#include "ash/wm/window_util.h"                // mash-ok
+// See native_browser_frame_factory_chromeos.cc switches on
+// features::IsAshInBrowserProcess().
+#include "ash/public/cpp/window_properties.h"
+#include "ash/public/cpp/window_state_type.h"
+#include "ash/shell.h"                     // mash-ok
+#include "ash/wm/window_properties.h"      // mash-ok
+#include "ash/wm/window_state.h"           // mash-ok
+#include "ash/wm/window_state_delegate.h"  // mash-ok
+#include "ash/wm/window_util.h"            // mash-ok
 #include "base/macros.h"
 #include "build/build_config.h"
 #include "chrome/browser/ui/browser_commands.h"
@@ -23,6 +24,7 @@
 #include "ui/aura/client/aura_constants.h"
 #include "ui/aura/window.h"
 #include "ui/aura/window_observer.h"
+#include "ui/base/ui_base_features.h"
 #include "ui/views/view.h"
 
 namespace {
@@ -61,6 +63,7 @@ BrowserFrameAsh::BrowserFrameAsh(BrowserFrame* browser_frame,
                                  BrowserView* browser_view)
     : views::NativeWidgetAura(browser_frame),
       browser_view_(browser_view) {
+  DCHECK(features::IsAshInBrowserProcess());
   GetNativeWindow()->SetName("BrowserFrameAsh");
   Browser* browser = browser_view->browser();
   ash::wm::WindowState* window_state =
@@ -125,9 +128,9 @@ void BrowserFrameAsh::GetWindowPlacement(
   }
 }
 
-bool BrowserFrameAsh::PreHandleKeyboardEvent(
+content::KeyboardEventProcessingResult BrowserFrameAsh::PreHandleKeyboardEvent(
     const content::NativeWebKeyboardEvent& event) {
-  return false;
+  return content::KeyboardEventProcessingResult::NOT_HANDLED;
 }
 
 bool BrowserFrameAsh::HandleKeyboardEvent(

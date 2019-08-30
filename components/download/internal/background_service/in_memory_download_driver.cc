@@ -5,6 +5,7 @@
 #include "components/download/internal/background_service/in_memory_download_driver.h"
 
 #include "components/download/internal/background_service/in_memory_download.h"
+#include "services/network/public/cpp/resource_request_body.h"
 
 namespace download {
 
@@ -34,6 +35,7 @@ DriverEntry CreateDriverEntry(const InMemoryDownload& download) {
   entry.done = entry.state == DriverEntry::State::COMPLETE ||
                entry.state == DriverEntry::State::CANCELLED;
   entry.bytes_downloaded = download.bytes_downloaded();
+  entry.url_chain = download.url_chain();
   entry.response_headers = download.response_headers();
   if (entry.response_headers) {
     entry.expected_total_size = entry.response_headers->GetContentLength();
@@ -97,6 +99,7 @@ void InMemoryDownloadDriver::Start(
     const RequestParams& request_params,
     const std::string& guid,
     const base::FilePath& file_path,
+    scoped_refptr<network::ResourceRequestBody> post_body,
     const net::NetworkTrafficAnnotationTag& traffic_annotation) {
   std::unique_ptr<InMemoryDownload> download =
       download_factory_->Create(guid, request_params, traffic_annotation, this);
@@ -129,7 +132,7 @@ base::Optional<DriverEntry> InMemoryDownloadDriver::Find(
   base::Optional<DriverEntry> entry;
   auto it = downloads_.find(guid);
   if (it != downloads_.end())
-    entry = CreateDriverEntry(*it->second.get());
+    entry = CreateDriverEntry(*it->second);
   return entry;
 }
 

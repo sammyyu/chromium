@@ -22,6 +22,7 @@
 #include "base/test/test_message_loop.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
+#include "base/unguessable_token.h"
 #include "media/audio/audio_device_description.h"
 #include "media/audio/audio_source_diverter.h"
 #include "media/audio/test_audio_thread.h"
@@ -45,7 +46,6 @@ using ::testing::Mock;
 namespace media {
 
 static const int kSampleRate = AudioParameters::kAudioCDSampleRate;
-static const int kBitsPerSample = 16;
 static const ChannelLayout kChannelLayout = CHANNEL_LAYOUT_STEREO;
 static const int kSamplesPerPacket = kSampleRate / 1000;
 static const double kTestVolume = 0.25;
@@ -53,7 +53,7 @@ static const float kBufferNonZeroData = 1.0f;
 
 AudioParameters AOCTestParams() {
   return AudioParameters(AudioParameters::AUDIO_FAKE, kChannelLayout,
-                         kSampleRate, kBitsPerSample, kSamplesPerPacket);
+                         kSampleRate, kSamplesPerPacket);
 }
 
 class MockAudioOutputControllerEventHandler
@@ -65,7 +65,7 @@ class MockAudioOutputControllerEventHandler
   MOCK_METHOD0(OnControllerPlaying, void());
   MOCK_METHOD0(OnControllerPaused, void());
   MOCK_METHOD0(OnControllerError, void());
-  void OnLog(base::StringPiece) {}
+  void OnLog(base::StringPiece) override {}
 
  private:
   DISALLOW_COPY_AND_ASSIGN(MockAudioOutputControllerEventHandler);
@@ -194,7 +194,7 @@ class AudioOutputControllerTest : public TestWithParam<bool> {
 
     controller_ = AudioOutputController::Create(
         audio_manager_.get(), &mock_event_handler_, AOCTestParams(),
-        std::string(), &mock_sync_reader_);
+        std::string(), base::UnguessableToken(), &mock_sync_reader_);
     EXPECT_NE(nullptr, controller_.get());
     controller_->SetVolume(kTestVolume);
   }

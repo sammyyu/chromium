@@ -28,16 +28,15 @@ class ProfileNotification;
 namespace message_center {
 class Notification;
 class NotificationBlocker;
-FORWARD_DECLARE_TEST(WebNotificationTrayTest, ManuallyCloseMessageCenter);
+FORWARD_DECLARE_TEST(NotificationTrayTest, ManuallyCloseMessageCenter);
 }
 
-#if !defined(OS_CHROMEOS)
 // Implementations are platform specific.
 message_center::UiDelegate* CreateUiDelegate();
-#endif
 
 // This class extends NotificationUIManagerImpl and delegates actual display
-// of notifications to MessageCenter, doing necessary conversions.
+// of notifications to MessageCenter, doing necessary conversions. This is only
+// used on platforms that support non-native notifications.
 class MessageCenterNotificationManager
     : public NotificationUIManager,
       public message_center::MessageCenterObserver {
@@ -74,7 +73,7 @@ class MessageCenterNotificationManager
       const std::string& delegate_id, Profile* profile);
 
  private:
-  FRIEND_TEST_ALL_PREFIXES(message_center::WebNotificationTrayTest,
+  FRIEND_TEST_ALL_PREFIXES(message_center::NotificationTrayTest,
                            ManuallyCloseMessageCenter);
 
   std::unique_ptr<message_center::UiDelegate> tray_;

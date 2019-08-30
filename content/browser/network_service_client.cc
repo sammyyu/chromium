@@ -5,17 +5,24 @@
 #include "content/browser/network_service_client.h"
 
 #include "base/optional.h"
+#include "base/task_scheduler/post_task.h"
+#include "content/browser/devtools/devtools_url_loader_interceptor.h"
+#include "content/browser/loader/resource_dispatcher_host_impl.h"
 #include "content/browser/ssl/ssl_client_auth_handler.h"
 #include "content/browser/ssl/ssl_error_handler.h"
 #include "content/browser/ssl/ssl_manager.h"
 #include "content/browser/ssl_private_key_impl.h"
 #include "content/browser/web_contents/web_contents_impl.h"
 #include "content/public/browser/browser_context.h"
+#include "content/public/browser/browser_thread.h"
+#include "content/public/browser/child_process_security_policy.h"
+#include "content/public/browser/global_request_id.h"
 #include "content/public/browser/login_delegate.h"
-#include "content/public/browser/render_frame_host.h"
 #include "content/public/browser/resource_request_info.h"
+#include "content/public/common/resource_type.h"
 #include "mojo/public/cpp/bindings/strong_binding.h"
 #include "net/ssl/client_cert_store.h"
+#include "services/network/public/mojom/network_context.mojom.h"
 
 namespace content {
 namespace {
@@ -132,9 +139,9 @@ class SSLClientAuthDelegate : public SSLClientAuthHandler::Delegate {
       ResourceRequestInfo::WebContentsGetter web_contents_getter) {
     std::unique_ptr<net::ClientCertStore> client_cert_store =
         GetContentClient()->browser()->CreateClientCertStore(resource_context);
-    ssl_client_auth_handler_.reset(
-        new SSLClientAuthHandler(std::move(client_cert_store),
-                                 web_contents_getter, cert_info_.get(), this));
+    ssl_client_auth_handler_.reset(new SSLClientAuthHandler(
+        std::move(client_cert_store), std::move(web_contents_getter),
+        cert_info_.get(), this));
     ssl_client_auth_handler_->SelectCertificate();
   }
 
@@ -155,60 +162,147 @@ class SSLClientAuthDelegate : public SSLClientAuthHandler::Delegate {
 class LoginHandlerDelegate {
  public:
   LoginHandlerDelegate(
-      network::mojom::NetworkServiceClient::OnAuthRequiredCallback callback,
+      network::mojom::AuthChallengeResponderPtr auth_challenge_responder,
       ResourceRequestInfo::WebContentsGetter web_contents_getter,
       scoped_refptr<net::AuthChallengeInfo> auth_info,
-      bool is_main_frame,
+      bool is_request_for_main_frame,
+      uint32_t process_id,
+      uint32_t routing_id,
+      uint32_t request_id,
       const GURL& url,
+      scoped_refptr<net::HttpResponseHeaders> response_headers,
       bool first_auth_attempt)
-      : callback_(std::move(callback)),
+      : auth_challenge_responder_(std::move(auth_challenge_responder)),
         auth_info_(auth_info),
-        is_main_frame_(is_main_frame),
+        request_id_(process_id, request_id),
+        is_request_for_main_frame_(is_request_for_main_frame),
         url_(url),
+        response_headers_(std::move(response_headers)),
         first_auth_attempt_(first_auth_attempt),
         web_contents_getter_(web_contents_getter) {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    auth_challenge_responder_.set_connection_error_handler(base::BindOnce(
+        &LoginHandlerDelegate::OnRequestCancelled, base::Unretained(this)));
+
     BrowserThread::PostTask(
         BrowserThread::IO, FROM_HERE,
-        base::Bind(&LoginHandlerDelegate::CreateLoginDelegate,
-                   base::Unretained(this)));
+        base::BindOnce(&LoginHandlerDelegate::DispatchInterceptorHookAndStart,
+                       base::Unretained(this), process_id, routing_id,
+                       request_id));
+  }
+
+  void OnRequestCancelled() {
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    if (!login_delegate_)
+      return;
+
+    // LoginDelegate::OnRequestCancelled can only be called from the IO thread.
+    BrowserThread::PostTask(
+        BrowserThread::IO, FROM_HERE,
+        base::BindOnce(&LoginHandlerDelegate::OnRequestCancelledOnIOThread,
+                       base::Unretained(this)));
+  }
+
+  void OnRequestCancelledOnIOThread() {
+    DCHECK_CURRENTLY_ON(BrowserThread::IO);
+    login_delegate_->OnRequestCancelled();
   }
 
  private:
+  void DispatchInterceptorHookAndStart(uint32_t process_id,
+                                       uint32_t routing_id,
+                                       uint32_t request_id) {
+    DCHECK_CURRENTLY_ON(BrowserThread::IO);
+    DevToolsURLLoaderInterceptor::HandleAuthRequest(
+        process_id, routing_id, request_id, auth_info_,
+        base::BindOnce(&LoginHandlerDelegate::ContinueAfterInterceptor,
+                       base::Unretained(this)));
+  }
+
+  void ContinueAfterInterceptor(
+      bool use_fallback,
+      const base::Optional<net::AuthCredentials>& auth_credentials) {
+    DCHECK_CURRENTLY_ON(BrowserThread::IO);
+    DCHECK(!(use_fallback && auth_credentials.has_value()));
+    if (use_fallback)
+      CreateLoginDelegate();
+    else
+      RunAuthCredentials(auth_credentials);
+  }
+
   void CreateLoginDelegate() {
+    DCHECK_CURRENTLY_ON(BrowserThread::IO);
     login_delegate_ = GetContentClient()->browser()->CreateLoginDelegate(
-        auth_info_.get(), web_contents_getter_, is_main_frame_, url_,
+        auth_info_.get(), web_contents_getter_, request_id_,
+        is_request_for_main_frame_, url_, response_headers_,
         first_auth_attempt_,
-        base::Bind(&LoginHandlerDelegate::RunAuthRequiredCallback,
-                   base::Unretained(this)));
+        base::BindOnce(&LoginHandlerDelegate::RunAuthCredentials,
+                       base::Unretained(this)));
 
     if (!login_delegate_) {
-      RunAuthRequiredCallback(base::nullopt);
+      RunAuthCredentials(base::nullopt);
       return;
     }
   }
 
-  void RunAuthRequiredCallback(
+  void RunAuthCredentials(
       const base::Optional<net::AuthCredentials>& auth_credentials) {
+    DCHECK_CURRENTLY_ON(BrowserThread::IO);
     BrowserThread::PostTask(
         BrowserThread::UI, FROM_HERE,
-        base::Bind(&LoginHandlerDelegate::RunCallbackOnUI,
-                   base::Unretained(this), auth_credentials));
+        base::BindOnce(&LoginHandlerDelegate::RunAuthCredentialsOnUI,
+                       base::Unretained(this), auth_credentials));
   }
 
-  void RunCallbackOnUI(
+  void RunAuthCredentialsOnUI(
       const base::Optional<net::AuthCredentials>& auth_credentials) {
-    std::move(callback_).Run(auth_credentials);
-    BrowserThread::DeleteSoon(BrowserThread::IO, FROM_HERE, this);
+    DCHECK_CURRENTLY_ON(BrowserThread::UI);
+    auth_challenge_responder_->OnAuthCredentials(auth_credentials);
+    delete this;
   }
 
-  network::mojom::NetworkServiceClient::OnAuthRequiredCallback callback_;
+  network::mojom::AuthChallengeResponderPtr auth_challenge_responder_;
   scoped_refptr<net::AuthChallengeInfo> auth_info_;
-  bool is_main_frame_;
+  const content::GlobalRequestID request_id_;
+  bool is_request_for_main_frame_;
   GURL url_;
+  const scoped_refptr<net::HttpResponseHeaders> response_headers_;
   bool first_auth_attempt_;
   ResourceRequestInfo::WebContentsGetter web_contents_getter_;
   scoped_refptr<LoginDelegate> login_delegate_;
 };
+
+void HandleFileUploadRequest(
+    uint32_t process_id,
+    bool async,
+    const std::vector<base::FilePath>& file_paths,
+    NetworkServiceClient::OnFileUploadRequestedCallback callback,
+    scoped_refptr<base::TaskRunner> task_runner) {
+  std::vector<base::File> files;
+  uint32_t file_flags = base::File::FLAG_OPEN | base::File::FLAG_READ |
+                        (async ? base::File::FLAG_ASYNC : 0);
+  ChildProcessSecurityPolicy* cpsp = ChildProcessSecurityPolicy::GetInstance();
+  for (const auto& file_path : file_paths) {
+    if (process_id != network::mojom::kBrowserProcessId &&
+        !cpsp->CanReadFile(process_id, file_path)) {
+      task_runner->PostTask(
+          FROM_HERE, base::BindOnce(std::move(callback), net::ERR_ACCESS_DENIED,
+                                    std::vector<base::File>()));
+      return;
+    }
+    files.emplace_back(file_path, file_flags);
+    if (!files.back().IsValid()) {
+      task_runner->PostTask(
+          FROM_HERE,
+          base::BindOnce(std::move(callback),
+                         net::FileErrorToNetError(files.back().error_details()),
+                         std::vector<base::File>()));
+      return;
+    }
+  }
+  task_runner->PostTask(FROM_HERE, base::BindOnce(std::move(callback), net::OK,
+                                                  std::move(files)));
+}
 
 }  // namespace
 
@@ -221,33 +315,44 @@ NetworkServiceClient::~NetworkServiceClient() = default;
 void NetworkServiceClient::OnAuthRequired(
     uint32_t process_id,
     uint32_t routing_id,
+    uint32_t request_id,
     const GURL& url,
+    const GURL& site_for_cookies,
     bool first_auth_attempt,
     const scoped_refptr<net::AuthChallengeInfo>& auth_info,
-    network::mojom::NetworkServiceClient::OnAuthRequiredCallback callback) {
+    int32_t resource_type,
+    const base::Optional<network::ResourceResponseHead>& head,
+    network::mojom::AuthChallengeResponderPtr auth_challenge_responder) {
   base::Callback<WebContents*(void)> web_contents_getter =
       process_id ? base::Bind(WebContentsImpl::FromRenderFrameHostID,
                               process_id, routing_id)
                  : base::Bind(WebContents::FromFrameTreeNodeId, routing_id);
 
   if (!web_contents_getter.Run()) {
-    std::move(callback).Run(net::AuthCredentials());
+    std::move(auth_challenge_responder)
+        ->OnAuthCredentials(net::AuthCredentials());
     return;
   }
 
-  RenderFrameHost* rfh =
-      process_id
-          ? RenderFrameHost::FromID(process_id, routing_id)
-          : FrameTreeNode::GloballyFindByID(routing_id)->current_frame_host();
-  bool is_main_frame = !rfh->GetParent();
-  new LoginHandlerDelegate(std::move(callback), web_contents_getter, auth_info,
-                           is_main_frame, url,
+  if (ResourceDispatcherHostImpl::Get()->DoNotPromptForLogin(
+          static_cast<ResourceType>(resource_type), url, site_for_cookies)) {
+    std::move(auth_challenge_responder)->OnAuthCredentials(base::nullopt);
+    return;
+  }
+
+  bool is_request_for_main_frame =
+      static_cast<ResourceType>(resource_type) == RESOURCE_TYPE_MAIN_FRAME;
+  new LoginHandlerDelegate(std::move(auth_challenge_responder),
+                           std::move(web_contents_getter), auth_info,
+                           is_request_for_main_frame, process_id, routing_id,
+                           request_id, url, head ? head->headers : nullptr,
                            first_auth_attempt);  // deletes self
 }
 
 void NetworkServiceClient::OnCertificateRequested(
     uint32_t process_id,
     uint32_t routing_id,
+    uint32_t request_id,
     const scoped_refptr<net::SSLCertRequestInfo>& cert_info,
     network::mojom::NetworkServiceClient::OnCertificateRequestedCallback
         callback) {
@@ -263,13 +368,14 @@ void NetworkServiceClient::OnCertificateRequested(
                             true /* cancel_certificate_selection */);
     return;
   }
-  new SSLClientAuthDelegate(std::move(callback), web_contents_getter,
+  new SSLClientAuthDelegate(std::move(callback), std::move(web_contents_getter),
                             cert_info);  // deletes self
 }
 
 void NetworkServiceClient::OnSSLCertificateError(
     uint32_t process_id,
     uint32_t routing_id,
+    uint32_t request_id,
     int32_t resource_type,
     const GURL& url,
     const net::SSLInfo& ssl_info,
@@ -281,9 +387,42 @@ void NetworkServiceClient::OnSSLCertificateError(
       process_id ? base::Bind(WebContentsImpl::FromRenderFrameHostID,
                               process_id, routing_id)
                  : base::Bind(WebContents::FromFrameTreeNodeId, routing_id);
-  SSLManager::OnSSLCertificateError(delegate->GetWeakPtr(),
-                                    static_cast<ResourceType>(resource_type),
-                                    url, web_contents_getter, ssl_info, fatal);
+  SSLManager::OnSSLCertificateError(
+      delegate->GetWeakPtr(), static_cast<ResourceType>(resource_type), url,
+      std::move(web_contents_getter), ssl_info, fatal);
+}
+
+void NetworkServiceClient::OnFileUploadRequested(
+    uint32_t process_id,
+    bool async,
+    const std::vector<base::FilePath>& file_paths,
+    OnFileUploadRequestedCallback callback) {
+  base::PostTaskWithTraits(
+      FROM_HERE, {base::MayBlock(), base::TaskPriority::USER_BLOCKING},
+      base::BindOnce(&HandleFileUploadRequest, process_id, async, file_paths,
+                     std::move(callback),
+                     base::SequencedTaskRunnerHandle::Get()));
+}
+
+void NetworkServiceClient::OnCookiesRead(int process_id,
+                                         int routing_id,
+                                         const GURL& url,
+                                         const GURL& first_party_url,
+                                         const net::CookieList& cookie_list,
+                                         bool blocked_by_policy) {
+  GetContentClient()->browser()->OnCookiesRead(process_id, routing_id, url,
+                                               first_party_url, cookie_list,
+                                               blocked_by_policy);
+}
+
+void NetworkServiceClient::OnCookieChange(int process_id,
+                                          int routing_id,
+                                          const GURL& url,
+                                          const GURL& first_party_url,
+                                          const net::CanonicalCookie& cookie,
+                                          bool blocked_by_policy) {
+  GetContentClient()->browser()->OnCookieChange(
+      process_id, routing_id, url, first_party_url, cookie, blocked_by_policy);
 }
 
 }  // namespace content

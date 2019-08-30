@@ -44,7 +44,6 @@ import org.chromium.base.Callback;
 import org.chromium.base.test.BaseRobolectricTestRunner;
 import org.chromium.base.test.util.Feature;
 import org.chromium.chrome.browser.ChromeFeatureList;
-import org.chromium.chrome.browser.DisableHistogramsRule;
 import org.chromium.chrome.browser.ntp.snippets.CategoryInt;
 import org.chromium.chrome.browser.ntp.snippets.CategoryStatus;
 import org.chromium.chrome.browser.ntp.snippets.KnownCategories;
@@ -57,6 +56,7 @@ import org.chromium.chrome.browser.suggestions.DestructionObserver;
 import org.chromium.chrome.browser.suggestions.SuggestionsEventReporter;
 import org.chromium.chrome.browser.suggestions.SuggestionsRanker;
 import org.chromium.chrome.browser.suggestions.SuggestionsUiDelegate;
+import org.chromium.chrome.test.support.DisableHistogramsRule;
 import org.chromium.chrome.test.util.browser.Features;
 import org.chromium.chrome.test.util.browser.Features.DisableFeatures;
 import org.chromium.chrome.test.util.browser.Features.EnableFeatures;
@@ -322,7 +322,7 @@ public class SectionListTest {
         assertTrue(sectionList.isEmpty());
         // Verify that the section has been detached by notifying its parent about changes. If not
         // detached, it should crash.
-        section.notifyItemRangeChanged(0, 1);
+        section.notifyItemRangeChanged(0, 1, null);
     }
 
     @Test
@@ -389,6 +389,27 @@ public class SectionListTest {
         sectionList.refreshSuggestions();
         SuggestionsSection section = sectionList.getSection(KnownCategories.ARTICLES);
         assertNull(section);
+    }
+
+    @Test
+    @Feature({"Ntp"})
+    @EnableFeatures(ChromeFeatureList.NTP_ARTICLE_SUGGESTIONS_EXPANDABLE_HEADER)
+    public void testArticlesHeaderExpandableWithOtherSections() {
+        registerCategory(mSuggestionSource, KnownCategories.ARTICLES, 1);
+        registerCategory(mSuggestionSource, CATEGORY1, 1);
+
+        SectionList sectionList = new SectionList(mUiDelegate, mOfflinePageBridge);
+        sectionList.refreshSuggestions();
+
+        // Check article header is expandable.
+        SuggestionsSection articles = sectionList.getSection(KnownCategories.ARTICLES);
+        assertTrue(articles.getHeaderItemForTesting().isVisible());
+        assertTrue(articles.getHeaderItemForTesting().isExpandable());
+
+        // Check header of other section is not expandable.
+        SuggestionsSection otherSection = sectionList.getSection(CATEGORY1);
+        assertTrue(otherSection.getHeaderItemForTesting().isVisible());
+        assertFalse(otherSection.getHeaderItemForTesting().isExpandable());
     }
 
     @Test

@@ -9,6 +9,10 @@
 #include "base/threading/thread_checker.h"
 #include "ui/aura/aura_export.h"
 
+namespace ui {
+enum class DomCode;
+}
+
 namespace aura {
 
 class WindowTreeHost;
@@ -20,7 +24,13 @@ class WindowTreeHost;
 class AURA_EXPORT ScopedKeyboardHook {
  public:
   explicit ScopedKeyboardHook(base::WeakPtr<WindowTreeHost> weak_ptr);
-  ~ScopedKeyboardHook();
+  virtual ~ScopedKeyboardHook();
+
+  // True if |dom_code| is reserved for an active KeyboardLock request.
+  virtual bool IsKeyLocked(ui::DomCode dom_code);
+
+ protected:
+  ScopedKeyboardHook();
 
  private:
   THREAD_CHECKER(thread_checker_);

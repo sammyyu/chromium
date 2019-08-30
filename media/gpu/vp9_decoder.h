@@ -96,7 +96,10 @@ class MEDIA_GPU_EXPORT VP9Decoder : public AcceleratedVideoDecoder {
   ~VP9Decoder() override;
 
   // AcceleratedVideoDecoder implementation.
-  void SetStream(const uint8_t* ptr, size_t size) override;
+  void SetStream(int32_t id,
+                 const uint8_t* ptr,
+                 size_t size,
+                 const DecryptConfig* decrypt_config = nullptr) override;
   bool Flush() override WARN_UNUSED_RESULT;
   void Reset() override;
   DecodeResult Decode() override WARN_UNUSED_RESULT;
@@ -131,6 +134,9 @@ class MEDIA_GPU_EXPORT VP9Decoder : public AcceleratedVideoDecoder {
   // Current decoder state.
   State state_;
 
+  // Current stream buffer id; to be assigned to pictures decoded from it.
+  int32_t stream_id_ = -1;
+
   // Current frame header to be used in decoding the next picture.
   std::unique_ptr<Vp9FrameHeader> curr_frame_hdr_;
 
@@ -139,6 +145,8 @@ class MEDIA_GPU_EXPORT VP9Decoder : public AcceleratedVideoDecoder {
 
   // Current coded resolution.
   gfx::Size pic_size_;
+
+  size_t size_change_failure_counter_ = 0;
 
   const std::unique_ptr<VP9Accelerator> accelerator_;
 

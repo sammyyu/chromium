@@ -14,8 +14,8 @@
 #include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
-#include "mojo/common/data_pipe_utils.h"
 #include "mojo/public/cpp/system/data_pipe.h"
+#include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "net/base/completion_once_callback.h"
 #include "net/base/io_buffer.h"
 #include "net/base/test_completion_callback.h"
@@ -81,7 +81,7 @@ TEST_F(ChunkedDataPipeUploadDataStreamTest, ReadBeforeDataReady) {
           int result = chunked_upload_stream_->Read(
               io_buffer.get(), io_buffer->size(), callback.callback());
           if (read_data.size() == 0)
-            mojo::common::BlockingCopyFromString(kData, write_pipe_);
+            mojo::BlockingCopyFromString(kData, write_pipe_);
           result = callback.GetResult(result);
           ASSERT_LT(0, result);
           EXPECT_LE(result, consumer_read_size);
@@ -115,7 +115,7 @@ TEST_F(ChunkedDataPipeUploadDataStreamTest, ReadAfterDataReady) {
       CreateAndInitChunkedUploadStream();
 
       for (int i = 0; i < num_writes; ++i) {
-        mojo::common::BlockingCopyFromString(kData, write_pipe_);
+        mojo::BlockingCopyFromString(kData, write_pipe_);
         base::RunLoop().RunUntilIdle();
 
         std::string read_data;
@@ -169,7 +169,7 @@ TEST_F(ChunkedDataPipeUploadDataStreamTest, MultipleReadThrough) {
       write_pipe_ = chunked_data_pipe_getter_->WaitForStartReading();
     }
 
-    mojo::common::BlockingCopyFromString(kData, write_pipe_);
+    mojo::BlockingCopyFromString(kData, write_pipe_);
 
     std::string read_data;
     while (read_data.size() < kData.size()) {
@@ -226,8 +226,8 @@ TEST_F(ChunkedDataPipeUploadDataStreamTest,
       write_pipe_ = chunked_data_pipe_getter_->WaitForStartReading();
     }
 
-    mojo::common::BlockingCopyFromString(kData.substr(0, num_bytes_to_read),
-                                         write_pipe_);
+    mojo::BlockingCopyFromString(kData.substr(0, num_bytes_to_read),
+                                 write_pipe_);
 
     std::string read_data;
     while (read_data.size() < num_bytes_to_read) {
@@ -280,8 +280,8 @@ TEST_F(ChunkedDataPipeUploadDataStreamTest,
       write_pipe_ = chunked_data_pipe_getter_->WaitForStartReading();
     }
 
-    mojo::common::BlockingCopyFromString(kData.substr(0, num_bytes_to_read),
-                                         write_pipe_);
+    mojo::BlockingCopyFromString(kData.substr(0, num_bytes_to_read),
+                                 write_pipe_);
 
     std::string read_data;
     while (read_data.size() < num_bytes_to_read) {
@@ -310,6 +310,151 @@ TEST_F(ChunkedDataPipeUploadDataStreamTest,
       chunked_upload_stream_->Read(io_buffer.get(), 1, callback.callback());
   EXPECT_EQ(net::OK, callback.GetResult(result));
   EXPECT_TRUE(chunked_upload_stream_->IsEOF());
+}
+
+// Test where GetSize() is invoked before the upload is initialized.
+TEST_F(ChunkedDataPipeUploadDataStreamTest, GetSizeSucceedsBeforeInit) {
+  const std::string kData = "1234567890";
+
+  chunked_data_pipe_getter_ = std::make_unique<TestChunkedDataPipeGetter>();
+  chunked_upload_stream_ = std::make_unique<ChunkedDataPipeUploadDataStream>(
+      base::MakeRefCounted<network::ResourceRequestBody>(),
+      chunked_data_pipe_getter_->GetDataPipeGetterPtr());
+  get_size_callback_ = chunked_data_pipe_getter_->WaitForGetSize();
+  std::move(get_size_callback_).Run(net::OK, kData.size());
+  // Wait for the ChunkedUploadStream to receive the size.
+  base::RunLoop().RunUntilIdle();
+
+  net::TestCompletionCallback callback;
+  ASSERT_EQ(net::OK, chunked_upload_stream_->Init(callback.callback(),
+                                                  net::NetLogWithSource()));
+  write_pipe_ = chunked_data_pipe_getter_->WaitForStartReading();
+
+  EXPECT_TRUE(chunked_upload_stream_->is_chunked());
+  EXPECT_FALSE(chunked_upload_stream_->IsEOF());
+
+  mojo::BlockingCopyFromString(kData, write_pipe_);
+
+  std::string read_data;
+  while (read_data.size() < kData.size()) {
+    net::TestCompletionCallback callback;
+    int read_size = kData.size() - read_data.size();
+    scoped_refptr<net::IOBufferWithSize> io_buffer(
+        new net::IOBufferWithSize(read_size));
+    int result = chunked_upload_stream_->Read(
+        io_buffer.get(), io_buffer->size(), callback.callback());
+    result = callback.GetResult(result);
+    ASSERT_LT(0, result);
+    EXPECT_LE(result, read_size);
+    read_data.append(std::string(io_buffer->data(), result));
+    EXPECT_EQ(read_data.size() == kData.size(),
+              chunked_upload_stream_->IsEOF());
+  }
+}
+
+// Test where GetSize() is only invoked after the upload is reset.
+TEST_F(ChunkedDataPipeUploadDataStreamTest, GetSizeSucceedsAfterReset) {
+  const std::string kData = "1234567890";
+
+  // Read through the body once, without a size
+  std::string read_data;
+  mojo::BlockingCopyFromString(kData, write_pipe_);
+  while (read_data.size() < kData.size()) {
+    net::TestCompletionCallback callback;
+    int read_size = kData.size() - read_data.size();
+    scoped_refptr<net::IOBufferWithSize> io_buffer(
+        new net::IOBufferWithSize(read_size));
+    int result = chunked_upload_stream_->Read(
+        io_buffer.get(), io_buffer->size(), callback.callback());
+    result = callback.GetResult(result);
+    ASSERT_LT(0, result);
+    EXPECT_LE(result, read_size);
+    read_data.append(std::string(io_buffer->data(), result));
+    EXPECT_FALSE(chunked_upload_stream_->IsEOF());
+  }
+
+  // Reset, get the size, and read through the body again.
+  chunked_upload_stream_->Reset();
+
+  std::move(get_size_callback_).Run(net::OK, kData.size());
+  // Wait for the ChunkedUploadStream to receive the size.
+  base::RunLoop().RunUntilIdle();
+
+  net::TestCompletionCallback callback;
+  ASSERT_EQ(net::OK, chunked_upload_stream_->Init(callback.callback(),
+                                                  net::NetLogWithSource()));
+  write_pipe_ = chunked_data_pipe_getter_->WaitForStartReading();
+
+  read_data.erase();
+  mojo::BlockingCopyFromString(kData, write_pipe_);
+  while (read_data.size() < kData.size()) {
+    net::TestCompletionCallback callback;
+    int read_size = kData.size() - read_data.size();
+    scoped_refptr<net::IOBufferWithSize> io_buffer(
+        new net::IOBufferWithSize(read_size));
+    int result = chunked_upload_stream_->Read(
+        io_buffer.get(), io_buffer->size(), callback.callback());
+    result = callback.GetResult(result);
+    ASSERT_LT(0, result);
+    EXPECT_LE(result, read_size);
+    read_data.append(std::string(io_buffer->data(), result));
+    EXPECT_EQ(read_data.size() == kData.size(),
+              chunked_upload_stream_->IsEOF());
+  }
+}
+
+// Test where GetSize() is invoked with an error before the upload is
+// initialized.
+TEST_F(ChunkedDataPipeUploadDataStreamTest, GetSizeFailsBeforeInit) {
+  const std::string kData = "1234567890";
+
+  chunked_data_pipe_getter_ = std::make_unique<TestChunkedDataPipeGetter>();
+  chunked_upload_stream_ = std::make_unique<ChunkedDataPipeUploadDataStream>(
+      base::MakeRefCounted<network::ResourceRequestBody>(),
+      chunked_data_pipe_getter_->GetDataPipeGetterPtr());
+  get_size_callback_ = chunked_data_pipe_getter_->WaitForGetSize();
+  std::move(get_size_callback_).Run(net::ERR_ACCESS_DENIED, 0);
+  // Wait for the ChunkedUploadStream to receive the size.
+  base::RunLoop().RunUntilIdle();
+
+  net::TestCompletionCallback callback;
+  EXPECT_EQ(net::ERR_ACCESS_DENIED,
+            chunked_upload_stream_->Init(callback.callback(),
+                                         net::NetLogWithSource()));
+}
+
+// Test where GetSize() is only invoked with an error after the upload is reset.
+TEST_F(ChunkedDataPipeUploadDataStreamTest, GetSizeFailsAfterReset) {
+  const std::string kData = "1234567890";
+
+  // Read through the body once, without a size
+  std::string read_data;
+  mojo::BlockingCopyFromString(kData, write_pipe_);
+  while (read_data.size() < kData.size()) {
+    net::TestCompletionCallback callback;
+    int read_size = kData.size() - read_data.size();
+    scoped_refptr<net::IOBufferWithSize> io_buffer(
+        new net::IOBufferWithSize(read_size));
+    int result = chunked_upload_stream_->Read(
+        io_buffer.get(), io_buffer->size(), callback.callback());
+    result = callback.GetResult(result);
+    ASSERT_LT(0, result);
+    EXPECT_LE(result, read_size);
+    read_data.append(std::string(io_buffer->data(), result));
+    EXPECT_FALSE(chunked_upload_stream_->IsEOF());
+  }
+
+  // Reset, get the size, and read through the body again.
+  chunked_upload_stream_->Reset();
+
+  std::move(get_size_callback_).Run(net::ERR_ACCESS_DENIED, kData.size());
+  // Wait for the ChunkedUploadStream to receive the size.
+  base::RunLoop().RunUntilIdle();
+
+  net::TestCompletionCallback callback;
+  ASSERT_EQ(net::ERR_ACCESS_DENIED,
+            chunked_upload_stream_->Init(callback.callback(),
+                                         net::NetLogWithSource()));
 }
 
 // Three variations on when the stream can be closed before a request succeeds.
@@ -510,7 +655,7 @@ TEST_F(ChunkedDataPipeUploadDataStreamTest, CloseBodyPipeBeforeCloseGetter3) {
 // GetSizeCallback indicates too many bytes were received.
 TEST_F(ChunkedDataPipeUploadDataStreamTest, ExtraBytes1) {
   const std::string kData = "123";
-  mojo::common::BlockingCopyFromString(kData, write_pipe_);
+  mojo::BlockingCopyFromString(kData, write_pipe_);
 
   std::string read_data;
   while (read_data.size() < kData.size()) {
@@ -542,7 +687,7 @@ TEST_F(ChunkedDataPipeUploadDataStreamTest, ExtraBytes2) {
   const std::string kData = "123";
 
   // Read first byte.
-  mojo::common::BlockingCopyFromString(kData.substr(0, 1), write_pipe_);
+  mojo::BlockingCopyFromString(kData.substr(0, 1), write_pipe_);
   net::TestCompletionCallback callback;
   scoped_refptr<net::IOBufferWithSize> io_buffer(new net::IOBufferWithSize(1));
   int result = chunked_upload_stream_->Read(io_buffer.get(), io_buffer->size(),
@@ -562,7 +707,7 @@ TEST_F(ChunkedDataPipeUploadDataStreamTest, ExtraBytes2) {
   EXPECT_TRUE(chunked_upload_stream_->IsEOF());
 
   // More data is copied to the stream unexpectedly.  It should be ignored.
-  mojo::common::BlockingCopyFromString(kData.substr(1), write_pipe_);
+  mojo::BlockingCopyFromString(kData.substr(1), write_pipe_);
   base::RunLoop().RunUntilIdle();
   EXPECT_TRUE(chunked_upload_stream_->IsEOF());
 }
@@ -628,7 +773,7 @@ TEST_F(ChunkedDataPipeUploadDataStreamTest,
   int result = chunked_upload_stream_->Read(io_buffer.get(), kDataLen,
                                             callback.callback());
   EXPECT_EQ(net::ERR_IO_PENDING, result);
-  mojo::common::BlockingCopyFromString(kData, write_pipe_);
+  mojo::BlockingCopyFromString(kData, write_pipe_);
 
   // Since the pipe was closed the GetSizeCallback was invoked, reading the
   // upload body should succeed once.

@@ -63,12 +63,11 @@ target(link_target_type, "gpu_sources") {
     "//content/public/common:common_sources",
     "//gpu:gpu",
     "//gpu/ipc/common:command_buffer_traits",
-    "//gpu/ipc/common:gpu_preferences_util",
     "//gpu/ipc/service",
     "//ipc",
-    "//media:media_features",
+    "//media:media_buildflags",
     "//media/gpu",
-    "//media/mojo:features",
+    "//media/mojo:buildflags",
 
     # TODO(jrummell): As //media/gpu/ipc/service is a source_set in a
     # component build, determine if it should not be included here.
@@ -91,6 +90,10 @@ target(link_target_type, "gpu_sources") {
 
   if (is_android) {
     deps += [ "//media" ]
+  }
+
+  if (is_linux) {
+    deps += [ "//services/service_manager/zygote" ]
   }
 
   if (mojo_media_host == "gpu") {

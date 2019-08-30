@@ -33,7 +33,8 @@ void StreamHandleInputStream::Initialize() {
       &StreamHandleInputStream::OnStreamCompleted, base::Unretained(this),
       mojom::NetworkRequestStatus::USER_CANCELED));
   handle_watcher_ = std::make_unique<mojo::SimpleWatcher>(
-      FROM_HERE, mojo::SimpleWatcher::ArmingPolicy::AUTOMATIC);
+      FROM_HERE, mojo::SimpleWatcher::ArmingPolicy::AUTOMATIC,
+      base::SequencedTaskRunnerHandle::Get());
 }
 
 bool StreamHandleInputStream::IsEmpty() {
@@ -99,6 +100,11 @@ DownloadInterruptReason StreamHandleInputStream::GetCompletionStatus() {
 
 void StreamHandleInputStream::OnStreamCompleted(
     mojom::NetworkRequestStatus status) {
+  // This method could get called again when the URLLoader is being destroyed.
+  // However, if the response is already completed, don't set the
+  // |completion_status_| again.
+  if (is_response_completed_)
+    return;
   // This can be called before or after data pipe is completely drained.
   completion_status_ = ConvertMojoNetworkRequestStatusToInterruptReason(status);
   is_response_completed_ = true;

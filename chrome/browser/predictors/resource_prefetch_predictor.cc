@@ -152,9 +152,11 @@ void ResourcePrefetchPredictor::StartInitialization() {
 
   // Create local caches using the database as loaded.
   auto host_redirect_data = std::make_unique<RedirectDataMap>(
-      tables_, tables_->host_redirect_table(), config_.max_hosts_to_track);
+      tables_, tables_->host_redirect_table(), config_.max_hosts_to_track,
+      base::TimeDelta::FromSeconds(config_.flush_data_to_disk_delay_seconds));
   auto origin_data = std::make_unique<OriginDataMap>(
-      tables_, tables_->origin_table(), config_.max_hosts_to_track);
+      tables_, tables_->origin_table(), config_.max_hosts_to_track,
+      base::TimeDelta::FromSeconds(config_.flush_data_to_disk_delay_seconds));
 
   // Get raw pointers to pass to the first task. Ownership of the unique_ptrs
   // will be passed to the reply task.
@@ -267,11 +269,21 @@ void ResourcePrefetchPredictor::OnHistoryAndCacheLoaded() {
   DCHECK_EQ(INITIALIZING, initialization_state_);
 
   initialization_state_ = INITIALIZED;
+  if (delete_all_data_requested_) {
+    DeleteAllUrls();
+    delete_all_data_requested_ = false;
+  }
   if (observer_)
     observer_->OnPredictorInitialized();
 }
 
 void ResourcePrefetchPredictor::DeleteAllUrls() {
+  DCHECK_CURRENTLY_ON(BrowserThread::UI);
+  if (initialization_state_ != INITIALIZED) {
+    delete_all_data_requested_ = true;
+    return;
+  }
+
   host_redirect_data_->DeleteAllData();
   origin_data_->DeleteAllData();
 }
@@ -427,20 +439,17 @@ void ResourcePrefetchPredictor::LearnOrigins(
 
 void ResourcePrefetchPredictor::OnURLsDeleted(
     history::HistoryService* history_service,
-    bool all_history,
-    bool expired,
-    const history::URLRows& deleted_rows,
-    const std::set<GURL>& favicon_urls) {
+    const history::DeletionInfo& deletion_info) {
   DCHECK_CURRENTLY_ON(BrowserThread::UI);
   DCHECK(initialization_state_ == INITIALIZED);
 
-  if (all_history) {
+  if (deletion_info.IsAllHistory()) {
     DeleteAllUrls();
     UMA_HISTOGRAM_ENUMERATION("ResourcePrefetchPredictor.ReportingEvent",
                               REPORTING_EVENT_ALL_HISTORY_CLEARED,
                               REPORTING_EVENT_COUNT);
   } else {
-    DeleteUrls(deleted_rows);
+    DeleteUrls(deletion_info.deleted_rows());
     UMA_HISTOGRAM_ENUMERATION("ResourcePrefetchPredictor.ReportingEvent",
                               REPORTING_EVENT_PARTIAL_HISTORY_CLEARED,
                               REPORTING_EVENT_COUNT);

@@ -255,11 +255,11 @@ class GPU_GLES2_EXPORT VertexAttribManager
         ++num_fixed_attribs_;
       }
       if (do_buffer_refcounting_ && is_bound_ && attrib->buffer_)
-        attrib->buffer_->OnUnbind(GL_ARRAY_BUFFER);
+        attrib->buffer_->OnUnbind(GL_ARRAY_BUFFER, true);
       attrib->SetInfo(buffer, size, type, normalized, gl_stride, real_stride,
                       offset, integer);
       if (do_buffer_refcounting_ && is_bound_ && buffer)
-        buffer->OnBind(GL_ARRAY_BUFFER);
+        buffer->OnBind(GL_ARRAY_BUFFER, true);
     }
   }
 
@@ -278,7 +278,7 @@ class GPU_GLES2_EXPORT VertexAttribManager
     return service_id_;
   }
 
-  void Unbind(Buffer* buffer);
+  void Unbind(Buffer* buffer, Buffer* bound_array_buffer);
 
   bool IsDeleted() const {
     return deleted_;

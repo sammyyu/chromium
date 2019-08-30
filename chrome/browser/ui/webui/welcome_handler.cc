@@ -7,15 +7,15 @@
 #include "base/metrics/histogram_macros.h"
 #include "base/metrics/user_metrics.h"
 #include "chrome/browser/profiles/profile.h"
-#include "chrome/browser/signin/signin_manager_factory.h"
+#include "chrome/browser/signin/identity_manager_factory.h"
 #include "chrome/browser/ui/browser.h"
 #include "chrome/browser/ui/browser_finder.h"
 #include "chrome/browser/ui/browser_navigator.h"
 #include "chrome/browser/ui/profile_chooser_constants.h"
 #include "chrome/browser/ui/webui/signin/login_ui_service_factory.h"
 #include "chrome/common/url_constants.h"
-#include "components/signin/core/browser/signin_manager.h"
 #include "components/signin/core/browser/signin_metrics.h"
+#include "services/identity/public/cpp/identity_manager.h"
 #include "ui/base/page_transition_types.h"
 
 WelcomeHandler::WelcomeHandler(content::WebUI* web_ui)
@@ -32,8 +32,8 @@ WelcomeHandler::~WelcomeHandler() {
   // construct-time on some platforms because this page is shown immediately
   // after a new installation of Chrome and loads while the user is deciding
   // whether or not to opt in to logging.
-  base::RecordAction(
-      base::UserMetricsAction("Signin_Impression_FromStartPage"));
+  signin_metrics::RecordSigninImpressionUserActionForAccessPoint(
+      signin_metrics::AccessPoint::ACCESS_POINT_START_PAGE);
 
   UMA_HISTOGRAM_ENUMERATION("Welcome.SignInPromptResult", result_,
                             WelcomeResult::WELCOME_RESULT_MAX);
@@ -53,7 +53,7 @@ void WelcomeHandler::HandleActivateSignIn(const base::ListValue* args) {
   result_ = WelcomeResult::ATTEMPTED;
   base::RecordAction(base::UserMetricsAction("WelcomePage_SignInClicked"));
 
-  if (SigninManagerFactory::GetForProfile(profile_)->IsAuthenticated()) {
+  if (IdentityManagerFactory::GetForProfile(profile_)->HasPrimaryAccount()) {
     // In general, this page isn't shown to signed-in users; however, if one
     // should arrive here, then opening the sign-in dialog will likely lead
     // to a crash. Thus, we just act like sign-in was "successful" and whisk
@@ -80,11 +80,13 @@ void WelcomeHandler::HandleUserDecline(const base::ListValue* args) {
 // Override from WebUIMessageHandler.
 void WelcomeHandler::RegisterMessages() {
   web_ui()->RegisterMessageCallback(
-      "handleActivateSignIn", base::Bind(&WelcomeHandler::HandleActivateSignIn,
-                                         base::Unretained(this)));
+      "handleActivateSignIn",
+      base::BindRepeating(&WelcomeHandler::HandleActivateSignIn,
+                          base::Unretained(this)));
   web_ui()->RegisterMessageCallback(
       "handleUserDecline",
-      base::Bind(&WelcomeHandler::HandleUserDecline, base::Unretained(this)));
+      base::BindRepeating(&WelcomeHandler::HandleUserDecline,
+                          base::Unretained(this)));
 }
 
 void WelcomeHandler::GoToNewTabPage() {

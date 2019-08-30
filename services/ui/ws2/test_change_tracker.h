@@ -8,9 +8,9 @@
 #include <stdint.h>
 
 #include <string>
-#include <unordered_map>
 #include <vector>
 
+#include "base/containers/flat_map.h"
 #include "base/macros.h"
 #include "services/ui/common/types.h"
 #include "services/ui/public/interfaces/window_tree.mojom.h"
@@ -19,13 +19,13 @@
 #include "ui/gfx/geometry/point_f.h"
 
 namespace ui {
-
-namespace ws {
+namespace ws2 {
 
 enum ChangeType {
   CHANGE_TYPE_CAPTURE_CHANGED,
   CHANGE_TYPE_FRAME_SINK_ID_ALLOCATED,
   CHANGE_TYPE_EMBED,
+  CHANGE_TYPE_EMBED_FROM_TOKEN,
   CHANGE_TYPE_EMBEDDED_APP_DISCONNECTED,
   CHANGE_TYPE_UNEMBED,
   // TODO(sky): nuke NODE.
@@ -45,8 +45,16 @@ enum ChangeType {
   CHANGE_TYPE_ON_CHANGE_COMPLETED,
   CHANGE_TYPE_ON_TOP_LEVEL_CREATED,
   CHANGE_TYPE_OPACITY,
+  CHANGE_TYPE_REQUEST_CLOSE,
   CHANGE_TYPE_SURFACE_CHANGED,
   CHANGE_TYPE_TRANSFORM_CHANGED,
+  CHANGE_TYPE_DRAG_DROP_START,
+  CHANGE_TYPE_DRAG_ENTER,
+  CHANGE_TYPE_DRAG_OVER,
+  CHANGE_TYPE_DRAG_LEAVE,
+  CHANGE_TYPE_COMPLETE_DROP,
+  CHANGE_TYPE_DRAG_DROP_DONE,
+  CHANGE_TYPE_ON_PERFORM_DRAG_DROP_COMPLETED,
 };
 
 // TODO(sky): consider nuking and converting directly to WindowData.
@@ -64,6 +72,7 @@ struct TestWindow {
   Id parent_id;
   Id window_id;
   bool visible;
+  gfx::Rect bounds;
   std::map<std::string, std::vector<uint8_t>> properties;
 };
 
@@ -98,11 +107,22 @@ struct Change {
   float device_scale_factor;
   gfx::Transform transform;
   // Set in OnWindowInputEvent() if the event is a KeyEvent.
-  std::unordered_map<std::string, std::vector<uint8_t>> key_event_properties;
+  base::flat_map<std::string, std::vector<uint8_t>> key_event_properties;
   int64_t display_id;
   gfx::Point location1;
   gfx::PointF location2;
+  base::flat_map<std::string, std::vector<uint8_t>> drag_data;
+  uint32_t drag_drop_action;
 };
+
+// The ChangeToDescription related functions convert a Change into a string.
+// To avoid updating all tests as more descriptive strings are added, new
+// variants are added and identified with a numeric suffix. Differences
+// between versions:
+// 1 and no suffix is the original version.
+// 2: OnEmbed() includes the boolean value supplied to OnEmbed().
+
+std::string ChangeToDescription(const Change& change);
 
 // Converts Changes to string descriptions.
 std::vector<std::string> ChangesToDescription1(
@@ -111,6 +131,7 @@ std::vector<std::string> ChangesToDescription1(
 // Convenience for returning the description of the first item in |changes|.
 // Returns an empty string if |changes| has something other than one entry.
 std::string SingleChangeToDescription(const std::vector<Change>& changes);
+
 std::string SingleChangeToDescription2(const std::vector<Change>& changes);
 
 // Convenience for returning the description of the first item in |windows|.
@@ -124,6 +145,10 @@ std::string ChangeWindowDescription(const std::vector<Change>& changes);
 // Converts WindowDatas to TestWindows.
 void WindowDatasToTestWindows(const std::vector<mojom::WindowDataPtr>& data,
                               std::vector<TestWindow>* test_windows);
+
+// Returns true if |changes| contains a Change matching |change_description|.
+bool ContainsChange(const std::vector<Change>& changes,
+                    const std::string& change_description);
 
 // TestChangeTracker is used to record WindowTreeClient functions. It notifies
 // a delegate any time a change is added.
@@ -149,6 +174,10 @@ class TestChangeTracker {
   // Each of these functions generate a Change. There is one per
   // WindowTreeClient function.
   void OnEmbed(mojom::WindowDataPtr root, bool drawn);
+  void OnEmbedFromToken(
+      mojom::WindowDataPtr root,
+      int64_t display_id,
+      const base::Optional<viz::LocalSurfaceId>& local_surface_id);
   void OnEmbeddedAppDisconnected(Id window_id);
   void OnUnembed(Id window_id);
   void OnCaptureChanged(Id new_capture_window_id, Id old_capture_window_id);
@@ -179,8 +208,7 @@ class TestChangeTracker {
       int64_t display_id,
       const gfx::PointF& event_location_in_screen_pixel_layout,
       bool matches_pointer_watcher);
-  void OnPointerEventObserved(const ui::Event& event,
-                              uint32_t window_id);
+  void OnPointerEventObserved(const ui::Event& event, Id window_id);
   void OnWindowSharedPropertyChanged(
       Id window_id,
       const std::string& name,
@@ -193,6 +221,17 @@ class TestChangeTracker {
                          bool drawn);
   void OnWindowSurfaceChanged(Id window_id,
                               const viz::SurfaceInfo& surface_info);
+  void OnDragDropStart(
+      const base::flat_map<std::string, std::vector<uint8_t>>& drag_data);
+  void OnDragEnter(Id window_id);
+  void OnDragOver(Id window_id);
+  void OnDragLeave(Id widnow_id);
+  void OnCompleteDrop(Id window_id);
+  void OnDragDropDone();
+  void OnPerformDragDropCompleted(uint32_t change_id,
+                                  bool success,
+                                  uint32_t action_taken);
+  void RequestClose(Id window_id);
 
  private:
   void AddChange(const Change& change);
@@ -203,8 +242,7 @@ class TestChangeTracker {
   DISALLOW_COPY_AND_ASSIGN(TestChangeTracker);
 };
 
-}  // namespace ws
-
+}  // namespace ws2
 }  // namespace ui
 
 #endif  // SERVICES_UI_WS2_TEST_CHANGE_TRACKER_H_

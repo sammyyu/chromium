@@ -95,12 +95,14 @@ void GvrGamepadDataFetcher::GetGamepadData(bool devices_changed_hint) {
 
     pad.display_id = display_id_;
 
+    pad.is_xr = true;
+
     pad.hand =
         provided_data.right_handed ? GamepadHand::kRight : GamepadHand::kLeft;
   }
 
   pad.connected = provided_data.connected;
-  pad.timestamp = provided_data.timestamp;
+  pad.timestamp = CurrentTimeInMicroseconds();
 
   if (provided_data.is_touching) {
     gfx::Vector2dF touch_position = provided_data.touch_pos;

@@ -6,7 +6,6 @@
 
 #include <vector>
 
-#include "base/memory/ptr_util.h"
 #include "base/strings/string16.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
@@ -332,10 +331,10 @@ void BoxLayoutExample::CreateExampleView(View* container) {
     border_insets_[i] =
         CreateRawTextfield(horizontal_pos, border_insets_[0]->y(), true);
 
-  collapse_margins_ = new Checkbox(base::ASCIIToUTF16("Collapse margins"));
+  collapse_margins_ =
+      new Checkbox(base::ASCIIToUTF16("Collapse margins"), this);
   collapse_margins_->SetPosition(gfx::Point(kPadding, vertical_pos));
   collapse_margins_->SizeToPreferredSize();
-  collapse_margins_->set_listener(this);
   control_panel_->AddChildView(collapse_margins_);
 
   UpdateLayoutManager();

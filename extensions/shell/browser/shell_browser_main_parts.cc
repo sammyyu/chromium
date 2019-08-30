@@ -12,12 +12,15 @@
 #include "components/keyed_service/content/browser_context_dependency_manager.h"
 #include "components/nacl/common/buildflags.h"
 #include "components/prefs/pref_service.h"
+#include "components/sessions/core/session_id_generator.h"
 #include "components/storage_monitor/storage_monitor.h"
 #include "components/update_client/update_query_params.h"
 #include "content/public/browser/child_process_security_policy.h"
 #include "content/public/browser/context_factory.h"
 #include "content/public/browser/devtools_agent_host.h"
+#include "content/public/common/content_switches.h"
 #include "content/public/common/result_codes.h"
+#include "content/public/common/service_manager_connection.h"
 #include "content/shell/browser/shell_devtools_manager_delegate.h"
 #include "extensions/browser/browser_context_keyed_service_factories.h"
 #include "extensions/browser/extension_system.h"
@@ -75,7 +78,7 @@
 #endif
 
 #if defined(USE_AURA) && defined(USE_X11)
-#include "ui/events/devices/x11/touch_factory_x11.h"
+#include "ui/events/devices/x11/touch_factory_x11.h"  // nogncheck
 #endif
 
 using base::CommandLine;
@@ -86,6 +89,16 @@ using content::BrowserThread;
 #endif
 
 namespace extensions {
+
+namespace {
+
+// Intentionally dereferences a null pointer to test the crash reporter.
+void CrashForTest() {
+  int* bad_pointer = nullptr;
+  *bad_pointer = 0;
+}
+
+}  // namespace
 
 ShellBrowserMainParts::ShellBrowserMainParts(
     const content::MainFunctionParams& parameters,
@@ -145,7 +158,7 @@ void ShellBrowserMainParts::PostMainMessageLoopStart() {
 }
 
 int ShellBrowserMainParts::PreEarlyInitialization() {
-  return content::RESULT_CODE_NORMAL_EXIT;
+  return service_manager::RESULT_CODE_NORMAL_EXIT;
 }
 
 int ShellBrowserMainParts::PreCreateThreads() {
@@ -176,6 +189,7 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
   // app_shell only supports a single user, so all preferences live in the user
   // data directory, including the device-wide local state.
   local_state_ = shell_prefs::CreateLocalState(browser_context_->GetPath());
+  sessions::SessionIdGenerator::GetInstance()->Init(local_state_.get());
   user_pref_service_ =
       shell_prefs::CreateUserPrefService(browser_context_.get());
   extensions_browser_client_->InitWithBrowserContext(browser_context_.get(),
@@ -198,7 +212,10 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
       content::GetContextFactoryPrivate());
 #endif
 
-  storage_monitor::StorageMonitor::Create();
+  storage_monitor::StorageMonitor::Create(
+      content::ServiceManagerConnection::GetForProcess()
+          ->GetConnector()
+          ->Clone());
 
   desktop_controller_.reset(
       browser_main_delegate_->CreateDesktopController(browser_context_.get()));
@@ -216,7 +233,6 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
   // Initialize OAuth2 support from command line.
   base::CommandLine* cmd = base::CommandLine::ForCurrentProcess();
   oauth2_token_service_.reset(new ShellOAuth2TokenService(
-      browser_context_.get(),
       cmd->GetSwitchValueASCII(switches::kAppShellUser),
       cmd->GetSwitchValueASCII(switches::kAppShellRefreshToken)));
 
@@ -232,6 +248,10 @@ void ShellBrowserMainParts::PreMainMessageLoopRun() {
 
   content::ShellDevToolsManagerDelegate::StartHttpHandler(
       browser_context_.get());
+
+  if (cmd->HasSwitch(::switches::kBrowserCrashTest))
+    CrashForTest();
+
   if (parameters_.ui_task) {
     // For running browser tests.
     parameters_.ui_task->Run();
@@ -246,7 +266,7 @@ bool ShellBrowserMainParts::MainMessageLoopRun(int* result_code) {
   if (!run_message_loop_)
     return true;
   desktop_controller_->Run();
-  *result_code = content::RESULT_CODE_NORMAL_EXIT;
+  *result_code = service_manager::RESULT_CODE_NORMAL_EXIT;
   return true;
 }
 
@@ -277,6 +297,8 @@ void ShellBrowserMainParts::PostMainMessageLoopRun() {
   audio_controller_.reset();
   chromeos::CrasAudioHandler::Shutdown();
 #endif
+
+  sessions::SessionIdGenerator::GetInstance()->Shutdown();
 
   user_pref_service_->CommitPendingWrite();
   user_pref_service_.reset();

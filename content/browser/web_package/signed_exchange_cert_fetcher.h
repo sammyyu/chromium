@@ -8,18 +8,15 @@
 #include <string>
 #include <vector>
 
-#include "base/callback_forward.h"
+#include "base/callback.h"
 #include "base/callback_helpers.h"
 #include "base/memory/weak_ptr.h"
 #include "base/optional.h"
-#include "base/strings/string_piece_forward.h"
+#include "base/unguessable_token.h"
+#include "content/browser/web_package/signed_exchange_certificate_chain.h"
 #include "content/common/content_export.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
 #include "url/origin.h"
-
-namespace net {
-class X509Certificate;
-}  // namespace net
 
 namespace network {
 class SharedURLLoaderFactory;
@@ -31,6 +28,7 @@ class SimpleWatcher;
 
 namespace content {
 
+class SignedExchangeDevToolsProxy;
 class ThrottlingURLLoader;
 class URLLoaderThrottle;
 
@@ -38,25 +36,26 @@ class CONTENT_EXPORT SignedExchangeCertFetcher
     : public network::mojom::URLLoaderClient {
  public:
   using CertificateCallback =
-      base::OnceCallback<void(scoped_refptr<net::X509Certificate>)>;
+      base::OnceCallback<void(std::unique_ptr<SignedExchangeCertificateChain>)>;
 
   // Starts fetching the certificate using a ThrottlingURLLoader created with
   // the |shared_url_loader_factory| and the |throttles|. The |callback| will
   // be called with the certificate if succeeded. Otherwise it will be called
   // with null. If the returned fetcher is destructed before the |callback| is
   // called, the request will be canceled and the |callback| will no be called.
+  //
+  // Using SignedExchangeCertFetcherFactory is preferred rather than directly
+  // calling this.
   static std::unique_ptr<SignedExchangeCertFetcher> CreateAndStart(
       scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory,
       std::vector<std::unique_ptr<URLLoaderThrottle>> throttles,
       const GURL& cert_url,
       url::Origin request_initiator,
       bool force_fetch,
-      CertificateCallback callback);
-
-  // Parses a TLS 1.3 Certificate message containing X.509v3 certificates and
-  // returns a vector of cert_data. Returns nullopt when failed to parse.
-  static base::Optional<std::vector<base::StringPiece>> GetCertChainFromMessage(
-      base::StringPiece message);
+      SignedExchangeVersion version,
+      CertificateCallback callback,
+      SignedExchangeDevToolsProxy* devtools_proxy,
+      const base::Optional<base::UnguessableToken>& throttling_profile_id);
 
   ~SignedExchangeCertFetcher() override;
 
@@ -76,20 +75,19 @@ class CONTENT_EXPORT SignedExchangeCertFetcher
       const GURL& cert_url,
       url::Origin request_initiator,
       bool force_fetch,
-      CertificateCallback callback);
+      SignedExchangeVersion version,
+      CertificateCallback callback,
+      SignedExchangeDevToolsProxy* devtools_proxy,
+      const base::Optional<base::UnguessableToken>& throttling_profile_id);
   void Start();
   void Abort();
   void OnHandleReady(MojoResult result);
   void OnDataComplete();
 
   // network::mojom::URLLoaderClient
-  void OnReceiveResponse(
-      const network::ResourceResponseHead& head,
-      const base::Optional<net::SSLInfo>& ssl_info,
-      network::mojom::DownloadedTempFilePtr downloaded_file) override;
+  void OnReceiveResponse(const network::ResourceResponseHead& head) override;
   void OnReceiveRedirect(const net::RedirectInfo& redirect_info,
                          const network::ResourceResponseHead& head) override;
-  void OnDataDownloaded(int64_t data_length, int64_t encoded_length) override;
   void OnUploadProgress(int64_t current_position,
                         int64_t total_size,
                         OnUploadProgressCallback callback) override;
@@ -102,12 +100,17 @@ class CONTENT_EXPORT SignedExchangeCertFetcher
   scoped_refptr<network::SharedURLLoaderFactory> shared_url_loader_factory_;
   std::vector<std::unique_ptr<URLLoaderThrottle>> throttles_;
   std::unique_ptr<network::ResourceRequest> resource_request_;
+  const SignedExchangeVersion version_;
   CertificateCallback callback_;
 
   std::unique_ptr<ThrottlingURLLoader> url_loader_;
   mojo::ScopedDataPipeConsumerHandle body_;
   std::unique_ptr<mojo::SimpleWatcher> handle_watcher_;
   std::string body_string_;
+
+  // This is owned by SignedExchangeHandler which is the owner of |this|.
+  SignedExchangeDevToolsProxy* devtools_proxy_;
+  base::Optional<base::UnguessableToken> cert_request_id_;
 
   DISALLOW_COPY_AND_ASSIGN(SignedExchangeCertFetcher);
 };

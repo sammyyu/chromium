@@ -43,8 +43,6 @@ cr.define('extensions', function() {
 
       isSupervised: Boolean,
 
-      isGuest: Boolean,
-
       // <if expr="chromeos">
       kioskEnabled: Boolean,
       // </if>
@@ -53,6 +51,9 @@ cr.define('extensions', function() {
 
       /** @private */
       expanded_: Boolean,
+
+      /** @private */
+      showPackDialog_: Boolean,
 
       /**
        * Text to display in update toast
@@ -71,6 +72,13 @@ cr.define('extensions', function() {
 
     hostAttributes: {
       role: 'banner',
+    },
+
+    /** @override */
+    detached: function() {
+      const openToastElement = this.$$('cr-toast[open]');
+      if (openToastElement)
+        openToastElement.hide();
     },
 
     /**
@@ -129,8 +137,14 @@ cr.define('extensions', function() {
 
     /** @private */
     onPackTap_: function() {
-      this.fire('pack-tap');
       chrome.metricsPrivate.recordUserAction('Options_PackExtension');
+      this.showPackDialog_ = true;
+    },
+
+    /** @private */
+    onPackDialogClose_: function() {
+      this.showPackDialog_ = false;
+      this.$.packExtensions.focus();
     },
 
     // <if expr="chromeos">
@@ -149,6 +163,9 @@ cr.define('extensions', function() {
       this.isUpdating_ = true;
       const toastElement = this.$$('cr-toast');
       this.toastLabel_ = this.i18n('toolbarUpdatingToast');
+
+      // Keep the toast open indefinitely.
+      toastElement.duration = 0;
       toastElement.show();
       this.delegate.updateAllExtensions()
           .then(() => {
@@ -156,10 +173,11 @@ cr.define('extensions', function() {
             const doneText = this.i18n('toolbarUpdateDone');
             this.fire('iron-announce', {text: doneText});
             this.toastLabel_ = doneText;
-            toastElement.show();
+            toastElement.show(3000);
             this.isUpdating_ = false;
           })
           .catch(function() {
+            toastElement.hide();
             this.isUpdating_ = false;
           });
     },

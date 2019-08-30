@@ -8,10 +8,11 @@
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
 #include "base/memory/weak_ptr.h"
+#include "base/sequenced_task_runner.h"
 #include "base/test/test_simple_task_runner.h"
 #include "base/threading/thread_task_runner_handle.h"
 #include "components/offline_pages/core/model/offline_page_item_generator.h"
-#include "components/offline_pages/core/system_download_manager_stub.h"
+#include "components/offline_pages/core/stub_system_download_manager.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
 namespace {
@@ -24,7 +25,8 @@ class TestOfflinePageArchiver : public OfflinePageArchiver {
  public:
   void CreateArchive(const base::FilePath& archives_dir,
                      const CreateArchiveParams& create_archive_params,
-                     const CreateArchiveCallback& callback) override {}
+                     content::WebContents* web_contents,
+                     CreateArchiveCallback callback) override {}
 };
 
 class OfflinePageArchiverTest
@@ -63,9 +65,9 @@ class OfflinePageArchiverTest
     return weak_ptr_factory_.GetWeakPtr();
   }
 
-  void PublishArchiveDone(const SavePageCallback& save_page_callback,
+  void PublishArchiveDone(SavePageCallback save_page_callback,
                           const OfflinePageItem& offline_page,
-                          PublishArchiveResult* archive_result);
+                          PublishArchiveResult archive_result);
 
  private:
   base::ScopedTempDir temporary_dir_;
@@ -85,10 +87,10 @@ void OfflinePageArchiverTest::SetUp() {
 }
 
 void OfflinePageArchiverTest::PublishArchiveDone(
-    const SavePageCallback& save_page_callback,
+    SavePageCallback save_page_callback,
     const OfflinePageItem& offline_page,
-    PublishArchiveResult* archive_result) {
-  publish_archive_result_ = *archive_result;
+    PublishArchiveResult archive_result) {
+  publish_archive_result_ = archive_result;
 }
 
 void OfflinePageArchiverTest::PumpLoop() {
@@ -104,13 +106,13 @@ TEST_F(OfflinePageArchiverTest, PublishArchive) {
   base::FilePath new_file_path =
       public_archive_dir_path().Append(offline_page.file_path.BaseName());
   std::unique_ptr<SystemDownloadManager> download_manager(
-      new SystemDownloadManagerStub(kDownloadId, true));
+      new StubSystemDownloadManager(kDownloadId, true));
 
   archiver.PublishArchive(
       offline_page, base::ThreadTaskRunnerHandle::Get(),
       public_archive_dir_path(), download_manager.get(),
       base::BindOnce(&OfflinePageArchiverTest::PublishArchiveDone,
-                     get_weak_ptr(), save_page_callback));
+                     get_weak_ptr(), std::move(save_page_callback)));
   PumpLoop();
 
   EXPECT_EQ(SavePageResult::SUCCESS, publish_archive_result().move_result);

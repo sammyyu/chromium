@@ -67,7 +67,8 @@ ActiveWindowStateType GetActiveWindowState() {
       case mojom::WindowStateType::MINIMIZED:
       case mojom::WindowStateType::INACTIVE:
       case mojom::WindowStateType::AUTO_POSITIONED:
-        // TODO: We probably want to recorde PINNED state.
+      case mojom::WindowStateType::PIP:
+        // TODO: We probably want to record PIP state.
         active_window_state_type = ACTIVE_WINDOW_STATE_TYPE_OTHER;
         break;
     }
@@ -197,6 +198,13 @@ void UserMetricsRecorder::RecordUserClickOnShelfButton(
   LoginMetricsRecorder* recorder =
       Shell::Get()->metrics()->login_metrics_recorder();
   recorder->RecordUserShelfButtonClick(target);
+}
+
+// static
+void UserMetricsRecorder::RecordUserToggleDictation(
+    DictationToggleMethod method) {
+  UMA_HISTOGRAM_ENUMERATION("Accessibility.CrosDictation.ToggleDictationMethod",
+                            method);
 }
 
 void UserMetricsRecorder::RecordUserMetricsAction(UserMetricsAction action) {

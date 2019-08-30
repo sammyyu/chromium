@@ -44,14 +44,15 @@ class DevToolsFileSystemIndexerTest : public testing::Test {
 
 TEST_F(DevToolsFileSystemIndexerTest, BasicUsage) {
   base::FilePath base_test_path;
-  PathService::Get(chrome::DIR_TEST_DATA, &base_test_path);
+  base::PathService::Get(chrome::DIR_TEST_DATA, &base_test_path);
   base::FilePath index_path =
       base_test_path.Append(FILE_PATH_LITERAL("devtools"))
           .Append(FILE_PATH_LITERAL("indexer"));
 
+  std::vector<std::string> excluded_folders;
   scoped_refptr<DevToolsFileSystemIndexer::FileSystemIndexingJob> job =
-      indexer_->IndexPath(index_path.AsUTF8Unsafe(), base::DoNothing(),
-                          base::DoNothing(),
+      indexer_->IndexPath(index_path.AsUTF8Unsafe(), excluded_folders,
+                          base::DoNothing(), base::DoNothing(),
                           base::Bind(&DevToolsFileSystemIndexerTest::SetDone,
                                      base::Unretained(this)));
 

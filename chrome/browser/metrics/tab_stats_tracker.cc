@@ -45,6 +45,11 @@ constexpr base::TimeDelta kTabUsageReportingIntervals[] = {
     base::TimeDelta::FromMinutes(10), base::TimeDelta::FromHours(1),
     base::TimeDelta::FromHours(5),    base::TimeDelta::FromHours(12)};
 
+#if defined(OS_WIN)
+const base::TimeDelta kNativeWindowOcclusionCalculationInterval =
+    base::TimeDelta::FromMinutes(10);
+#endif
+
 // The global TabStatsTracker instance.
 TabStatsTracker* g_tab_stats_tracker_instance = nullptr;
 
@@ -87,6 +92,7 @@ const TabStatsDataStore::TabsStats& TabStatsTracker::tab_stats() const {
 
 TabStatsTracker::TabStatsTracker(PrefService* pref_service)
     : reporting_delegate_(std::make_unique<UmaStatsReportingDelegate>()),
+      delegate_(std::make_unique<TabStatsTrackerDelegate>()),
       tab_stats_data_store_(std::make_unique<TabStatsDataStore>(pref_service)),
       daily_event_(
           std::make_unique<DailyEvent>(pref_service,
@@ -130,6 +136,14 @@ TabStatsTracker::TabStatsTracker(PrefService* pref_service)
                       interval, interval_map));
     usage_interval_timers_.push_back(std::move(timer));
   }
+
+// The native window occlusion calculation is specific to Windows.
+#if defined(OS_WIN)
+  native_window_occlusion_timer_.Start(
+      FROM_HERE, kNativeWindowOcclusionCalculationInterval,
+      Bind(&TabStatsTracker::CalculateAndRecordNativeWindowVisibilities,
+           base::Unretained(this)));
+#endif
 }
 
 TabStatsTracker::~TabStatsTracker() {
@@ -162,6 +176,11 @@ void TabStatsTracker::RegisterPrefs(PrefRegistrySimple* registry) {
   DailyEvent::RegisterPref(registry, ::prefs::kTabStatsDailySample);
 }
 
+void TabStatsTracker::SetDelegateForTesting(
+    std::unique_ptr<TabStatsTrackerDelegate> new_delegate) {
+  delegate_ = std::move(new_delegate);
+}
+
 void TabStatsTracker::TabStatsDailyObserver::OnDailyEvent(
     DailyEvent::IntervalType type) {
   reporting_delegate_->ReportDailyMetrics(data_store_->tab_stats());
@@ -177,6 +196,15 @@ class TabStatsTracker::WebContentsUsageObserver
         tab_stats_tracker_(tab_stats_tracker) {}
 
   // content::WebContentsObserver:
+  void DidStartNavigation(
+      content::NavigationHandle* navigation_handle) override {
+    // Treat browser-initiated navigations as user interactions.
+    if (!navigation_handle->IsRendererInitiated()) {
+      tab_stats_tracker_->tab_stats_data_store()->OnTabInteraction(
+          web_contents());
+    }
+  }
+
   void DidGetUserInteraction(const blink::WebInputEvent::Type type) override {
     tab_stats_tracker_->tab_stats_data_store()->OnTabInteraction(
         web_contents());

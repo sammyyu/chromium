@@ -6,6 +6,7 @@
 
 #include "ash/autoclick/common/autoclick_controller_common.h"
 #include "ash/autoclick/common/autoclick_controller_common_delegate.h"
+#include "ash/public/cpp/ash_constants.h"
 #include "ash/public/cpp/shell_window_ids.h"
 #include "ash/shell.h"
 #include "ash/wm/root_window_finder.h"
@@ -25,8 +26,6 @@ namespace ash {
 base::TimeDelta AutoclickController::GetDefaultAutoclickDelay() {
   return base::TimeDelta::FromMilliseconds(int64_t{kDefaultAutoclickDelayMs});
 }
-
-const int AutoclickController::kDefaultAutoclickDelayMs = 1000;
 
 class AutoclickControllerImpl : public AutoclickController,
                                 public ui::EventHandler,
@@ -99,12 +98,12 @@ void AutoclickControllerImpl::SetEnabled(bool enabled) {
     return;
   enabled_ = enabled;
 
-  if (enabled_) {
+  if (enabled_)
     Shell::Get()->AddPreTargetHandler(this);
-    autoclick_controller_common_->CancelAutoclick();
-  } else {
+  else
     Shell::Get()->RemovePreTargetHandler(this);
-  }
+
+  autoclick_controller_common_->CancelAutoclick();
 }
 
 bool AutoclickControllerImpl::IsEnabled() const {
@@ -146,7 +145,6 @@ views::Widget* AutoclickControllerImpl::CreateAutoclickRingWidget(
   params.accept_events = false;
   params.activatable = views::Widget::InitParams::ACTIVATABLE_NO;
   params.ownership = views::Widget::InitParams::WIDGET_OWNS_NATIVE_WIDGET;
-  params.context = root_window;
   params.opacity = views::Widget::InitParams::TRANSLUCENT_WINDOW;
   params.parent =
       Shell::GetContainer(root_window, kShellWindowId_OverlayContainer);

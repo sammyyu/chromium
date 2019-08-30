@@ -5,12 +5,14 @@
 #import <EarlGrey/EarlGrey.h>
 #import <XCTest/XCTest.h>
 
+#include "base/ios/ios_util.h"
 #include "base/strings/sys_string_conversions.h"
 #include "components/strings/grit/components_strings.h"
 #include "ios/chrome/browser/infobars/infobar_manager_impl.h"
 #import "ios/chrome/browser/ui/infobars/test_infobar_delegate.h"
 #import "ios/chrome/browser/ui/toolbar/adaptive/primary_toolbar_view.h"
 #import "ios/chrome/browser/ui/toolbar/adaptive/secondary_toolbar_view.h"
+#import "ios/chrome/browser/ui/toolbar/buttons/toolbar_button.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_constants.h"
 #include "ios/chrome/browser/ui/ui_util.h"
 #import "ios/chrome/browser/ui/uikit_ui_util.h"
@@ -24,7 +26,9 @@
 #import "ios/chrome/test/earl_grey/chrome_matchers.h"
 #import "ios/chrome/test/earl_grey/chrome_test_case.h"
 #include "ios/testing/earl_grey/disabled_test_macros.h"
+#import "ios/testing/earl_grey/disabled_test_macros.h"
 #import "ios/web/public/test/earl_grey/web_view_matchers.h"
+#include "ios/web/public/test/element_selector.h"
 #include "net/test/embedded_test_server/http_request.h"
 #include "net/test/embedded_test_server/http_response.h"
 #include "ui/base/l10n/l10n_util_mac.h"
@@ -33,7 +37,12 @@
 #error "This file requires ARC support."
 #endif
 
+using web::test::ElementSelector;
+
 namespace {
+
+using chrome_test_util::BackButton;
+using chrome_test_util::ForwardButton;
 
 const char kPageURL[] = "/test-page.html";
 const char kPageURL2[] = "/test-page-2.html";
@@ -41,6 +50,13 @@ const char kPageURL3[] = "/test-page-3.html";
 const char kLinkID[] = "linkID";
 const char kTextID[] = "textID";
 const char kPageLoadedString[] = "Page loaded!";
+
+// Defines the visibility of an element, in relation to the toolbar.
+typedef NS_ENUM(NSInteger, ButtonVisibility) {
+  ButtonVisibilityNone,
+  ButtonVisibilityPrimary,
+  ButtonVisibilitySecondary
+};
 
 // Provides responses for redirect and changed window location URLs.
 std::unique_ptr<net::test_server::HttpResponse> StandardResponse(
@@ -77,6 +93,34 @@ id<GREYMatcher> ShareButton() {
                     grey_sufficientlyVisible(), nil);
 }
 
+// Returns a matcher for the reload button.
+id<GREYMatcher> ReloadButton() {
+  return chrome_test_util::ButtonWithAccessibilityLabelId(
+      IDS_IOS_ACCNAME_RELOAD);
+}
+
+// Returns a matcher for the tools menu button.
+id<GREYMatcher> ToolsMenuButton() {
+  return chrome_test_util::ButtonWithAccessibilityLabelId(
+      IDS_IOS_TOOLBAR_SETTINGS);
+}
+
+// Returns a matcher for the cancel button.
+id<GREYMatcher> CancelButton() {
+  return chrome_test_util::ButtonWithAccessibilityLabelId(IDS_CANCEL);
+}
+
+// Returns a matcher for the search button.
+id<GREYMatcher> SearchButton() {
+  return grey_accessibilityID(kToolbarOmniboxButtonIdentifier);
+}
+
+// Returns a matcher for the tab grid button.
+id<GREYMatcher> TabGridButton() {
+  return chrome_test_util::ButtonWithAccessibilityLabelId(
+      IDS_IOS_TOOLBAR_SHOW_TABS);
+}
+
 // Returns a matcher for a UIResponder object being first responder.
 id<GREYMatcher> firstResponder() {
   MatchesBlock matches = ^BOOL(UIResponder* responder) {
@@ -105,6 +149,41 @@ id<GREYMatcher> VisibleInSecondaryToolbar() {
   return grey_allOf(
       grey_ancestor(grey_kindOfClass([SecondaryToolbarView class])),
       grey_sufficientlyVisible(), nil);
+}
+
+// Checks that the element designated by |matcher| is |visible| in the primary
+// toolbar.
+void CheckVisibleInPrimaryToolbar(id<GREYMatcher> matcher, BOOL visible) {
+  id<GREYMatcher> assertionMatcher = visible ? grey_notNil() : grey_nil();
+  [[EarlGrey
+      selectElementWithMatcher:grey_allOf(matcher, VisibleInPrimaryToolbar(),
+                                          nil)]
+      assertWithMatcher:assertionMatcher];
+}
+
+// Checks that the element designed by |matcher| is |visible| in the secondary
+// toolbar.
+void CheckVisibleInSecondaryToolbar(id<GREYMatcher> matcher, BOOL visible) {
+  id<GREYMatcher> assertionMatcher = visible ? grey_notNil() : grey_nil();
+  [[EarlGrey
+      selectElementWithMatcher:grey_allOf(matcher, VisibleInSecondaryToolbar(),
+                                          nil)]
+      assertWithMatcher:assertionMatcher];
+}
+
+// Returns a matcher for a UIControl object being spotlighted.
+id<GREYMatcher> Spotlighted() {
+  MatchesBlock matches = ^BOOL(UIControl* control) {
+    return control.state & ControlStateSpotlighted;
+  };
+  DescribeToBlock describe = ^void(id<GREYDescription> description) {
+    [description appendText:@"is spotlighted"];
+  };
+  return grey_allOf(
+      grey_kindOfClass([UIControl class]),
+      [[GREYElementMatcherBlock alloc] initWithMatchesBlock:matches
+                                           descriptionBlock:describe],
+      nil);
 }
 
 bool AddInfobar() {
@@ -143,97 +222,178 @@ UITraitCollection* RotateOrChangeTraitCollection(
   return secondTraitCollection;
 }
 
-// Check that the button displayed are the ones which should be displayed in the
-// environment described by |traitCollection|.
-void CheckToolbarButtonVisibility(UITraitCollection* traitCollection) {
-  if (traitCollection.horizontalSizeClass == UIUserInterfaceSizeClassCompact &&
-      traitCollection.verticalSizeClass != UIUserInterfaceSizeClassCompact) {
-    // Split toolbar.
+// Checks that the element associated with |matcher| is visible in the toolbar
+// defined by |visibility|.
+void CheckVisibilityInToolbar(id<GREYMatcher> matcher,
+                              ButtonVisibility visibility) {
+  CheckVisibleInPrimaryToolbar(matcher, visibility == ButtonVisibilityPrimary);
+  CheckVisibleInSecondaryToolbar(matcher,
+                                 visibility == ButtonVisibilitySecondary);
+}
 
-    // Test the visibility of the primary toolbar buttons.
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-        assertWithMatcher:VisibleInPrimaryToolbar()];
-
-    // Test the visibility of the secondary toolbar buttons.
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::BackButton()]
-        assertWithMatcher:VisibleInSecondaryToolbar()];
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::ForwardButton()]
-        assertWithMatcher:VisibleInSecondaryToolbar()];
-    [[EarlGrey selectElementWithMatcher:grey_accessibilityID(
-                                            kToolbarOmniboxButtonIdentifier)]
-        assertWithMatcher:VisibleInSecondaryToolbar()];
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                            ButtonWithAccessibilityLabelId(
-                                                IDS_IOS_TOOLBAR_SHOW_TABS)]
-        assertWithMatcher:VisibleInSecondaryToolbar()];
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                            ButtonWithAccessibilityLabelId(
-                                                IDS_IOS_TOOLBAR_SETTINGS)]
-        assertWithMatcher:VisibleInSecondaryToolbar()];
+// Checks the visibility of the different part of the omnibox, depending on it
+// being focused or not.
+void CheckOmniboxVisibility(BOOL omniboxFocused) {
+  // Check omnibox/steady view visibility.
+  if (omniboxFocused) {
+    // Check that the omnibox is visible.
+    CheckVisibleInPrimaryToolbar(chrome_test_util::Omnibox(), YES);
   } else {
-    // Unsplit toolbar.
-
-    // Test the visibility of the primary toolbar buttons.
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::BackButton()]
-        assertWithMatcher:VisibleInPrimaryToolbar()];
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::ForwardButton()]
-        assertWithMatcher:VisibleInPrimaryToolbar()];
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-        assertWithMatcher:VisibleInPrimaryToolbar()];
-    [[EarlGrey selectElementWithMatcher:ShareButton()]
-        assertWithMatcher:VisibleInPrimaryToolbar()];
-    [[EarlGrey selectElementWithMatcher:BookmarkButton()]
-        assertWithMatcher:VisibleInPrimaryToolbar()];
-    [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                            ButtonWithAccessibilityLabelId(
-                                                IDS_IOS_TOOLBAR_SETTINGS)]
-        assertWithMatcher:VisibleInPrimaryToolbar()];
-
-    // The secondary toolbar is not visible.
-    [[EarlGrey
-        selectElementWithMatcher:grey_kindOfClass([SecondaryToolbarView class])]
-        assertWithMatcher:grey_not(grey_sufficientlyVisible())];
-
-    if (traitCollection.verticalSizeClass == UIUserInterfaceSizeClassCompact) {
-      // Unsplit in compact height, the stack view button is visible.
-      [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                              ButtonWithAccessibilityLabelId(
-                                                  IDS_IOS_TOOLBAR_SHOW_TABS)]
-          assertWithMatcher:VisibleInPrimaryToolbar()];
+    // Check that location view is visible.
+    if (IsRefreshLocationBarEnabled()) {
+      CheckVisibleInPrimaryToolbar(chrome_test_util::DefocusedLocationView(),
+                                   YES);
     } else {
-      // Unsplit in Regular x Regular, the reload/stop button is visible.
-      [[EarlGrey selectElementWithMatcher:chrome_test_util::
-                                              ButtonWithAccessibilityLabelId(
-                                                  IDS_IOS_ACCNAME_RELOAD)]
-          assertWithMatcher:VisibleInPrimaryToolbar()];
+      CheckVisibleInPrimaryToolbar(chrome_test_util::Omnibox(), YES);
     }
   }
 }
 
-// Check that the button displayed are the ones which should be displayed when
-// the omnibox is focused, in the environment described by |traitCollection|.
-void CheckToolbarButtonVisibilityWithOmniboxFocused(
-    UITraitCollection* traitCollection) {
+// Check the visibility of the buttons if the device is an iPhone in portrait or
+// an iPad in multitasking.
+void CheckButtonsVisibilityIPhonePortrait(BOOL omniboxFocused) {
+  // Check that the cancel button visibility.
+  if (omniboxFocused) {
+    CheckVisibilityInToolbar(CancelButton(), ButtonVisibilityPrimary);
+
+    CheckVisibilityInToolbar(ShareButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(ReloadButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(BookmarkButton(), ButtonVisibilityNone);
+
+    // Those buttons are hidden by the keyboard.
+    CheckVisibilityInToolbar(BackButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(ForwardButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(SearchButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(TabGridButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(ToolsMenuButton(), ButtonVisibilityNone);
+  } else {
+    CheckVisibilityInToolbar(CancelButton(), ButtonVisibilityNone);
+
+    CheckVisibilityInToolbar(ShareButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(ReloadButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(BookmarkButton(), ButtonVisibilityNone);
+
+    CheckVisibilityInToolbar(BackButton(), ButtonVisibilitySecondary);
+    CheckVisibilityInToolbar(ForwardButton(), ButtonVisibilitySecondary);
+    CheckVisibilityInToolbar(SearchButton(), ButtonVisibilitySecondary);
+    CheckVisibilityInToolbar(TabGridButton(), ButtonVisibilitySecondary);
+    CheckVisibilityInToolbar(ToolsMenuButton(), ButtonVisibilitySecondary);
+  }
+}
+
+// Check the visibility of the buttons if the device is an iPhone in landscape.
+void CheckButtonsVisibilityIPhoneLandscape(BOOL omniboxFocused) {
+  if (omniboxFocused) {
+    // Omnibox focused in iPhone landscape.
+    CheckVisibilityInToolbar(CancelButton(), ButtonVisibilityPrimary);
+
+    CheckVisibilityInToolbar(ShareButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(ReloadButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(BookmarkButton(), ButtonVisibilityNone);
+
+    CheckVisibilityInToolbar(BackButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(ForwardButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(SearchButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(TabGridButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(ToolsMenuButton(), ButtonVisibilityNone);
+  } else {
+    CheckVisibilityInToolbar(CancelButton(), ButtonVisibilityNone);
+
+    CheckVisibilityInToolbar(ShareButton(), ButtonVisibilityPrimary);
+    CheckVisibilityInToolbar(ReloadButton(), ButtonVisibilityPrimary);
+    CheckVisibilityInToolbar(BookmarkButton(), ButtonVisibilityNone);
+
+    CheckVisibilityInToolbar(BackButton(), ButtonVisibilityPrimary);
+    CheckVisibilityInToolbar(ForwardButton(), ButtonVisibilityPrimary);
+    CheckVisibilityInToolbar(SearchButton(), ButtonVisibilityNone);
+    CheckVisibilityInToolbar(TabGridButton(), ButtonVisibilityPrimary);
+    CheckVisibilityInToolbar(ToolsMenuButton(), ButtonVisibilityPrimary);
+  }
+  // The secondary toolbar is not visible.
+  [[EarlGrey
+      selectElementWithMatcher:grey_kindOfClass([SecondaryToolbarView class])]
+      assertWithMatcher:grey_not(grey_sufficientlyVisible())];
+}
+
+// Check the visibility of the buttons if the device is an iPad not in
+// multitasking.
+void CheckButtonsVisibilityIPad() {
+  CheckVisibilityInToolbar(CancelButton(), ButtonVisibilityNone);
+
+  CheckVisibilityInToolbar(ShareButton(), ButtonVisibilityPrimary);
+  CheckVisibilityInToolbar(ReloadButton(), ButtonVisibilityPrimary);
+  CheckVisibilityInToolbar(BookmarkButton(), ButtonVisibilityPrimary);
+
+  CheckVisibilityInToolbar(BackButton(), ButtonVisibilityPrimary);
+  CheckVisibilityInToolbar(ForwardButton(), ButtonVisibilityPrimary);
+  CheckVisibilityInToolbar(SearchButton(), ButtonVisibilityNone);
+  CheckVisibilityInToolbar(TabGridButton(), ButtonVisibilityNone);
+  CheckVisibilityInToolbar(ToolsMenuButton(), ButtonVisibilityPrimary);
+
+  // The secondary toolbar is not visible.
+  [[EarlGrey
+      selectElementWithMatcher:grey_kindOfClass([SecondaryToolbarView class])]
+      assertWithMatcher:grey_not(grey_sufficientlyVisible())];
+}
+
+// Check that the button displayed are the ones which should be displayed in the
+// environment described by |traitCollection| and with |omniboxFocused|.
+void CheckToolbarButtonVisibility(UITraitCollection* traitCollection,
+                                  BOOL omniboxFocused) {
+  CheckOmniboxVisibility(omniboxFocused);
+
+  // Button checks.
   if (traitCollection.horizontalSizeClass == UIUserInterfaceSizeClassCompact &&
       traitCollection.verticalSizeClass != UIUserInterfaceSizeClassCompact) {
-    // Check that the cancel button is shown.
-    [[EarlGrey selectElementWithMatcher:
-                   grey_allOf(chrome_test_util::ButtonWithAccessibilityLabelId(
-                                  IDS_CANCEL),
-                              VisibleInPrimaryToolbar(), nil)]
-        assertWithMatcher:grey_notNil()];
+    CheckButtonsVisibilityIPhonePortrait(omniboxFocused);
+  } else if (traitCollection.verticalSizeClass ==
+             UIUserInterfaceSizeClassCompact) {
+    CheckButtonsVisibilityIPhoneLandscape(omniboxFocused);
   } else {
-    // Check that the cancel button is hidden.
-    [[EarlGrey
-        selectElementWithMatcher:
-            grey_allOf(
-                chrome_test_util::ButtonWithAccessibilityLabelId(IDS_CANCEL),
-                VisibleInPrimaryToolbar(), nil)] assertWithMatcher:grey_nil()];
-
-    // The toolbar should be in the contracted state, which is the same as the
-    // non-focused omnibox state.
-    CheckToolbarButtonVisibility(traitCollection);
+    CheckButtonsVisibilityIPad();
   }
+}
+
+// Check that current URL contains a given string by tapping on the location
+// view to focus the omnibox where the full URL can be seen, then comparing
+// the strings, and finally defocusing the omnibox.
+void CheckCurrentURLContainsString(std::string string) {
+  if (IsRefreshLocationBarEnabled()) {
+    [[EarlGrey
+        selectElementWithMatcher:chrome_test_util::DefocusedLocationView()]
+        performAction:grey_tap()];
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
+        assertWithMatcher:chrome_test_util::OmniboxContainingText(string)];
+
+    if (IsIPadIdiom()) {
+      // Defocus omnibox by tapping the typing shield.
+      [[EarlGrey
+          selectElementWithMatcher:grey_accessibilityID(@"Typing Shield")]
+          performAction:grey_tap()];
+
+    } else {
+      [[EarlGrey
+          selectElementWithMatcher:
+              grey_accessibilityID(kToolbarCancelOmniboxEditButtonIdentifier)]
+          performAction:grey_tap()];
+    }
+  } else {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
+        assertWithMatcher:chrome_test_util::OmniboxContainingText(string)];
+  }
+}
+
+void FocusOmnibox() {
+  if (IsRefreshLocationBarEnabled()) {
+    [[EarlGrey
+        selectElementWithMatcher:chrome_test_util::DefocusedLocationView()]
+        performAction:grey_tap()];
+  } else {
+    [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
+        performAction:grey_tap()];
+  }
+  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
+      assertWithMatcher:firstResponder()];
 }
 
 }  // namespace
@@ -247,12 +407,12 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
 
 @implementation AdaptiveToolbarTestCase
 
-// Tests that bookmarks button is selected for the bookmarked pages.
+// Tests that bookmarks button is spotlighted for the bookmarked pages.
 - (void)testBookmarkButton {
-  if (!IsIPadIdiom()) {
-    // If this test is run on an iPhone, rotate it to have the unsplit toolbar.
-    [EarlGrey rotateDeviceToOrientation:UIDeviceOrientationLandscapeLeft
-                             errorOrNil:nil];
+  if (!IsRegularXRegularSizeClass()) {
+    EARL_GREY_TEST_SKIPPED(
+        @"The bookmark button is only visible on Regular x Regular size "
+        @"classes.");
   }
 
   // Setup the bookmarks.
@@ -265,36 +425,32 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
       base::BindRepeating(&StandardResponse));
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
 
-  // Navigate to a page and check the bookmark button is not selected.
+  // Navigate to a page and check the bookmark button is not spotlighted.
   [ChromeEarlGrey loadURL:self.testServer->GetURL(kPageURL)];
   [[EarlGrey selectElementWithMatcher:BookmarkButton()]
-      assertWithMatcher:grey_not(grey_selected())];
+      assertWithMatcher:grey_allOf(grey_kindOfClass([UIControl class]),
+                                   grey_not(Spotlighted()), nil)];
 
   // Bookmark the page.
   [[EarlGrey selectElementWithMatcher:BookmarkButton()]
       performAction:grey_tap()];
   [[EarlGrey selectElementWithMatcher:BookmarkButton()]
-      assertWithMatcher:grey_selected()];
+      assertWithMatcher:Spotlighted()];
 
   // Navigate to a different page and check the button is not selected.
   [ChromeEarlGrey loadURL:self.testServer->GetURL(kPageURL2)];
   [[EarlGrey selectElementWithMatcher:BookmarkButton()]
-      assertWithMatcher:grey_not(grey_selected())];
+      assertWithMatcher:grey_allOf(grey_kindOfClass([UIControl class]),
+                                   grey_not(Spotlighted()), nil)];
 
   // Navigate back to the bookmarked page and check the button.
   [ChromeEarlGrey loadURL:self.testServer->GetURL(kPageURL)];
   [[EarlGrey selectElementWithMatcher:BookmarkButton()]
-      assertWithMatcher:grey_selected()];
+      assertWithMatcher:Spotlighted()];
 
   // Clean the bookmarks
   GREYAssert(chrome_test_util::ClearBookmarks(),
              @"Not all bookmarks were removed.");
-
-  if (!IsIPadIdiom()) {
-    // Cancel rotation.
-    [EarlGrey rotateDeviceToOrientation:UIDeviceOrientationPortrait
-                             errorOrNil:nil];
-  }
 }
 
 // Tests that tapping a button cancels the focus on the omnibox.
@@ -306,11 +462,7 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
   // Navigate to a page to enable the back button.
   [ChromeEarlGrey loadURL:GURL("chrome://version")];
 
-  // Focus the omnibox.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-      performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-      assertWithMatcher:firstResponder()];
+  FocusOmnibox();
 
   // Tap the back button and check the omnibox is unfocused.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::BackButton()]
@@ -322,6 +474,11 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
 // Check the button visibility of the toolbar when the omnibox is focused from a
 // different orientation than the default one.
 - (void)testFocusOmniboxFromOtherOrientation {
+  // TODO(crbug.com/854847) Re-enable these tests once EG bug is fixed.
+  if (base::ios::IsRunningOnIOS12OrLater()) {
+    EARL_GREY_TEST_DISABLED(@"Test disabled on iOS 12.");
+  }
+
   // Load a page to have the toolbar visible (hidden on NTP).
   [ChromeEarlGrey loadURL:GURL("chrome://version")];
 
@@ -335,12 +492,10 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
   UITraitCollection* secondTraitCollection =
       RotateOrChangeTraitCollection(originalTraitCollection, topViewController);
 
-  // Focus the omnibox.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-      performAction:grey_tap()];
+  FocusOmnibox();
 
   // Check the visiblity when focusing the omnibox.
-  CheckToolbarButtonVisibilityWithOmniboxFocused(secondTraitCollection);
+  CheckToolbarButtonVisibility(secondTraitCollection, YES);
 
   // Revert the orientation/trait collection to the original.
   if (IsIPadIdiom()) {
@@ -356,18 +511,20 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
   }
 
   // Check the visiblity after a rotation.
-  CheckToolbarButtonVisibilityWithOmniboxFocused(originalTraitCollection);
+  CheckToolbarButtonVisibility(originalTraitCollection, YES);
 }
 
 // Check the button visibility of the toolbar when the omnibox is focused from
 // the default orientation.
 - (void)testFocusOmniboxFromPortrait {
+  // TODO(crbug.com/854847) Re-enable these tests once EG bug is fixed.
+  if (base::ios::IsRunningOnIOS12OrLater()) {
+    EARL_GREY_TEST_DISABLED(@"Test disabled on iOS 12.");
+  }
   // Load a page to have the toolbar visible (hidden on NTP).
   [ChromeEarlGrey loadURL:GURL("chrome://version")];
 
-  // Focus the omnibox.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-      performAction:grey_tap()];
+  FocusOmnibox();
 
   // Get the original trait collection.
   UIViewController* topViewController =
@@ -376,14 +533,14 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
       topViewController.traitCollection;
 
   // Check the button visibility.
-  CheckToolbarButtonVisibilityWithOmniboxFocused(originalTraitCollection);
+  CheckToolbarButtonVisibility(originalTraitCollection, YES);
 
   // Change the orientation or the trait collection.
   UITraitCollection* secondTraitCollection =
       RotateOrChangeTraitCollection(originalTraitCollection, topViewController);
 
   // Check the visiblity after a size class change.
-  CheckToolbarButtonVisibilityWithOmniboxFocused(secondTraitCollection);
+  CheckToolbarButtonVisibility(secondTraitCollection, YES);
 
   if (IsIPadIdiom()) {
     // Remove the override.
@@ -396,6 +553,10 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
     [EarlGrey rotateDeviceToOrientation:UIDeviceOrientationPortrait
                              errorOrNil:nil];
   }
+
+  // Check the visiblity after a size class change. This should let the trait
+  // collection change come into effect.
+  CheckToolbarButtonVisibility(originalTraitCollection, YES);
 }
 
 // Tests the interactions between the infobars and the bottom toolbar during
@@ -412,7 +573,7 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
       base::BindRepeating(&TallPageResponse));
   GREYAssertTrue(self.testServer->Start(), @"Test server failed to start.");
 
-  // Navigate to a page and check the bookmark button is not selected.
+  // Navigate to a page.
   [ChromeEarlGrey loadURL:self.testServer->GetURL(kPageURL)];
 
   GREYAssert(AddInfobar(), @"Failed to add infobar.");
@@ -439,7 +600,7 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
   GREYElementMatcherBlock* positionMatcher = [GREYElementMatcherBlock
       matcherWithMatchesBlock:^BOOL(UIView* element) {
         UILayoutGuide* guide =
-            [NamedGuide guideWithName:kSecondaryToolbar view:element];
+            [NamedGuide guideWithName:kSecondaryToolbarGuide view:element];
         CGFloat toolbarTopPoint = CGRectGetMinY(
             [window convertRect:guide.layoutFrame fromView:guide.owningView]);
         CGFloat buttonBottomPoint = CGRectGetMaxY(
@@ -503,14 +664,12 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
       assertWithMatcher:grey_not(grey_enabled())];
 
   // Check the navigation to the second page occurred.
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-      assertWithMatcher:chrome_test_util::OmniboxContainingText(kPageURL2)];
+  CheckCurrentURLContainsString(kPageURL2);
 
   // Go back.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::BackButton()]
       performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-      assertWithMatcher:chrome_test_util::OmniboxContainingText(kPageURL)];
+  CheckCurrentURLContainsString(kPageURL);
 
   // Check the buttons status.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::BackButton()]
@@ -521,8 +680,7 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
   // Go forward.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::ForwardButton()]
       performAction:grey_tap()];
-  [[EarlGrey selectElementWithMatcher:chrome_test_util::Omnibox()]
-      assertWithMatcher:chrome_test_util::OmniboxContainingText(kPageURL2)];
+  CheckCurrentURLContainsString(kPageURL2);
 
   // Check the buttons status.
   [[EarlGrey selectElementWithMatcher:chrome_test_util::BackButton()]
@@ -535,7 +693,8 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
       selectElementWithMatcher:web::WebViewInWebState(
                                    chrome_test_util::GetCurrentWebState())]
       performAction:chrome_test_util::LongPressElementForContextMenu(
-                        kLinkID, true /* menu should appear */)];
+                        ElementSelector::ElementSelectorId(kLinkID),
+                        true /* menu should appear */)];
   [[EarlGrey selectElementWithMatcher:
                  chrome_test_util::StaticTextWithAccessibilityLabelId(
                      IDS_IOS_CONTENT_CONTEXT_OPENLINKNEWINCOGNITOTAB)]
@@ -618,14 +777,14 @@ void CheckToolbarButtonVisibilityWithOmniboxFocused(
       topViewController.traitCollection;
 
   // Check the button visibility.
-  CheckToolbarButtonVisibility(originalTraitCollection);
+  CheckToolbarButtonVisibility(originalTraitCollection, NO);
 
   // Change the orientation or the trait collection.
   UITraitCollection* secondTraitCollection =
       RotateOrChangeTraitCollection(originalTraitCollection, topViewController);
 
   // Check the visiblity after a size class change.
-  CheckToolbarButtonVisibility(secondTraitCollection);
+  CheckToolbarButtonVisibility(secondTraitCollection, NO);
 
   if (IsIPadIdiom()) {
     // Remove the override.

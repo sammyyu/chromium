@@ -7,7 +7,7 @@
 
 #include "ui/gl/gl_image_io_surface.h"
 
-#include <egl/EGL.h>
+#include <EGL/egl.h>
 
 namespace gl {
 
@@ -22,6 +22,7 @@ class GL_EXPORT GLImageIOSurfaceEGL : public GLImageIOSurface {
  protected:
   ~GLImageIOSurfaceEGL() override;
   bool BindTexImageImpl(unsigned internalformat) override;
+  bool CopyTexImage(unsigned target) override;
 
  private:
   EGLDisplay display_;

@@ -8,6 +8,7 @@
 #include <map>
 
 #include "ash/message_center/message_center_button_bar.h"
+#include "ash/message_center/message_center_scroll_bar.h"
 #include "ash/message_center/message_center_style.h"
 #include "ash/message_center/notifier_settings_view.h"
 #include "ash/public/cpp/ash_features.h"
@@ -18,7 +19,6 @@
 #include "ash/strings/grit/ash_strings.h"
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "base/message_loop/message_loop.h"
 #include "base/stl_util.h"
 #include "build/build_config.h"
 #include "ui/accessibility/ax_node_data.h"
@@ -33,7 +33,6 @@
 #include "ui/message_center/message_center.h"
 #include "ui/message_center/message_center_types.h"
 #include "ui/message_center/public/cpp/message_center_constants.h"
-#include "ui/message_center/ui_controller.h"
 #include "ui/message_center/views/message_view.h"
 #include "ui/message_center/views/message_view_factory.h"
 #include "ui/message_center/views/notification_control_buttons_view.h"
@@ -185,11 +184,9 @@ class ScrollShadowView : public views::View {
 
 MessageCenterView::MessageCenterView(
     MessageCenter* message_center,
-    message_center::UiController* ui_controller,
     int max_height,
     bool initially_settings_visible)
     : message_center_(message_center),
-      ui_controller_(ui_controller),
       settings_visible_(initially_settings_visible),
       is_locked_(Shell::Get()->session_controller()->IsScreenLocked()) {
   if (is_locked_ && !features::IsLockScreenNotificationsEnabled())
@@ -216,10 +213,10 @@ MessageCenterView::MessageCenterView(
   // set the default opaque background color.
   scroller_->SetBackgroundColor(SK_ColorTRANSPARENT);
   scroller_->ClipHeightTo(kMinScrollViewHeight, max_scroll_view_height);
-  scroller_->SetVerticalScrollBar(new views::OverlayScrollBar(false));
-  scroller_->SetHorizontalScrollBar(new views::OverlayScrollBar(true));
+  scroller_->SetVerticalScrollBar(new MessageCenterScrollBar());
 
   message_list_view_.reset(new MessageListView());
+  message_list_view_->SetBorderPadding();
   message_list_view_->set_scroller(scroller_);
   message_list_view_->set_owned_by_client();
   message_list_view_->AddObserver(this);
@@ -236,6 +233,8 @@ MessageCenterView::MessageCenterView(
   scroller_->SetContents(scroller_contents);
 
   settings_view_ = new NotifierSettingsView();
+  settings_view_->SetBackground(
+      views::CreateSolidBackground(message_center_style::kBackgroundColor));
 
   no_notifications_view_ = CreateEmptyNotificationView();
 
@@ -248,9 +247,6 @@ MessageCenterView::MessageCenterView(
   AddChildView(scroller_shadow_);
   AddChildView(settings_view_);
   AddChildView(button_bar_);
-
-  if (switches::IsSidebarEnabled())
-    MessageView::SetSidebarEnabled();
 }
 
 MessageCenterView::~MessageCenterView() {
@@ -683,7 +679,8 @@ void MessageCenterView::EnableCloseAllIfAppropriate() {
     bool no_closable_views = true;
     size_t count = message_list_view_->GetNotificationCount();
     for (size_t i = 0; i < count; ++i) {
-      if (!message_list_view_->GetNotificationAt(i)->GetPinned()) {
+      if (message_list_view_->GetNotificationAt(i)->GetMode() ==
+          MessageView::Mode::NORMAL) {
         no_closable_views = false;
         break;
       }
@@ -707,11 +704,11 @@ void MessageCenterView::UpdateNotification(const std::string& id) {
   if (notification) {
     int old_width = view->width();
     int old_height = view->height();
-    bool old_pinned = view->GetPinned();
+    MessageView::Mode old_mode = view->GetMode();
     message_list_view_->UpdateNotification(view, *notification);
     if (view->GetHeightForWidth(old_width) != old_height) {
       Update(true /* animate */);
-    } else if (view->GetPinned() != old_pinned) {
+    } else if (view->GetMode() != old_mode) {
       // Animate flag is false, since the pinned flag transition doesn't need
       // animation.
       Update(false /* animate */);

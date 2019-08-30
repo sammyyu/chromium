@@ -10,20 +10,18 @@ component("cpp") {
   sources = [
     "cors/cors.cc",
     "cors/cors.h",
-    "cors/cors_legacy.cc",
-    "cors/cors_legacy.h",
-    "cors/cors_url_loader.cc",
-    "cors/cors_url_loader.h",
-    "cors/cors_url_loader_factory.cc",
-    "cors/cors_url_loader_factory.h",
     "cors/preflight_cache.cc",
     "cors/preflight_cache.h",
     "cors/preflight_result.cc",
     "cors/preflight_result.h",
+    "cross_thread_shared_url_loader_factory_info.cc",
+    "cross_thread_shared_url_loader_factory_info.h",
     "features.cc",
     "features.h",
     "net_adapters.cc",
     "net_adapters.h",
+    "network_quality_tracker.cc",
+    "network_quality_tracker.h",
     "network_switches.cc",
     "network_switches.h",
     "shared_url_loader_factory.cc",
@@ -31,7 +29,28 @@ component("cpp") {
     "simple_url_loader.cc",
     "simple_url_loader.h",
     "simple_url_loader_stream_consumer.h",
+    "weak_wrapper_shared_url_loader_factory.cc",
+    "weak_wrapper_shared_url_loader_factory.h",
+    "wrapper_shared_url_loader_factory.cc",
+    "wrapper_shared_url_loader_factory.h",
   ]
+
+  if (!is_ios) {
+    sources += [
+      "server/http_connection.cc",
+      "server/http_connection.h",
+      "server/http_server.cc",
+      "server/http_server.h",
+      "server/http_server_request_info.cc",
+      "server/http_server_request_info.h",
+      "server/http_server_response_info.cc",
+      "server/http_server_response_info.h",
+      "server/web_socket.cc",
+      "server/web_socket.h",
+      "server/web_socket_encoder.cc",
+      "server/web_socket_encoder.h",
+    ]
+  }
 
   public_deps = [
     ":cpp_base",
@@ -44,7 +63,6 @@ component("cpp") {
     "//base",
     "//components/prefs",
     "//ipc",
-    "//mojo/common",
     "//services/proxy_resolver/public/mojom",
   ]
 
@@ -63,8 +81,10 @@ component("cpp_base") {
     "http_raw_request_response_info.h",
     "mutable_network_traffic_annotation_tag_mojom_traits.h",
     "mutable_partial_network_traffic_annotation_tag_mojom_traits.h",
-    "network_param_ipc_traits.cc",
-    "network_param_ipc_traits.h",
+    "net_ipc_param_traits.cc",
+    "net_ipc_param_traits.h",
+    "network_ipc_param_traits.cc",
+    "network_ipc_param_traits.h",
     "proxy_config_mojom_traits.cc",
     "proxy_config_mojom_traits.h",
     "proxy_config_with_annotation_mojom_traits.cc",
@@ -91,6 +111,7 @@ component("cpp_base") {
   deps = [
     "//base",
     "//ipc",
+    "//mojo/public/mojom/base",
     "//net",
     "//services/network/public/mojom:mojom_shared",
   ]
@@ -113,12 +134,20 @@ source_set("tests") {
     "cors/cors_unittest.cc",
     "cors/preflight_cache_unittest.cc",
     "cors/preflight_result_unittest.cc",
+    "cross_thread_shared_url_loader_factory_info_unittest.cc",
+    "digitally_signed_mojom_traits_unittest.cc",
     "mutable_network_traffic_annotation_tag_mojom_traits_unittest.cc",
     "mutable_partial_network_traffic_annotation_tag_mojom_traits_unittest.cc",
     "network_mojom_traits_unittest.cc",
+    "network_quality_tracker_unittest.cc",
     "proxy_config_mojom_traits_unittest.cc",
+    "signed_tree_head_mojom_traits_unittest.cc",
     "simple_url_loader_unittest.cc",
   ]
+
+  if (!is_ios) {
+    sources += [ "server/http_server_unittest.cc" ]
+  }
   deps = [
     ":cpp",
     ":test_interfaces",
@@ -128,6 +157,7 @@ source_set("tests") {
     "//net",
     "//net:test_support",
     "//services/network:network_service",
+    "//services/network:test_support",
     "//testing/gtest",
   ]
 }

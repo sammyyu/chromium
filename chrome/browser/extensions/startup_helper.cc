@@ -8,7 +8,6 @@
 #include "base/bind_helpers.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/single_thread_task_runner.h"
 #include "base/strings/stringprintf.h"
@@ -55,15 +54,16 @@ void StartupHelper::OnPackFailure(const std::string& error_message,
 }
 
 bool StartupHelper::PackExtension(const base::CommandLine& cmd_line) {
-  if (!cmd_line.HasSwitch(switches::kPackExtension))
+  if (!cmd_line.HasSwitch(::switches::kPackExtension))
     return false;
 
   // Input Paths.
   base::FilePath src_dir =
-      cmd_line.GetSwitchValuePath(switches::kPackExtension);
+      cmd_line.GetSwitchValuePath(::switches::kPackExtension);
   base::FilePath private_key_path;
-  if (cmd_line.HasSwitch(switches::kPackExtensionKey)) {
-    private_key_path = cmd_line.GetSwitchValuePath(switches::kPackExtensionKey);
+  if (cmd_line.HasSwitch(::switches::kPackExtensionKey)) {
+    private_key_path =
+        cmd_line.GetSwitchValuePath(::switches::kPackExtensionKey);
   }
 
   // Launch a job to perform the packing on the blocking thread.  Ignore
@@ -166,10 +166,10 @@ class ValidateCrxHelper : public SandboxedUnpackerClient {
 bool StartupHelper::ValidateCrx(const base::CommandLine& cmd_line,
                                 std::string* error) {
   CHECK(error);
-  base::FilePath path = cmd_line.GetSwitchValuePath(switches::kValidateCrx);
+  base::FilePath path = cmd_line.GetSwitchValuePath(::switches::kValidateCrx);
   if (path.empty()) {
     *error = base::StringPrintf("Empty path passed for %s",
-                                switches::kValidateCrx);
+                                ::switches::kValidateCrx);
     return false;
   }
   base::ScopedTempDir temp_dir;

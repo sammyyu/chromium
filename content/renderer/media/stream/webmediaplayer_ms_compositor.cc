@@ -6,9 +6,11 @@
 
 #include <stdint.h>
 #include <string>
+#include <utility>
 
 #include "base/command_line.h"
 #include "base/hash.h"
+#include "base/message_loop/message_loop_current.h"
 #include "base/single_thread_task_runner.h"
 #include "base/values.h"
 #include "cc/paint/skia_paint_canvas.h"
@@ -22,9 +24,9 @@
 #include "media/renderers/paint_canvas_video_renderer.h"
 #include "services/ui/public/cpp/gpu/context_provider_command_buffer.h"
 #include "skia/ext/platform_canvas.h"
-#include "third_party/WebKit/public/platform/WebMediaStream.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamSource.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
+#include "third_party/blink/public/platform/web_media_stream.h"
+#include "third_party/blink/public/platform/web_media_stream_source.h"
+#include "third_party/blink/public/platform/web_media_stream_track.h"
 #include "third_party/libyuv/include/libyuv/convert.h"
 #include "third_party/libyuv/include/libyuv/planar_functions.h"
 #include "third_party/libyuv/include/libyuv/video_common.h"
@@ -71,20 +73,21 @@ scoped_refptr<media::VideoFrame> CopyFrame(
     const bool result = bitmap.peekPixels(&pixmap);
     DCHECK(result) << "Error trying to access SkBitmap's pixels";
 
-    const uint32 source_pixel_format =
+    const uint32_t source_pixel_format =
         (kN32_SkColorType == kRGBA_8888_SkColorType) ? libyuv::FOURCC_ABGR
                                                      : libyuv::FOURCC_ARGB;
-    libyuv::ConvertToI420(
-        static_cast<const uint8*>(pixmap.addr(0, 0)), pixmap.computeByteSize(),
-        new_frame->visible_data(media::VideoFrame::kYPlane),
-        new_frame->stride(media::VideoFrame::kYPlane),
-        new_frame->visible_data(media::VideoFrame::kUPlane),
-        new_frame->stride(media::VideoFrame::kUPlane),
-        new_frame->visible_data(media::VideoFrame::kVPlane),
-        new_frame->stride(media::VideoFrame::kVPlane), 0 /* crop_x */,
-        0 /* crop_y */, pixmap.width(), pixmap.height(),
-        new_frame->visible_rect().width(), new_frame->visible_rect().height(),
-        libyuv::kRotate0, source_pixel_format);
+    libyuv::ConvertToI420(static_cast<const uint8_t*>(pixmap.addr(0, 0)),
+                          pixmap.computeByteSize(),
+                          new_frame->visible_data(media::VideoFrame::kYPlane),
+                          new_frame->stride(media::VideoFrame::kYPlane),
+                          new_frame->visible_data(media::VideoFrame::kUPlane),
+                          new_frame->stride(media::VideoFrame::kUPlane),
+                          new_frame->visible_data(media::VideoFrame::kVPlane),
+                          new_frame->stride(media::VideoFrame::kVPlane),
+                          0 /* crop_x */, 0 /* crop_y */, pixmap.width(),
+                          pixmap.height(), new_frame->visible_rect().width(),
+                          new_frame->visible_rect().height(), libyuv::kRotate0,
+                          source_pixel_format);
   } else {
     DCHECK(frame->IsMappable());
     DCHECK(frame->format() == media::PIXEL_FORMAT_I420A ||
@@ -133,16 +136,17 @@ WebMediaPlayerMSCompositor::WebMediaPlayerMSCompositor(
       io_task_runner_(io_task_runner),
       player_(player),
       video_frame_provider_client_(nullptr),
-      current_frame_used_by_compositor_(false),
+      current_frame_rendered_(false),
       last_render_length_(base::TimeDelta::FromSecondsD(1.0 / 60.0)),
       total_frame_count_(0),
       dropped_frame_count_(0),
-      stopped_(true) {
-  main_message_loop_ = base::MessageLoop::current();
+      stopped_(true),
+      render_started_(!stopped_) {
+  main_message_loop_ = base::MessageLoopCurrent::Get();
 
   blink::WebVector<blink::WebMediaStreamTrack> video_tracks;
   if (!web_stream.IsNull())
-    web_stream.VideoTracks(video_tracks);
+    video_tracks = web_stream.VideoTracks();
 
   const bool remote_video =
       video_tracks.size() && video_tracks[0].Source().Remote();
@@ -216,7 +220,7 @@ void WebMediaPlayerMSCompositor::EnqueueFrame(
 
   // With algorithm off, just let |current_frame_| hold the incoming |frame|.
   if (!rendering_frame_buffer_) {
-    SetCurrentFrame(frame);
+    RenderWithoutAlgorithm(std::move(frame));
     return;
   }
 
@@ -226,7 +230,7 @@ void WebMediaPlayerMSCompositor::EnqueueFrame(
                                     &end_of_stream) &&
       end_of_stream) {
     rendering_frame_buffer_.reset();
-    SetCurrentFrame(frame);
+    RenderWithoutAlgorithm(std::move(frame));
     return;
   }
 
@@ -240,7 +244,7 @@ void WebMediaPlayerMSCompositor::EnqueueFrame(
         << "Incoming VideoFrames have no REFERENCE_TIME, switching off super "
            "sophisticated rendering algorithm";
     rendering_frame_buffer_.reset();
-    SetCurrentFrame(frame);
+    RenderWithoutAlgorithm(std::move(frame));
     return;
   }
 
@@ -258,7 +262,7 @@ void WebMediaPlayerMSCompositor::EnqueueFrame(
     dropped_frame_count_ += rendering_frame_buffer_->frames_queued() - 1;
     rendering_frame_buffer_->Reset();
     timestamps_to_clock_times_.clear();
-    SetCurrentFrame(frame);
+    RenderWithoutAlgorithm(std::move(frame));
   }
 
   timestamps_to_clock_times_[frame->timestamp()] = render_time;
@@ -281,7 +285,7 @@ bool WebMediaPlayerMSCompositor::UpdateCurrentFrame(
   base::AutoLock auto_lock(current_frame_lock_);
 
   if (rendering_frame_buffer_)
-    Render(deadline_min, deadline_max);
+    RenderUsingAlgorithm(deadline_min, deadline_max);
 
   if (!current_frame_->metadata()->GetTimeTicks(
           media::VideoFrameMetadata::REFERENCE_TIME, &render_time)) {
@@ -292,8 +296,7 @@ bool WebMediaPlayerMSCompositor::UpdateCurrentFrame(
 
   TRACE_EVENT_END2("media", "UpdateCurrentFrame", "Ideal Render Instant",
                    render_time.ToInternalValue(), "Serial", serial_);
-
-  return !current_frame_used_by_compositor_;
+  return !current_frame_rendered_;
 }
 
 bool WebMediaPlayerMSCompositor::HasCurrentFrame() {
@@ -303,27 +306,39 @@ bool WebMediaPlayerMSCompositor::HasCurrentFrame() {
 
 scoped_refptr<media::VideoFrame> WebMediaPlayerMSCompositor::GetCurrentFrame() {
   DVLOG(3) << __func__;
+  DCHECK(compositor_task_runner_->BelongsToCurrentThread());
   base::AutoLock auto_lock(current_frame_lock_);
   TRACE_EVENT_INSTANT1("media", "WebMediaPlayerMSCompositor::GetCurrentFrame",
                        TRACE_EVENT_SCOPE_THREAD, "Timestamp",
                        current_frame_->timestamp().InMicroseconds());
-  current_frame_used_by_compositor_ = true;
+  if (!render_started_)
+    return nullptr;
+
   return current_frame_;
 }
 
 void WebMediaPlayerMSCompositor::PutCurrentFrame() {
   DVLOG(3) << __func__;
+  DCHECK(compositor_task_runner_->BelongsToCurrentThread());
+  current_frame_rendered_ = true;
 }
 
 scoped_refptr<media::VideoFrame>
 WebMediaPlayerMSCompositor::GetCurrentFrameWithoutUpdatingStatistics() {
   DVLOG(3) << __func__;
   base::AutoLock auto_lock(current_frame_lock_);
+  if (!render_started_)
+    return nullptr;
+
   return current_frame_;
 }
 
 void WebMediaPlayerMSCompositor::StartRendering() {
   DCHECK(thread_checker_.CalledOnValidThread());
+  {
+    base::AutoLock auto_lock(current_frame_lock_);
+    render_started_ = true;
+  }
   compositor_task_runner_->PostTask(
       FROM_HERE,
       base::BindOnce(&WebMediaPlayerMSCompositor::StartRenderingInternal,
@@ -369,10 +384,10 @@ bool WebMediaPlayerMSCompositor::MapTimestampsToRenderTimeTicks(
   return true;
 }
 
-void WebMediaPlayerMSCompositor::Render(base::TimeTicks deadline_min,
-                                        base::TimeTicks deadline_max) {
-  DCHECK(compositor_task_runner_->BelongsToCurrentThread() ||
-         thread_checker_.CalledOnValidThread());
+void WebMediaPlayerMSCompositor::RenderUsingAlgorithm(
+    base::TimeTicks deadline_min,
+    base::TimeTicks deadline_max) {
+  DCHECK(compositor_task_runner_->BelongsToCurrentThread());
   current_frame_lock_.AssertAcquired();
   last_deadline_max_ = deadline_max;
   last_render_length_ = deadline_max - deadline_min;
@@ -389,7 +404,7 @@ void WebMediaPlayerMSCompositor::Render(base::TimeTicks deadline_min,
   if (!frame || frame == current_frame_)
     return;
 
-  SetCurrentFrame(frame);
+  SetCurrentFrame(std::move(frame));
 
   const auto& end = timestamps_to_clock_times_.end();
   const auto& begin = timestamps_to_clock_times_.begin();
@@ -399,20 +414,41 @@ void WebMediaPlayerMSCompositor::Render(base::TimeTicks deadline_min,
   timestamps_to_clock_times_.erase(begin, iterator);
 }
 
+void WebMediaPlayerMSCompositor::RenderWithoutAlgorithm(
+    const scoped_refptr<media::VideoFrame>& frame) {
+  DCHECK(io_task_runner_->BelongsToCurrentThread());
+  compositor_task_runner_->PostTask(
+      FROM_HERE,
+      base::BindOnce(
+          &WebMediaPlayerMSCompositor::RenderWithoutAlgorithmOnCompositor, this,
+          frame));
+}
+
+void WebMediaPlayerMSCompositor::RenderWithoutAlgorithmOnCompositor(
+    const scoped_refptr<media::VideoFrame>& frame) {
+  DCHECK(compositor_task_runner_->BelongsToCurrentThread());
+  {
+    base::AutoLock auto_lock(current_frame_lock_);
+    SetCurrentFrame(frame);
+  }
+  if (video_frame_provider_client_)
+    video_frame_provider_client_->DidReceiveFrame();
+}
+
 void WebMediaPlayerMSCompositor::SetCurrentFrame(
     const scoped_refptr<media::VideoFrame>& frame) {
+  DCHECK(compositor_task_runner_->BelongsToCurrentThread());
   current_frame_lock_.AssertAcquired();
   TRACE_EVENT_INSTANT1("media", "WebMediaPlayerMSCompositor::SetCurrentFrame",
                        TRACE_EVENT_SCOPE_THREAD, "Timestamp",
                        frame->timestamp().InMicroseconds());
 
-  if (!current_frame_used_by_compositor_)
+  if (!current_frame_rendered_)
     ++dropped_frame_count_;
-  current_frame_used_by_compositor_ = false;
+  current_frame_rendered_ = false;
 
-  const bool size_changed =
-      !current_frame_ ||
-      current_frame_->natural_size() != frame->natural_size();
+  const bool size_changed = !current_frame_ || current_frame_->natural_size() !=
+                                                   frame->natural_size();
   current_frame_ = frame;
   if (size_changed) {
     main_message_loop_->task_runner()->PostTask(

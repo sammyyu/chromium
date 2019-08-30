@@ -5,16 +5,15 @@
 #include <string>
 
 #include "base/json/json_string_value_serializer.h"
-#include "base/memory/ptr_util.h"
 #include "base/memory/ref_counted.h"
 #include "base/values.h"
 #include "chrome/browser/subresource_filter/subresource_filter_browser_test_harness.h"
+#include "chrome/common/chrome_features.h"
 #include "chrome/test/base/ui_test_utils.h"
 #include "components/subresource_filter/core/browser/subresource_filter_constants.h"
 #include "content/public/browser/devtools_agent_host.h"
 #include "content/public/browser/devtools_agent_host_client.h"
 #include "content/public/browser/web_contents.h"
-#include "content/public/common/content_features.h"
 #include "content/public/test/browser_test_utils.h"
 #include "testing/gtest/include/gtest/gtest.h"
 #include "url/gurl.h"
@@ -137,9 +136,9 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterListInsertingBrowserTest,
 }
 
 IN_PROC_BROWSER_TEST_F(SubresourceFilterDevtoolsBrowserTest,
-                       ForceActivation_NoSubresourceLogging) {
+                       ForceActivation_SubresourceLogging) {
   content::ConsoleObserverDelegate console_observer(web_contents(),
-                                                    "*show ads*");
+                                                    kActivationConsoleMessage);
   web_contents()->SetDelegate(&console_observer);
   const GURL url(
       GetTestUrl("subresource_filter/frame_with_included_script.html"));
@@ -150,7 +149,8 @@ IN_PROC_BROWSER_TEST_F(SubresourceFilterDevtoolsBrowserTest,
 
   ui_test_utils::NavigateToURL(browser(), url);
   EXPECT_FALSE(WasParsedScriptElementLoaded(web_contents()->GetMainFrame()));
-  EXPECT_TRUE(console_observer.message().empty()) << console_observer.message();
+  EXPECT_FALSE(console_observer.message().empty());
+  console_observer.Wait();
 }
 
 // See crbug.com/813197, where agent hosts from subframes could send messages to

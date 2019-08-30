@@ -26,11 +26,13 @@ class AutofillProviderAndroid : public AutofillProvider {
   ~AutofillProviderAndroid() override;
 
   // AutofillProvider:
-  void OnQueryFormFieldAutofill(AutofillHandlerProxy* handler,
-                                int32_t id,
-                                const FormData& form,
-                                const FormFieldData& field,
-                                const gfx::RectF& bounding_box) override;
+  void OnQueryFormFieldAutofill(
+      AutofillHandlerProxy* handler,
+      int32_t id,
+      const FormData& form,
+      const FormFieldData& field,
+      const gfx::RectF& bounding_box,
+      bool /*unused_autoselect_first_suggestion*/) override;
   void OnTextFieldDidChange(AutofillHandlerProxy* handler,
                             const FormData& form,
                             const FormFieldData& field,
@@ -44,7 +46,7 @@ class AutofillProviderAndroid : public AutofillProvider {
                                 const FormData& form,
                                 const FormFieldData& field,
                                 const gfx::RectF& bounding_box) override;
-  bool OnFormSubmitted(AutofillHandlerProxy* handler,
+  void OnFormSubmitted(AutofillHandlerProxy* handler,
                        const FormData& form,
                        bool known_success,
                        SubmissionSource source,
@@ -65,12 +67,6 @@ class AutofillProviderAndroid : public AutofillProvider {
 
   // Methods called by Java.
   void OnAutofillAvailable(JNIEnv* env, jobject jcaller, jobject form_data);
-  void FireSelectControlDidChangeForTesting(JNIEnv* env,
-                                            jobject jcaller,
-                                            jint index,
-                                            jstring id,
-                                            jobjectArray options,
-                                            jint selected_option);
 
  private:
   void FireSuccessfulSubmission(SubmissionSource source);

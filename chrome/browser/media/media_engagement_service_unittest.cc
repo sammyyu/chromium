@@ -7,7 +7,7 @@
 #include "base/macros.h"
 #include "base/memory/ptr_util.h"
 #include "base/run_loop.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/test/simple_test_clock.h"
 #include "base/values.h"
@@ -40,6 +40,9 @@ namespace {
 
 base::FilePath g_temp_history_dir;
 
+// History is automatically expired after 90 days.
+base::TimeDelta kHistoryExpirationThreshold = base::TimeDelta::FromDays(90);
+
 // Waits until a change is observed in media engagement content settings.
 class MediaEngagementChangeWaiter : public content_settings::Observer {
  public:
@@ -53,10 +56,11 @@ class MediaEngagementChangeWaiter : public content_settings::Observer {
   }
 
   // Overridden from content_settings::Observer:
-  void OnContentSettingChanged(const ContentSettingsPattern& primary_pattern,
-                               const ContentSettingsPattern& secondary_pattern,
-                               ContentSettingsType content_type,
-                               std::string resource_identifier) override {
+  void OnContentSettingChanged(
+      const ContentSettingsPattern& primary_pattern,
+      const ContentSettingsPattern& secondary_pattern,
+      ContentSettingsType content_type,
+      const std::string& resource_identifier) override {
     if (content_type == CONTENT_SETTINGS_TYPE_MEDIA_ENGAGEMENT)
       Proceed();
   }
@@ -108,8 +112,7 @@ class MediaEngagementServiceTest : public ChromeRenderViewHostTestHarness {
 
     ASSERT_TRUE(temp_dir_.CreateUniqueTempDir());
     g_temp_history_dir = temp_dir_.GetPath();
-    HistoryServiceFactory::GetInstance()->SetTestingFactory(
-        profile(), &BuildTestHistoryService);
+    ConfigureHistoryService();
 
     test_clock_.SetNow(GetReferenceTime());
     service_ = base::WrapUnique(StartNewMediaEngagementService());
@@ -124,6 +127,23 @@ class MediaEngagementServiceTest : public ChromeRenderViewHostTestHarness {
     return service;
   }
 
+  void ConfigureHistoryService() {
+    HistoryServiceFactory::GetInstance()->SetTestingFactory(
+        profile(), &BuildTestHistoryService);
+  }
+
+  void RestartHistoryService() {
+    history::HistoryService* history_old = HistoryServiceFactory::GetForProfile(
+        profile(), ServiceAccessType::IMPLICIT_ACCESS);
+    history_old->Shutdown();
+
+    HistoryServiceFactory::ShutdownForProfile(profile());
+    ConfigureHistoryService();
+    history::HistoryService* history = HistoryServiceFactory::GetForProfile(
+        profile(), ServiceAccessType::IMPLICIT_ACCESS);
+    history->AddObserver(service());
+  }
+
   void RecordVisitAndPlaybackAndAdvanceClock(GURL url) {
     RecordVisit(url);
     AdvanceClock();
@@ -132,8 +152,8 @@ class MediaEngagementServiceTest : public ChromeRenderViewHostTestHarness {
 
   void TearDown() override {
     service_->Shutdown();
-    service_.reset();
     ChromeRenderViewHostTestHarness::TearDown();
+    service_.reset();
   }
 
   void AdvanceClock() {
@@ -540,6 +560,52 @@ TEST_F(MediaEngagementServiceTest, CleanupOriginsOnHistoryDeletion) {
   }
 }
 
+TEST_F(MediaEngagementServiceTest, CleanUpDatabaseWhenHistoryIsExpired) {
+  base::HistogramTester histogram_tester;
+
+  // |origin1| will have history that is before the expiry threshold and should
+  // not be deleted. |origin2| will have history either side of the threshold
+  // and should also not be deleted. |origin3| will have history before the
+  // threshold and should be deleted.
+  GURL origin1("http://www.google.com/");
+  GURL origin2("https://drive.google.com/");
+  GURL origin3("http://deleted.com/");
+
+  // Populate test MEI data.
+  SetScores(origin1, 20, 20);
+  SetScores(origin2, 30, 30);
+  SetScores(origin3, 40, 40);
+
+  base::Time today = base::Time::Now();
+  base::Time before_threshold = today - kHistoryExpirationThreshold;
+  SetNow(today);
+
+  // Populate test history records.
+  history::HistoryService* history = HistoryServiceFactory::GetForProfile(
+      profile(), ServiceAccessType::IMPLICIT_ACCESS);
+
+  history->AddPage(origin1, today, history::SOURCE_BROWSED);
+  history->AddPage(origin2, today, history::SOURCE_BROWSED);
+  history->AddPage(origin2, before_threshold, history::SOURCE_BROWSED);
+  history->AddPage(origin3, before_threshold, history::SOURCE_BROWSED);
+
+  // Expire history older than |threshold|.
+  MediaEngagementChangeWaiter waiter(profile());
+  RestartHistoryService();
+  waiter.Wait();
+
+  // Check the scores for the test origins.
+  ExpectScores(origin1, 1.0, 20, 20, TimeNotSet());
+  ExpectScores(origin2, 1.0, 30, 30, TimeNotSet());
+  ExpectScores(origin3, 0, 0, 0, TimeNotSet());
+
+  // Check that we recorded the expiry event to a histogram.
+  histogram_tester.ExpectTotalCount(MediaEngagementService::kHistogramClearName,
+                                    1);
+  histogram_tester.ExpectBucketCount(
+      MediaEngagementService::kHistogramClearName, 4, 1);
+}
+
 TEST_F(MediaEngagementServiceTest, CleanUpDatabaseWhenHistoryIsDeleted) {
   GURL origin1("http://www.google.com/");
   GURL origin1a("http://www.google.com/search?q=asdf");
@@ -647,8 +713,13 @@ TEST_F(MediaEngagementServiceTest, HistoryExpirationIsNoOp) {
   {
     base::HistogramTester histogram_tester;
 
-    service()->OnURLsDeleted(nullptr, false, true, history::URLRows(),
-                             std::set<GURL>());
+    history::HistoryService* history = HistoryServiceFactory::GetForProfile(
+        profile(), ServiceAccessType::IMPLICIT_ACCESS);
+
+    service()->OnURLsDeleted(
+        history, history::DeletionInfo(history::DeletionTimeRange::Invalid(),
+                                       true, history::URLRows(),
+                                       std::set<GURL>(), base::nullopt));
 
     // Same as above, nothing should have changed.
     ExpectScores(origin1, 7.0 / 11.0,

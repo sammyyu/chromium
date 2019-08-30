@@ -16,8 +16,8 @@
 
 ManagePasswordsIconViews::ManagePasswordsIconViews(
     CommandUpdater* updater,
-    BubbleIconView::Delegate* delegate)
-    : BubbleIconView(updater, IDC_MANAGE_PASSWORDS_FOR_PAGE, delegate),
+    PageActionIconView::Delegate* delegate)
+    : PageActionIconView(updater, IDC_MANAGE_PASSWORDS_FOR_PAGE, delegate),
       state_(password_manager::ui::INACTIVE_STATE) {
   DCHECK(delegate);
 #if defined(OS_MACOSX)
@@ -46,11 +46,6 @@ void ManagePasswordsIconViews::UpdateUiForState() {
     return;
   }
 
-  SetTooltipText(l10n_util::GetStringUTF16(
-      state_ == password_manager::ui::PENDING_PASSWORD_STATE
-          ? IDS_PASSWORD_MANAGER_TOOLTIP_SAVE
-          : IDS_PASSWORD_MANAGER_TOOLTIP_MANAGE));
-
   SetVisible(true);
 
   // We may be about to automatically pop up a passwords bubble.
@@ -63,7 +58,7 @@ views::BubbleDialogDelegateView* ManagePasswordsIconViews::GetBubble() const {
   return PasswordBubbleViewBase::manage_password_bubble();
 }
 
-bool ManagePasswordsIconViews::Refresh() {
+bool ManagePasswordsIconViews::Update() {
   if (!GetWebContents())
     return false;
 
@@ -74,10 +69,10 @@ bool ManagePasswordsIconViews::Refresh() {
 }
 
 void ManagePasswordsIconViews::OnExecuting(
-    BubbleIconView::ExecuteSource source) {}
+    PageActionIconView::ExecuteSource source) {}
 
 bool ManagePasswordsIconViews::OnMousePressed(const ui::MouseEvent& event) {
-  bool result = BubbleIconView::OnMousePressed(event);
+  bool result = PageActionIconView::OnMousePressed(event);
   PasswordBubbleViewBase::CloseCurrentBubble();
   return result;
 }
@@ -93,11 +88,19 @@ bool ManagePasswordsIconViews::OnKeyPressed(const ui::KeyEvent& event) {
     // If it still somehow got this key event, the bubble shouldn't be reopened.
     return true;
   }
-  return BubbleIconView::OnKeyPressed(event);
+  return PageActionIconView::OnKeyPressed(event);
 }
 
 const gfx::VectorIcon& ManagePasswordsIconViews::GetVectorIcon() const {
   return kKeyIcon;
+}
+
+base::string16 ManagePasswordsIconViews::GetTextForTooltipAndAccessibleName()
+    const {
+  return l10n_util::GetStringUTF16(
+      state_ == password_manager::ui::PENDING_PASSWORD_STATE
+          ? IDS_PASSWORD_MANAGER_TOOLTIP_SAVE
+          : IDS_PASSWORD_MANAGER_TOOLTIP_MANAGE);
 }
 
 void ManagePasswordsIconViews::AboutToRequestFocusFromTabTraversal(

@@ -159,13 +159,13 @@ void Directory::InitializeIndices(MetahandlesMap* handles_map) {
     if (!entry->ref(UNIQUE_SERVER_TAG).empty()) {
       DCHECK(kernel_->server_tags_map.find(entry->ref(UNIQUE_SERVER_TAG)) ==
              kernel_->server_tags_map.end())
-          << "Unexpected duplicate use of client tag";
+          << "Unexpected duplicate use of server tag";
       kernel_->server_tags_map[entry->ref(UNIQUE_SERVER_TAG)] = entry;
     }
     if (!entry->ref(UNIQUE_CLIENT_TAG).empty()) {
-      DCHECK(kernel_->server_tags_map.find(entry->ref(UNIQUE_SERVER_TAG)) ==
-             kernel_->server_tags_map.end())
-          << "Unexpected duplicate use of server tag";
+      DCHECK(kernel_->client_tags_map.find(entry->ref(UNIQUE_CLIENT_TAG)) ==
+             kernel_->client_tags_map.end())
+          << "Unexpected duplicate use of client tag";
       kernel_->client_tags_map[entry->ref(UNIQUE_CLIENT_TAG)] = entry;
     }
     DCHECK(kernel_->ids_map.find(entry->ref(ID).value()) ==
@@ -215,7 +215,7 @@ DirOpenResult Directory::OpenImpl(
 }
 
 DeleteJournal* Directory::delete_journal() {
-  DCHECK(delete_journal_.get());
+  DCHECK(delete_journal_);
   return delete_journal_.get();
 }
 
@@ -818,13 +818,6 @@ void Directory::GetDownloadProgress(
   ScopedKernelLock lock(this);
   return value_out->CopyFrom(
       kernel_->persisted_info.download_progress[model_type]);
-}
-
-void Directory::GetDownloadProgressAsString(ModelType model_type,
-                                            std::string* value_out) const {
-  ScopedKernelLock lock(this);
-  kernel_->persisted_info.download_progress[model_type].SerializeToString(
-      value_out);
 }
 
 size_t Directory::GetEntriesCount() const {

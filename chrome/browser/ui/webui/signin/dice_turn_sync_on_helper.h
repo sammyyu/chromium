@@ -95,6 +95,7 @@ class DiceTurnSyncOnHelper : public SyncStartupTracker::Observer {
   // in the token service.
   DiceTurnSyncOnHelper(Profile* profile,
                        signin_metrics::AccessPoint signin_access_point,
+                       signin_metrics::PromoAction signin_promo_action,
                        signin_metrics::Reason signin_reason,
                        const std::string& account_id,
                        SigninAbortedMode signin_aborted_mode,
@@ -104,6 +105,7 @@ class DiceTurnSyncOnHelper : public SyncStartupTracker::Observer {
   DiceTurnSyncOnHelper(Profile* profile,
                        Browser* browser,
                        signin_metrics::AccessPoint signin_access_point,
+                       signin_metrics::PromoAction signin_promo_action,
                        signin_metrics::Reason signin_reason,
                        const std::string& account_id,
                        SigninAbortedMode signin_aborted_mode);
@@ -184,11 +186,16 @@ class DiceTurnSyncOnHelper : public SyncStartupTracker::Observer {
   // Aborts the flow and deletes this object.
   void AbortAndDelete();
 
+  // This function enables all unified consent services when the unified consent
+  // feature is enabled.
+  void EnableUnifiedConsentIfNeeded();
+
   std::unique_ptr<Delegate> delegate_;
   Profile* profile_;
   SigninManager* signin_manager_;
   ProfileOAuth2TokenService* token_service_;
   const signin_metrics::AccessPoint signin_access_point_;
+  const signin_metrics::PromoAction signin_promo_action_;
   const signin_metrics::Reason signin_reason_;
 
   // Whether the refresh token should be deleted if the Sync flow is aborted.

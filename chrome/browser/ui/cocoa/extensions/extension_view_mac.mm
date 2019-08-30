@@ -63,7 +63,9 @@ void ExtensionViewMac::RenderViewCreated(content::RenderViewHost* host) {
                        ExtensionViewMac::kMinHeight);
     gfx::Size max_size(ExtensionViewMac::kMaxWidth,
                        ExtensionViewMac::kMaxHeight);
-    render_view_host()->EnableAutoResize(min_size, max_size);
+    extension_host_->host_contents()
+        ->GetRenderWidgetHostView()
+        ->EnableAutoResize(min_size, max_size);
   }
 }
 
@@ -79,7 +81,7 @@ void ExtensionViewMac::HandleKeyboardEvent(
   ChromeEventProcessingWindow* event_window =
       base::mac::ObjCCastStrict<ChromeEventProcessingWindow>(
           [GetNativeView() window]);
-  [event_window redispatchKeyEvent:event.os_event];
+  [[event_window commandDispatcher] redispatchKeyEvent:event.os_event];
 }
 
 void ExtensionViewMac::OnLoaded() {

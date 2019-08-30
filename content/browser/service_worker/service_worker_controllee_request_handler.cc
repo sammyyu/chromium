@@ -30,6 +30,7 @@
 #include "net/url_request/url_request.h"
 #include "services/network/public/cpp/resource_request_body.h"
 #include "services/network/public/cpp/resource_response_info.h"
+#include "third_party/blink/public/common/service_worker/service_worker_utils.h"
 #include "ui/base/page_transition_types.h"
 
 #if BUILDFLAG(ENABLE_OFFLINE_PAGES)
@@ -95,6 +96,7 @@ ServiceWorkerControlleeRequestHandler::ServiceWorkerControlleeRequestHandler(
                                   provider_host,
                                   blob_storage_context,
                                   resource_type),
+      resource_type_(resource_type),
       is_main_resource_load_(
           ServiceWorkerUtils::IsMainResourceType(resource_type)),
       is_main_frame_load_(resource_type == RESOURCE_TYPE_MAIN_FRAME),
@@ -112,17 +114,40 @@ ServiceWorkerControlleeRequestHandler::ServiceWorkerControlleeRequestHandler(
 
 ServiceWorkerControlleeRequestHandler::
     ~ServiceWorkerControlleeRequestHandler() {
-  // Navigation triggers an update to occur shortly after the page and
-  // its initial subresources load.
-  if (provider_host_ && provider_host_->active_version()) {
-    if (is_main_resource_load_ && !force_update_started_)
-      provider_host_->active_version()->ScheduleUpdate();
-    else
-      provider_host_->active_version()->DeferScheduledUpdate();
-  }
+  MaybeScheduleUpdate();
 
   if (is_main_resource_load_ && provider_host_)
     provider_host_->SetAllowAssociation(true);
+}
+
+void ServiceWorkerControlleeRequestHandler::MaybeScheduleUpdate() {
+  if (!provider_host_ || !provider_host_->active_version())
+    return;
+
+  if (blink::ServiceWorkerUtils::IsServicificationEnabled()) {
+    // For subresources: S13nServiceWorker doesn't come here.
+    DCHECK(is_main_resource_load_);
+
+    // For navigations, the update logic is taken care of
+    // during navigation and waits for the HintToUpdateServiceWorker message.
+    if (IsResourceTypeFrame(resource_type_))
+      return;
+
+    // Continue to the common non-S13nServiceWorker code for triggering update
+    // for shared workers. The renderer doesn't yet send a
+    // HintToUpdateServiceWorker message.
+    // TODO(falken): Make the renderer send the message for shared worker,
+    // to simplify the code.
+  }
+
+  // If DevTools forced an update, there is no need to update again.
+  if (force_update_started_)
+    return;
+
+  if (is_main_resource_load_)
+    provider_host_->active_version()->ScheduleUpdate();
+  else
+    provider_host_->active_version()->DeferScheduledUpdate();
 }
 
 net::URLRequestJob* ServiceWorkerControlleeRequestHandler::MaybeCreateJob(
@@ -198,7 +223,7 @@ void ServiceWorkerControlleeRequestHandler::MaybeCreateLoader(
     const network::ResourceRequest& resource_request,
     ResourceContext* resource_context,
     LoaderCallback callback) {
-  DCHECK(ServiceWorkerUtils::IsServicificationEnabled());
+  DCHECK(blink::ServiceWorkerUtils::IsServicificationEnabled());
   DCHECK(is_main_resource_load_);
   ClearJob();
 
@@ -232,7 +257,7 @@ void ServiceWorkerControlleeRequestHandler::MaybeCreateLoader(
                          resource_request.site_for_cookies);
 
   if (url_job_->ShouldFallbackToNetwork()) {
-    // We're falling back to the next URLLoaderRequestHandler, forward
+    // We're falling back to the next NavigationLoaderInterceptor, forward
     // the request and clear job now.
     url_job_->FallbackToNetwork();
     ClearJob();
@@ -244,7 +269,7 @@ void ServiceWorkerControlleeRequestHandler::MaybeCreateLoader(
 
 base::Optional<SubresourceLoaderParams>
 ServiceWorkerControlleeRequestHandler::MaybeCreateSubresourceLoaderParams() {
-  DCHECK(ServiceWorkerUtils::IsServicificationEnabled());
+  DCHECK(blink::ServiceWorkerUtils::IsServicificationEnabled());
 
   // We didn't create URLLoader for this request.
   if (!url_job_)
@@ -258,18 +283,24 @@ ServiceWorkerControlleeRequestHandler::MaybeCreateSubresourceLoaderParams() {
 
   // Otherwise let's send the controller service worker information along
   // with the navigation commit.
-  // Note that |controller_info->endpoint| could be null if the controller
-  // service worker isn't starting up or running, e.g. in no-fetch worker
-  // cases. In that case the renderer frame won't get the controller pointer
-  // upon the navigation commit, and subresource loading will not be intercepted
-  // at least until the frame gets a new controller ptr by SetController.
   SubresourceLoaderParams params;
   auto controller_info = mojom::ControllerServiceWorkerInfo::New();
+  controller_info->mode = provider_host_->GetControllerMode();
+  // Note that |controller_info->endpoint| is null if the controller has no
+  // fetch event handler. In that case the renderer frame won't get the
+  // controller pointer upon the navigation commit, and subresource loading will
+  // not be intercepted. (It might get intercepted later if the controller
+  // changes due to skipWaiting() so SetController is sent.)
   controller_info->endpoint =
       provider_host_->GetControllerServiceWorkerPtr().PassInterface();
   controller_info->client_id = provider_host_->client_uuid();
-  controller_info->object_info = provider_host_->GetOrCreateServiceWorkerHandle(
-      provider_host_->controller());
+  base::WeakPtr<ServiceWorkerObjectHost> object_host =
+      provider_host_->GetOrCreateServiceWorkerObjectHost(
+          provider_host_->controller());
+  if (object_host) {
+    params.controller_service_worker_object_host = object_host;
+    controller_info->object_info = object_host->CreateIncompleteObjectInfo();
+  }
   params.controller_service_worker_info = std::move(controller_info);
   return base::Optional<SubresourceLoaderParams>(std::move(params));
 }
@@ -288,7 +319,7 @@ void ServiceWorkerControlleeRequestHandler::PrepareForMainResource(
   // in redirect case, unassociate it now.
   provider_host_->DisassociateRegistration();
 
-  // Also prevent a registrater job for establishing an association to a new
+  // Also prevent a register job from establishing an association to a new
   // registration while we're finding an existing registration.
   provider_host_->SetAllowAssociation(false);
 
@@ -302,7 +333,7 @@ void ServiceWorkerControlleeRequestHandler::PrepareForMainResource(
 
 void ServiceWorkerControlleeRequestHandler::
     DidLookupRegistrationForMainResource(
-        ServiceWorkerStatusCode status,
+        blink::ServiceWorkerStatusCode status,
         scoped_refptr<ServiceWorkerRegistration> registration) {
   // The job may have been canceled before this was invoked.
   if (JobWasCanceled())
@@ -313,15 +344,33 @@ void ServiceWorkerControlleeRequestHandler::
 
   if (provider_host_ && !need_to_update)
     provider_host_->SetAllowAssociation(true);
-  if (status != SERVICE_WORKER_OK || !provider_host_ || !context_) {
+  if (status != blink::ServiceWorkerStatusCode::kOk) {
     url_job_->FallbackToNetwork();
     TRACE_EVENT_ASYNC_END1(
         "ServiceWorker",
         "ServiceWorkerControlleeRequestHandler::PrepareForMainResource",
-        url_job_.get(), "Status", status);
+        url_job_.get(), "Status", blink::ServiceWorkerStatusToString(status));
     return;
   }
   DCHECK(registration.get());
+
+  if (!provider_host_) {
+    url_job_->FallbackToNetwork();
+    TRACE_EVENT_ASYNC_END1(
+        "ServiceWorker",
+        "ServiceWorkerControlleeRequestHandler::PrepareForMainResource",
+        url_job_.get(), "Info", "No Provider");
+    return;
+  }
+
+  if (!context_) {
+    url_job_->FallbackToNetwork();
+    TRACE_EVENT_ASYNC_END1(
+        "ServiceWorker",
+        "ServiceWorkerControlleeRequestHandler::PrepareForMainResource",
+        url_job_.get(), "Info", "No Context");
+    return;
+  }
 
   if (!GetContentClient()->browser()->AllowServiceWorker(
           registration->pattern(), provider_host_->topmost_frame_url(),
@@ -330,7 +379,8 @@ void ServiceWorkerControlleeRequestHandler::
     TRACE_EVENT_ASYNC_END2(
         "ServiceWorker",
         "ServiceWorkerControlleeRequestHandler::PrepareForMainResource",
-        url_job_.get(), "Status", status, "Info", "ServiceWorker is blocked");
+        url_job_.get(), "Status", blink::ServiceWorkerStatusToString(status),
+        "Info", "ServiceWorker is blocked");
     return;
   }
 
@@ -350,14 +400,13 @@ void ServiceWorkerControlleeRequestHandler::
     context_->UpdateServiceWorker(
         registration.get(), true /* force_bypass_cache */,
         true /* skip_script_comparison */,
-        base::Bind(&self::DidUpdateRegistration, weak_factory_.GetWeakPtr(),
-                   registration));
+        base::BindOnce(&self::DidUpdateRegistration, weak_factory_.GetWeakPtr(),
+                       registration));
     return;
   }
 
-  // Initiate activation of a waiting version.
-  // Usually a register job initiates activation but that
-  // doesn't happen if the browser exits prior to activation
+  // Initiate activation of a waiting version. Usually a register job initiates
+  // activation but that doesn't happen if the browser exits prior to activation
   // having occurred. This check handles that case.
   if (registration->waiting_version())
     registration->ActivateWaitingVersionWhenReady();
@@ -369,16 +418,19 @@ void ServiceWorkerControlleeRequestHandler::
   if (active_version.get() &&
       active_version->status() == ServiceWorkerVersion::ACTIVATING) {
     provider_host_->SetAllowAssociation(false);
-    registration->active_version()->RegisterStatusChangeCallback(base::BindOnce(
-        &self::OnVersionStatusChanged, weak_factory_.GetWeakPtr(),
-        base::RetainedRef(registration), base::RetainedRef(active_version)));
+    active_version->RegisterStatusChangeCallback(base::BindOnce(
+        &self::OnVersionStatusChanged, weak_factory_.GetWeakPtr(), registration,
+        active_version));
     TRACE_EVENT_ASYNC_END2(
         "ServiceWorker",
         "ServiceWorkerControlleeRequestHandler::PrepareForMainResource",
-        url_job_.get(), "Status", status, "Info",
-        "Wait until finished SW activation");
+        url_job_.get(), "Status", blink::ServiceWorkerStatusToString(status),
+        "Info", "Wait until finished SW activation");
     return;
   }
+
+  // TODO(falken): Factor out the rest of this function and
+  // OnVersionStatusChanged into the same function.
 
   // A registration exists, so associate it. Note that the controller is only
   // set if there's an active version. If there's no active version, we should
@@ -392,7 +444,8 @@ void ServiceWorkerControlleeRequestHandler::
     TRACE_EVENT_ASYNC_END2(
         "ServiceWorker",
         "ServiceWorkerControlleeRequestHandler::PrepareForMainResource",
-        url_job_.get(), "Status", status, "Info",
+        url_job_.get(), "Status", blink::ServiceWorkerStatusToString(status),
+        "Info",
         "ServiceWorkerVersion is not available, so falling back to network");
     return;
   }
@@ -402,20 +455,25 @@ void ServiceWorkerControlleeRequestHandler::
   ServiceWorkerMetrics::CountControlledPageLoad(
       active_version->site_for_uma(), stripped_url_, is_main_frame_load_);
 
+  if (blink::ServiceWorkerUtils::IsServicificationEnabled() &&
+      IsResourceTypeFrame(resource_type_)) {
+    provider_host_->SetServiceWorkerToUpdate(active_version);
+  }
   bool is_forwarded =
       MaybeForwardToServiceWorker(url_job_.get(), active_version.get());
 
   TRACE_EVENT_ASYNC_END2(
       "ServiceWorker",
       "ServiceWorkerControlleeRequestHandler::PrepareForMainResource",
-      url_job_.get(), "Status", status, "Info",
+      url_job_.get(), "Status", blink::ServiceWorkerStatusToString(status),
+      "Info",
       (is_forwarded) ? "Forwarded to the ServiceWorker"
                      : "Skipped the ServiceWorker which has no fetch handler");
 }
 
 void ServiceWorkerControlleeRequestHandler::OnVersionStatusChanged(
-    ServiceWorkerRegistration* registration,
-    ServiceWorkerVersion* version) {
+    scoped_refptr<ServiceWorkerRegistration> registration,
+    scoped_refptr<ServiceWorkerVersion> version) {
   // The job may have been canceled before this was invoked.
   if (JobWasCanceled())
     return;
@@ -434,15 +492,19 @@ void ServiceWorkerControlleeRequestHandler::OnVersionStatusChanged(
   ServiceWorkerMetrics::CountControlledPageLoad(
       version->site_for_uma(), stripped_url_, is_main_frame_load_);
 
-  provider_host_->AssociateRegistration(registration,
+  provider_host_->AssociateRegistration(registration.get(),
                                         false /* notify_controllerchange */);
 
-  MaybeForwardToServiceWorker(url_job_.get(), version);
+  if (blink::ServiceWorkerUtils::IsServicificationEnabled() &&
+      IsResourceTypeFrame(resource_type_)) {
+    provider_host_->SetServiceWorkerToUpdate(version);
+  }
+  MaybeForwardToServiceWorker(url_job_.get(), version.get());
 }
 
 void ServiceWorkerControlleeRequestHandler::DidUpdateRegistration(
     const scoped_refptr<ServiceWorkerRegistration>& original_registration,
-    ServiceWorkerStatusCode status,
+    blink::ServiceWorkerStatusCode status,
     const std::string& status_message,
     int64_t registration_id) {
   DCHECK(force_update_started_);
@@ -455,7 +517,7 @@ void ServiceWorkerControlleeRequestHandler::DidUpdateRegistration(
     url_job_->FallbackToNetwork();
     return;
   }
-  if (status != SERVICE_WORKER_OK ||
+  if (status != blink::ServiceWorkerStatusCode::kOk ||
       !original_registration->installing_version()) {
     // Update failed. Look up the registration again since the original
     // registration was possibly unregistered in the meantime.

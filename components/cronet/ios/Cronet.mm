@@ -78,7 +78,7 @@ class TestCertVerifier : public net::CertVerifier {
   int Verify(const RequestParams& params,
              net::CRLSet* crl_set,
              net::CertVerifyResult* verify_result,
-             const net::CompletionCallback& callback,
+             net::CompletionOnceCallback callback,
              std::unique_ptr<Request>* out_req,
              const net::NetLogWithSource& net_log) override {
     net::Error result = net::OK;
@@ -488,8 +488,10 @@ class CronetHttpProtocolHandlerDelegate
 }
 
 // This is a private dummy method that prevents the linker from stripping out
-// the otherwise unreferenced methods from 'native/url_request.cc'.
-+ (void)preventStrippingNativeCronetUrlRequest {
+// the otherwise unreferenced modules from 'native'.
++ (void)preventStrippingNativeCronetModules {
+  Cronet_Buffer_Create();
+  Cronet_Engine_Create();
   Cronet_UrlRequest_Create();
 }
 
@@ -531,6 +533,12 @@ class CronetHttpProtocolHandlerDelegate
   return [NSError errorWithDomain:CRNCronetErrorDomain
                              code:errorCode
                          userInfo:userInfo];
+}
+
+// Used by tests to query the size of the map that contains metrics for
+// individual NSURLSession tasks.
++ (size_t)getMetricsMapSize {
+  return cronet::CronetMetricsDelegate::GetMetricsMapSize();
 }
 
 // Static class initializer.

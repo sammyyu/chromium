@@ -39,7 +39,7 @@
 #include "content/public/browser/navigation_controller.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/browser/web_contents.h"
-#include "net/net_features.h"
+#include "net/net_buildflags.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/page_transition_types.h"
 #include "ui/base/resource/resource_bundle.h"
@@ -209,6 +209,11 @@ PrivetNotificationService::PrivetNotificationService(
 }
 
 PrivetNotificationService::~PrivetNotificationService() {
+#if BUILDFLAG(ENABLE_MDNS)
+  DCHECK_CURRENTLY_ON(content::BrowserThread::UI);
+  if (traffic_detector_)
+    traffic_detector_->Stop();
+#endif
 }
 
 void PrivetNotificationService::DeviceChanged(
@@ -323,7 +328,7 @@ void PrivetNotificationService::Start() {
 }
 
 void PrivetNotificationService::OnNotificationsEnabledChanged() {
-#if defined(ENABLE_MDNS)
+#if BUILDFLAG(ENABLE_MDNS)
   if (IsForced()) {
     StartLister();
   } else if (*enable_privet_notification_member_) {
@@ -352,7 +357,7 @@ void PrivetNotificationService::OnNotificationsEnabledChanged() {
 
 void PrivetNotificationService::StartLister() {
   ReportPrivetUmaEvent(PRIVET_LISTER_STARTED);
-#if defined(ENABLE_MDNS)
+#if BUILDFLAG(ENABLE_MDNS)
   traffic_detector_ = nullptr;
 #endif  // ENABLE_MDNS
   service_discovery_client_ =
@@ -382,12 +387,17 @@ PrivetNotificationDelegate::PrivetNotificationDelegate(Profile* profile)
 PrivetNotificationDelegate::~PrivetNotificationDelegate() {
 }
 
-void PrivetNotificationDelegate::ButtonClick(int button_index) {
-  if (button_index == 0) {
+void PrivetNotificationDelegate::Click(
+    const base::Optional<int>& button_index,
+    const base::Optional<base::string16>& reply) {
+  if (!button_index)
+    return;
+
+  if (*button_index == 0) {
     ReportPrivetUmaEvent(PRIVET_NOTIFICATION_CLICKED);
     OpenTab(GURL(kPrivetNotificationOriginUrl));
   } else {
-    DCHECK_EQ(1, button_index);
+    DCHECK_EQ(1, *button_index);
     ReportPrivetUmaEvent(PRIVET_DISABLE_NOTIFICATIONS_CLICKED);
     DisableNotifications();
   }

@@ -74,8 +74,8 @@ void CursorIPC::Move(gfx::AcceleratedWidget window, const gfx::Point& point) {
 void CursorIPC::InitializeOnEvdevIfNecessary() {}
 
 void CursorIPC::Send(IPC::Message* message) {
-  if (IsConnected() &&
-      send_runner_->PostTask(FROM_HERE, base::Bind(send_callback_, message)))
+  if (IsConnected() && send_runner_->PostTask(
+                           FROM_HERE, base::BindOnce(send_callback_, message)))
     return;
 
   // Drop disconnected updates. DrmWindowHost will call
@@ -95,7 +95,7 @@ DrmGpuPlatformSupportHost::DrmGpuPlatformSupportHost(DrmCursor* cursor)
   if (ui_runner_) {
     weak_ptr_ = weak_ptr_factory_.GetWeakPtr();
   } else {
-    DCHECK(!features::IsMusEnabled());
+    DCHECK(features::IsAshInBrowserProcess());
   }
 }
 
@@ -182,8 +182,8 @@ void DrmGpuPlatformSupportHost::OnMessageReceived(const IPC::Message& message) {
 }
 
 bool DrmGpuPlatformSupportHost::Send(IPC::Message* message) {
-  if (IsConnected() &&
-      send_runner_->PostTask(FROM_HERE, base::Bind(send_callback_, message)))
+  if (IsConnected() && send_runner_->PostTask(
+                           FROM_HERE, base::BindOnce(send_callback_, message)))
     return true;
 
   delete message;
@@ -361,13 +361,18 @@ bool DrmGpuPlatformSupportHost::GpuSetHDCPState(int64_t display_id,
   return Send(new OzoneGpuMsg_SetHDCPState(display_id, state));
 }
 
-bool DrmGpuPlatformSupportHost::GpuSetColorCorrection(
+bool DrmGpuPlatformSupportHost::GpuSetColorMatrix(
+    int64_t display_id,
+    const std::vector<float>& color_matrix) {
+  return Send(new OzoneGpuMsg_SetColorMatrix(display_id, color_matrix));
+}
+
+bool DrmGpuPlatformSupportHost::GpuSetGammaCorrection(
     int64_t display_id,
     const std::vector<display::GammaRampRGBEntry>& degamma_lut,
-    const std::vector<display::GammaRampRGBEntry>& gamma_lut,
-    const std::vector<float>& correction_matrix) {
-  return Send(new OzoneGpuMsg_SetColorCorrection(display_id, degamma_lut,
-                                                 gamma_lut, correction_matrix));
+    const std::vector<display::GammaRampRGBEntry>& gamma_lut) {
+  return Send(
+      new OzoneGpuMsg_SetGammaCorrection(display_id, degamma_lut, gamma_lut));
 }
 
 bool DrmGpuPlatformSupportHost::GpuDestroyWindow(

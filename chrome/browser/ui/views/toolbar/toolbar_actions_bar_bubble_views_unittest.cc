@@ -10,13 +10,12 @@
 #include "base/strings/utf_string_conversions.h"
 #include "chrome/browser/ui/toolbar/test_toolbar_actions_bar_bubble_delegate.h"
 #include "chrome/browser/ui/toolbar/toolbar_actions_bar_bubble_delegate.h"
-#include "chrome/browser/ui/views/harmony/chrome_layout_provider.h"
 #include "chrome/grit/generated_resources.h"
+#include "chrome/test/views/chrome_views_test_base.h"
 #include "components/vector_icons/vector_icons.h"
 #include "ui/base/l10n/l10n_util.h"
 #include "ui/base/resource/resource_bundle.h"
 #include "ui/events/event_utils.h"
-#include "ui/events/test/event_generator.h"
 #include "ui/gfx/color_palette.h"
 #include "ui/gfx/image/image.h"
 #include "ui/gfx/image/image_unittest_util.h"
@@ -25,7 +24,6 @@
 #include "ui/views/controls/button/label_button.h"
 #include "ui/views/controls/link.h"
 #include "ui/views/test/test_widget_observer.h"
-#include "ui/views/test/views_test_base.h"
 #include "ui/views/widget/widget.h"
 #include "ui/views/window/dialog_client_view.h"
 
@@ -33,7 +31,7 @@ namespace {
 const int kIconSize = 16;
 }
 
-class ToolbarActionsBarBubbleViewsTest : public views::ViewsTestBase {
+class ToolbarActionsBarBubbleViewsTest : public ChromeViewsTestBase {
  public:
   views::View* TestCreateExtraView() {
     DCHECK(bubble_);
@@ -44,15 +42,9 @@ class ToolbarActionsBarBubbleViewsTest : public views::ViewsTestBase {
   ToolbarActionsBarBubbleViewsTest() {}
   ~ToolbarActionsBarBubbleViewsTest() override {}
 
-  void SetUp() override {
-    views::ViewsTestBase::SetUp();
-    test_views_delegate()->set_layout_provider(
-        ChromeLayoutProvider::CreateLayoutProvider());
-  }
-
   void TearDown() override {
     anchor_widget_.reset();
-    views::ViewsTestBase::TearDown();
+    ChromeViewsTestBase::TearDown();
   }
 
   std::unique_ptr<views::Widget> CreateAnchorWidget() {
@@ -86,12 +78,14 @@ class ToolbarActionsBarBubbleViewsTest : public views::ViewsTestBase {
     bubble_widget_ = nullptr;
   }
 
-  void ClickView(const views::View* view) {
-    ASSERT_TRUE(view);
-    ui::test::EventGenerator generator(GetContext(),
-                                       anchor_widget_->GetNativeWindow());
-    generator.MoveMouseTo(view->GetBoundsInScreen().CenterPoint());
-    generator.ClickLeftButton();
+  void ClickButton(views::Button* button) {
+    ASSERT_TRUE(button);
+    const gfx::Point point(10, 10);
+    const ui::MouseEvent event(ui::ET_MOUSE_PRESSED, point, point,
+                               ui::EventTimeForNow(), ui::EF_LEFT_MOUSE_BUTTON,
+                               ui::EF_LEFT_MOUSE_BUTTON);
+    button->OnMousePressed(event);
+    button->OnMouseReleased(event);
     base::RunLoop().RunUntilIdle();
   }
 
@@ -215,6 +209,38 @@ TEST_F(ToolbarActionsBarBubbleViewsTest, TestBubbleLayoutListView) {
   CloseBubble();
 }
 
+TEST_F(ToolbarActionsBarBubbleViewsTest, TestBubbleLayoutNoBodyText) {
+  TestToolbarActionsBarBubbleDelegate delegate(
+      HeadingString(), base::string16(), ActionString());
+  ShowBubble(&delegate);
+
+  EXPECT_TRUE(bubble()->GetDialogClientView()->ok_button());
+  EXPECT_EQ(ActionString(),
+            bubble()->GetDialogClientView()->ok_button()->GetText());
+  EXPECT_FALSE(bubble()->GetDialogClientView()->cancel_button());
+  EXPECT_FALSE(bubble()->learn_more_button());
+  EXPECT_FALSE(bubble()->body_text());
+  EXPECT_FALSE(bubble()->item_list());
+
+  CloseBubble();
+}
+
+TEST_F(ToolbarActionsBarBubbleViewsTest, TestBubbleDefaultDialogButtons) {
+  TestToolbarActionsBarBubbleDelegate delegate(HeadingString(), BodyString(),
+                                               ActionString());
+  delegate.set_dismiss_button_text(DismissString());
+  delegate.set_default_dialog_button(ui::DIALOG_BUTTON_OK);
+  ShowBubble(&delegate);
+
+  ASSERT_TRUE(bubble()->GetDialogClientView()->ok_button());
+  EXPECT_TRUE(bubble()->GetDialogClientView()->ok_button()->is_default());
+
+  ASSERT_TRUE(bubble()->GetDialogClientView()->cancel_button());
+  EXPECT_FALSE(bubble()->GetDialogClientView()->cancel_button()->is_default());
+
+  CloseBubble();
+}
+
 TEST_F(ToolbarActionsBarBubbleViewsTest, TestShowAndCloseBubble) {
   std::unique_ptr<views::Widget> anchor_widget = CreateAnchorWidget();
   TestToolbarActionsBarBubbleDelegate delegate(HeadingString(), BodyString(),
@@ -250,7 +276,8 @@ TEST_F(ToolbarActionsBarBubbleViewsTest, TestClickActionButton) {
   views::test::TestWidgetObserver bubble_observer(bubble_widget());
 
   EXPECT_FALSE(delegate.close_action());
-  ClickView(bubble()->GetDialogClientView()->ok_button());
+
+  ClickButton(bubble()->GetDialogClientView()->ok_button());
   ASSERT_TRUE(delegate.close_action());
   EXPECT_EQ(ToolbarActionsBarBubbleDelegate::CLOSE_EXECUTE,
             *delegate.close_action());
@@ -266,7 +293,8 @@ TEST_F(ToolbarActionsBarBubbleViewsTest, TestClickDismissButton) {
   views::test::TestWidgetObserver bubble_observer(bubble_widget());
 
   EXPECT_FALSE(delegate.close_action());
-  ClickView(bubble()->GetDialogClientView()->cancel_button());
+
+  ClickButton(bubble()->GetDialogClientView()->cancel_button());
   ASSERT_TRUE(delegate.close_action());
   EXPECT_EQ(ToolbarActionsBarBubbleDelegate::CLOSE_DISMISS_USER_ACTION,
             *delegate.close_action());
@@ -281,7 +309,8 @@ TEST_F(ToolbarActionsBarBubbleViewsTest, TestClickLearnMoreLink) {
   views::test::TestWidgetObserver bubble_observer(bubble_widget());
 
   EXPECT_FALSE(delegate.close_action());
-  ClickView(bubble()->learn_more_button());
+
+  ClickButton(bubble()->learn_more_button());
   ASSERT_TRUE(delegate.close_action());
   EXPECT_EQ(ToolbarActionsBarBubbleDelegate::CLOSE_LEARN_MORE,
             *delegate.close_action());

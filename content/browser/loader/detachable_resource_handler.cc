@@ -7,7 +7,6 @@
 #include <utility>
 
 #include "base/logging.h"
-#include "base/memory/ptr_util.h"
 #include "base/time/time.h"
 #include "content/browser/loader/null_resource_controller.h"
 #include "content/browser/loader/resource_controller.h"
@@ -37,6 +36,14 @@ class DetachableResourceHandler::Controller : public ResourceController {
   void Resume() override {
     MarkAsUsed();
     detachable_handler_->ResumeInternal();
+  }
+
+  void ResumeForRedirect(const base::Optional<net::HttpRequestHeaders>&
+                             modified_request_headers) override {
+    DCHECK(!modified_request_headers.has_value())
+        << "Redirect with modified headers was not supported yet. "
+           "crbug.com/845683";
+    Resume();
   }
 
   void Cancel() override {
@@ -248,13 +255,6 @@ void DetachableResourceHandler::OnResponseCompleted(
   HoldController(std::move(controller));
   next_handler_->OnResponseCompleted(status,
                                      std::make_unique<Controller>(this));
-}
-
-void DetachableResourceHandler::OnDataDownloaded(int bytes_downloaded) {
-  if (!next_handler_)
-    return;
-
-  next_handler_->OnDataDownloaded(bytes_downloaded);
 }
 
 void DetachableResourceHandler::ResumeInternal() {

@@ -36,6 +36,9 @@ class CONTENT_EXPORT DevToolsManagerDelegate {
   // Returns DevToolsAgentHost title to use for given |web_contents| target.
   virtual std::string GetTargetDescription(WebContents* web_contents);
 
+  // Returns whether embedder allows to inspect given |web_contents|.
+  virtual bool AllowInspectingWebContents(WebContents* web_contents);
+
   // Returns all targets embedder would like to report as debuggable
   // remotely.
   virtual DevToolsAgentHost::List RemoteDebuggingTargets();
@@ -53,14 +56,6 @@ class CONTENT_EXPORT DevToolsManagerDelegate {
   virtual bool HandleCommand(DevToolsAgentHost* agent_host,
                              DevToolsAgentHostClient* client,
                              base::DictionaryValue* command);
-
-  // Returns true if the command has been handled, false otherwise.
-  using CommandCallback =
-      base::Callback<void(std::unique_ptr<base::DictionaryValue> response)>;
-  virtual bool HandleAsyncCommand(DevToolsAgentHost* agent_host,
-                                  DevToolsAgentHostClient* client,
-                                  base::DictionaryValue* command,
-                                  const CommandCallback& callback);
 
   // Should return discovery page HTML that should list available tabs
   // and provide attach links.

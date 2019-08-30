@@ -10,19 +10,20 @@
 
 #include "base/macros.h"
 #include "base/memory/weak_ptr.h"
-#include "content/browser/loader/url_loader_request_handler.h"
+#include "content/browser/loader/navigation_loader_interceptor.h"
+#include "content/browser/service_worker/embedded_worker_status.h"
 #include "content/browser/service_worker/service_worker_fetch_dispatcher.h"
 #include "content/browser/service_worker/service_worker_metrics.h"
 #include "content/browser/service_worker/service_worker_response_type.h"
 #include "content/browser/service_worker/service_worker_url_job_wrapper.h"
 #include "content/browser/url_loader_factory_getter.h"
-#include "content/common/service_worker/service_worker_status_code.h"
 #include "content/common/service_worker/service_worker_types.h"
 #include "mojo/public/cpp/bindings/strong_binding.h"
 #include "mojo/public/cpp/system/data_pipe.h"
 #include "services/network/public/mojom/url_loader.mojom.h"
-#include "third_party/WebKit/public/mojom/blob/blob.mojom.h"
-#include "third_party/WebKit/public/mojom/service_worker/service_worker_stream_handle.mojom.h"
+#include "third_party/blink/public/common/service_worker/service_worker_status_code.h"
+#include "third_party/blink/public/mojom/blob/blob.mojom.h"
+#include "third_party/blink/public/mojom/service_worker/service_worker_stream_handle.mojom.h"
 
 namespace content {
 
@@ -30,17 +31,18 @@ struct ServiceWorkerResponse;
 class ServiceWorkerVersion;
 
 // S13nServiceWorker:
-// ServiceWorkerNavigationLoader is the URLLoader used for navigation requests
-// that (potentially) go through a service worker. This loader is only used for
-// the main resource request; once the navigation is committed, the page loads
+// ServiceWorkerNavigationLoader is the URLLoader used for main resource
+// requests (i.e., navigation and shared worker requests) that (potentially) go
+// through a service worker. This loader is only used for the main resource
+// request; once the response is delivered, the resulting client loads
 // subresources via ServiceWorkerSubresourceLoader.
 //
 // This class works similarly to ServiceWorkerURLRequestJob but with
 // network::mojom::URLLoader instead of URLRequest.
 //
 // This class is owned by the job wrapper until it is bound to a URLLoader
-// request. After it is bound |this| is kept alive until the Mojo connection
-// to this URLLoader is dropped.
+// request. After it is bound |this| is kept alive until the Mojo connection to
+// this URLLoader is dropped.
 class CONTENT_EXPORT ServiceWorkerNavigationLoader
     : public network::mojom::URLLoader {
  public:
@@ -48,16 +50,15 @@ class CONTENT_EXPORT ServiceWorkerNavigationLoader
   using ResponseType = ServiceWorkerResponseType;
 
   // Created by ServiceWorkerControlleeRequestHandler::MaybeCreateLoader
-  // when starting to load a page for navigation.
+  // when starting to load a main resource.
   //
-  // This job typically works in the following order:
+  // For the navigation case, this job typically works in the following order:
   // 1. One of the FallbackTo* or ForwardTo* methods are called via
   //    URLJobWrapper by ServiceWorkerControlleeRequestHandler, which
   //    determines how the request should be served (e.g. should fallback
   //    to network or should be sent to the SW). If it decides to fallback
   //    to the network this will call |loader_callback| with a null
-  //    RequestHandler, which will be then handled by
-  //    NavigationURLLoaderNetworkService.
+  //    RequestHandler, which will be then handled by NavigationURLLoaderImpl.
   // 2. If it is decided that the request should be sent to the SW,
   //    this job dispatches a FetchEvent in StartRequest.
   // 3. In DidDispatchFetchEvent() this job determines the request's
@@ -68,11 +69,14 @@ class CONTENT_EXPORT ServiceWorkerNavigationLoader
   //    StartResponse().
   // 5. Then StartResponse() will be called with a
   //    network::mojom::URLLoaderClientPtr that is connected to
-  //    NavigationURLLoaderNetworkService (for resource loading for navigation).
+  //    NavigationURLLoaderImpl (for resource loading for navigation).
   //    This forwards the blob/stream data pipe to the NavigationURLLoader if
   //    the response body was sent as a blob/stream.
+  //
+  // Loads for shared workers work similarly, except SharedWorkerScriptLoader
+  // is used instead of NavigationURLLoaderImpl.
   ServiceWorkerNavigationLoader(
-      URLLoaderRequestHandler::LoaderCallback loader_callback,
+      NavigationLoaderInterceptor::LoaderCallback loader_callback,
       Delegate* delegate,
       const network::ResourceRequest& resource_request,
       scoped_refptr<URLLoaderFactoryGetter> url_loader_factory_getter);
@@ -81,11 +85,8 @@ class CONTENT_EXPORT ServiceWorkerNavigationLoader
 
   // Called via URLJobWrapper.
   void FallbackToNetwork();
-  void FallbackToNetworkOrRenderer();
   void ForwardToServiceWorker();
   bool ShouldFallbackToNetwork();
-  void FailDueToLostController();
-  void Cancel();
   bool WasCanceled() const;
 
   // The navigation request that was holding this job is
@@ -95,14 +96,17 @@ class CONTENT_EXPORT ServiceWorkerNavigationLoader
   // endpoint is held by the client.
   void DetachedFromRequest();
 
+  base::WeakPtr<ServiceWorkerNavigationLoader> AsWeakPtr();
+
  private:
   class StreamWaiter;
 
   // For FORWARD_TO_SERVICE_WORKER case.
   void StartRequest();
-  void DidPrepareFetchEvent(scoped_refptr<ServiceWorkerVersion> version);
+  void DidPrepareFetchEvent(scoped_refptr<ServiceWorkerVersion> version,
+                            EmbeddedWorkerStatus initial_worker_status);
   void DidDispatchFetchEvent(
-      ServiceWorkerStatusCode status,
+      blink::ServiceWorkerStatusCode status,
       ServiceWorkerFetchDispatcher::FetchEventResult fetch_result,
       const ServiceWorkerResponse& response,
       blink::mojom::ServiceWorkerStreamHandlePtr body_as_stream,
@@ -136,7 +140,10 @@ class CONTENT_EXPORT ServiceWorkerNavigationLoader
   void ReturnNetworkError();
 
   // network::mojom::URLLoader:
-  void FollowRedirect() override;
+  void FollowRedirect(const base::Optional<std::vector<std::string>>&
+                          to_be_removed_request_headers,
+                      const base::Optional<net::HttpRequestHeaders>&
+                          modified_request_headers) override;
   void ProceedWithResponse() override;
   void SetPriority(net::RequestPriority priority,
                    int32_t intra_priority_value) override;
@@ -145,10 +152,11 @@ class CONTENT_EXPORT ServiceWorkerNavigationLoader
 
   void OnBlobReadingComplete(int net_error);
 
+  void OnConnectionClosed();
   void DeleteIfNeeded();
 
   ResponseType response_type_ = ResponseType::NOT_DETERMINED;
-  URLLoaderRequestHandler::LoaderCallback loader_callback_;
+  NavigationLoaderInterceptor::LoaderCallback loader_callback_;
 
   Delegate* delegate_;
   network::ResourceRequest resource_request_;
@@ -160,7 +168,6 @@ class CONTENT_EXPORT ServiceWorkerNavigationLoader
 
   bool did_navigation_preload_ = false;
   network::ResourceResponseHead response_head_;
-  base::Optional<net::SSLInfo> ssl_info_;
 
   // Pointer to the URLLoaderClient (i.e. NavigationURLLoader).
   network::mojom::URLLoaderClientPtr url_loader_client_;

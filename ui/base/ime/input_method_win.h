@@ -27,7 +27,7 @@ class UI_BASE_IME_EXPORT InputMethodWin : public InputMethodWinBase {
   void OnFocus() override;
 
   // Overridden from InputMethod:
-  bool OnUntranslatedIMEMessage(const base::NativeEvent& event,
+  bool OnUntranslatedIMEMessage(const MSG event,
                                 NativeEventResult* result) override;
   ui::EventDispatchDetails DispatchKeyEvent(ui::KeyEvent* event) override;
   void OnTextInputTypeChanged(const TextInputClient* client) override;
@@ -73,8 +73,6 @@ class UI_BASE_IME_EXPORT InputMethodWin : public InputMethodWinBase {
                       BOOL* handled);
 
   void RefreshInputLanguage();
-
-  ui::EventDispatchDetails DispatchFabricatedKeyEvent(ui::KeyEvent* event);
 
   // Asks the client to confirm current composition text.
   void ConfirmCompositionText();

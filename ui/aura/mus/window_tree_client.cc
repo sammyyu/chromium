@@ -70,6 +70,10 @@
 #include "ui/gfx/geometry/insets.h"
 #include "ui/gfx/geometry/size.h"
 
+#if defined(USE_OZONE)
+#include "ui/aura/mus/platform_event_source_mus_ozone.h"
+#endif
+
 namespace aura {
 namespace {
 
@@ -82,7 +86,7 @@ struct WindowPortPropertyDataMus : public ui::PropertyData {
 // message loop starts, or upon destruction.
 class EventAckHandler : public base::RunLoop::NestingObserver {
  public:
-  explicit EventAckHandler(std::unique_ptr<EventResultCallback> ack_callback)
+  explicit EventAckHandler(EventResultCallback ack_callback)
       : ack_callback_(std::move(ack_callback)) {
     DCHECK(ack_callback_);
     base::RunLoop::AddNestingObserverOnCurrentThread(this);
@@ -91,10 +95,21 @@ class EventAckHandler : public base::RunLoop::NestingObserver {
   ~EventAckHandler() override {
     base::RunLoop::RemoveNestingObserverOnCurrentThread(this);
     if (ack_callback_) {
-      ack_callback_->Run(handled_ ? ui::mojom::EventResult::HANDLED
-                                  : ui::mojom::EventResult::UNHANDLED);
+      NotifyPlatformEventSource();
+      std::move(ack_callback_)
+          .Run(handled_ ? ui::mojom::EventResult::HANDLED
+                        : ui::mojom::EventResult::UNHANDLED);
     }
   }
+
+#if defined(USE_OZONE)
+  void SetPlatformEventSourceAndEvent(
+      PlatformEventSourceMus* platform_event_source,
+      ui::Event* event) {
+    event_ = event;
+    platform_event_source_ = platform_event_source;
+  }
+#endif
 
   void set_handled(bool handled) { handled_ = handled; }
 
@@ -103,14 +118,25 @@ class EventAckHandler : public base::RunLoop::NestingObserver {
     // Acknowledge the event immediately if a nested run loop starts.
     // Otherwise we appear unresponsive for the life of the nested run loop.
     if (ack_callback_) {
-      ack_callback_->Run(ui::mojom::EventResult::HANDLED);
-      ack_callback_.reset();
+      NotifyPlatformEventSource();
+      std::move(ack_callback_).Run(ui::mojom::EventResult::HANDLED);
     }
   }
 
  private:
-  std::unique_ptr<EventResultCallback> ack_callback_;
+  void NotifyPlatformEventSource() {
+#if defined(USE_OZONE)
+    if (platform_event_source_)
+      platform_event_source_->OnDidProcessEvent(event_);
+#endif
+  }
+
+  EventResultCallback ack_callback_;
   bool handled_ = false;
+#if defined(USE_OZONE)
+  ui::Event* event_ = nullptr;
+  PlatformEventSourceMus* platform_event_source_ = nullptr;
+#endif
 
   DISALLOW_COPY_AND_ASSIGN(EventAckHandler);
 };
@@ -125,20 +151,6 @@ WindowTreeHostMus* GetWindowTreeHostMus(WindowMus* window) {
 
 bool IsInternalProperty(const void* key) {
   return key == client::kModalKey || key == client::kChildModalParentKey;
-}
-
-void SetWindowTypeFromProperties(
-    Window* window,
-    const std::unordered_map<std::string, std::vector<uint8_t>>& properties) {
-  auto type_iter =
-      properties.find(ui::mojom::WindowManager::kWindowType_InitProperty);
-  if (type_iter == properties.end())
-    return;
-
-  // TODO: need to validate type! http://crbug.com/654924.
-  ui::mojom::WindowType window_type = static_cast<ui::mojom::WindowType>(
-      mojo::ConvertTo<int32_t>(type_iter->second));
-  SetWindowType(window, window_type);
 }
 
 // Create and return a MouseEvent or TouchEvent from |event| if |event| is a
@@ -176,6 +188,33 @@ ui::Id GetServerIdForWindow(Window* window) {
   return window ? WindowMus::Get(window)->server_id() : kInvalidServerId;
 }
 
+gfx::Transform ConvertTransformFromServer(WindowMus* window,
+                                          const gfx::Transform& transform) {
+  const float scale = window->GetDeviceScaleFactor();
+  if (scale == 1.0f)
+    return transform;
+
+  gfx::Transform dip_transform = transform;
+  dip_transform.matrix().set(0, 3, dip_transform.matrix().get(0, 3) / scale);
+  dip_transform.matrix().set(1, 3, dip_transform.matrix().get(1, 3) / scale);
+  dip_transform.matrix().set(2, 3, dip_transform.matrix().get(2, 3) / scale);
+  return dip_transform;
+}
+
+// See the comment for ConvertTransformFromServer().
+gfx::Transform ConvertTransformToServer(WindowMus* window,
+                                        const gfx::Transform& transform) {
+  const float scale = window->GetDeviceScaleFactor();
+  if (scale == 1.0f)
+    return transform;
+
+  gfx::Transform pixel_transform = transform;
+  pixel_transform.matrix().set(0, 3, transform.matrix().get(0, 3) * scale);
+  pixel_transform.matrix().set(1, 3, transform.matrix().get(1, 3) * scale);
+  pixel_transform.matrix().set(2, 3, transform.matrix().get(2, 3) * scale);
+  return pixel_transform;
+}
+
 }  // namespace
 
 // static
@@ -185,6 +224,8 @@ std::unique_ptr<WindowTreeClient> WindowTreeClient::CreateForWindowManager(
     WindowManagerDelegate* window_manager_delegate,
     bool automatically_create_display_roots,
     bool create_discardable_memory) {
+  // TODO(sky): this function should be removed when --mash goes away.
+  // https://crbug.com/842365.
   std::unique_ptr<WindowTreeClient> wtc(
       new WindowTreeClient(connector, delegate, window_manager_delegate,
                            nullptr, nullptr, create_discardable_memory));
@@ -197,6 +238,7 @@ std::unique_ptr<WindowTreeClient> WindowTreeClient::CreateForWindowManager(
   factory->CreateWindowTree(MakeRequest(&window_tree), std::move(client),
                             automatically_create_display_roots);
   wtc->SetWindowTree(std::move(window_tree));
+  wtc->CreatePlatformEventSourceIfNecessary();
   return wtc;
 }
 
@@ -205,10 +247,11 @@ std::unique_ptr<WindowTreeClient> WindowTreeClient::CreateForEmbedding(
     service_manager::Connector* connector,
     WindowTreeClientDelegate* delegate,
     ui::mojom::WindowTreeClientRequest request,
-    bool create_discardable_memory) {
+    bool create_discardable_memory,
+    Config config) {
   std::unique_ptr<WindowTreeClient> wtc(
       new WindowTreeClient(connector, delegate, nullptr, std::move(request),
-                           nullptr, create_discardable_memory));
+                           nullptr, create_discardable_memory, config));
   return wtc;
 }
 
@@ -220,7 +263,7 @@ std::unique_ptr<WindowTreeClient> WindowTreeClient::CreateForWindowTreeFactory(
     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner) {
   std::unique_ptr<WindowTreeClient> wtc(
       new WindowTreeClient(connector, delegate, nullptr, nullptr, nullptr,
-                           create_discardable_memory));
+                           create_discardable_memory, Config::kMus2));
   ui::mojom::WindowTreeFactoryPtr factory;
   connector->BindInterface(ui::mojom::kServiceName, &factory);
   ui::mojom::WindowTreePtr window_tree;
@@ -301,6 +344,11 @@ WindowTreeClient::~WindowTreeClient() {
   CHECK(windows_.empty());
 }
 
+bool WindowTreeClient::WaitForDisplays() {
+  // TODO(sky): move WaitForInitialDisplays() here. https://crbug.com/837713
+  return WaitForInitialDisplays();
+}
+
 void WindowTreeClient::SetCanFocus(Window* window, bool can_focus) {
   DCHECK(tree_);
   DCHECK(window);
@@ -336,8 +384,12 @@ void WindowTreeClient::SetHitTestMask(
     const base::Optional<gfx::Rect>& mask_rect) {
   base::Optional<gfx::Rect> out_rect = base::nullopt;
   if (mask_rect) {
-    out_rect = gfx::ConvertRectToPixel(window->GetDeviceScaleFactor(),
-                                       mask_rect.value());
+    if (is_using_pixels()) {
+      out_rect = gfx::ConvertRectToPixel(window->GetDeviceScaleFactor(),
+                                         mask_rect.value());
+    } else {
+      out_rect = mask_rect.value();
+    }
   }
 
   tree_->SetHitTestMask(window->server_id(), out_rect);
@@ -366,8 +418,7 @@ void WindowTreeClient::Embed(Window* window,
 void WindowTreeClient::ScheduleEmbed(
     ui::mojom::WindowTreeClientPtr client,
     base::OnceCallback<void(const base::UnguessableToken&)> callback) {
-  tree_->ScheduleEmbed(std::move(client),
-                       base::AdaptCallbackForRepeating(std::move(callback)));
+  tree_->ScheduleEmbed(std::move(client), std::move(callback));
 }
 
 void WindowTreeClient::EmbedUsingToken(
@@ -414,8 +465,10 @@ WindowTreeClient::WindowTreeClient(
     WindowManagerDelegate* window_manager_delegate,
     mojo::InterfaceRequest<ui::mojom::WindowTreeClient> request,
     scoped_refptr<base::SingleThreadTaskRunner> io_task_runner,
-    bool create_discardable_memory)
-    : connector_(connector),
+    bool create_discardable_memory,
+    Config config)
+    : config_(config),
+      connector_(connector),
       next_window_id_(1),
       next_change_id_(1),
       delegate_(delegate),
@@ -444,15 +497,11 @@ WindowTreeClient::WindowTreeClient(
       io_task_runner = io_thread_->task_runner();
     }
 
-    if (base::FeatureList::IsEnabled(features::kMash)) {
-      gpu_ =
-          ui::Gpu::Create(connector, ui::mojom::kServiceName, io_task_runner);
-      compositor_context_factory_ =
-          std::make_unique<MusContextFactory>(gpu_.get());
-      initial_context_factory_ = Env::GetInstance()->context_factory();
-      Env::GetInstance()->set_context_factory(
-          compositor_context_factory_.get());
-    }
+    gpu_ = ui::Gpu::Create(connector, ui::mojom::kServiceName, io_task_runner);
+    compositor_context_factory_ =
+        std::make_unique<MusContextFactory>(gpu_.get());
+    initial_context_factory_ = Env::GetInstance()->context_factory();
+    Env::GetInstance()->set_context_factory(compositor_context_factory_.get());
 
     // WindowServerTest will create more than one WindowTreeClient. We will not
     // create the discardable memory manager for those tests.
@@ -466,6 +515,13 @@ WindowTreeClient::WindowTreeClient(
           discardable_shared_memory_manager_.get());
     }
   }
+}
+
+void WindowTreeClient::CreatePlatformEventSourceIfNecessary() {
+#if defined(USE_OZONE)
+  if (!ui::PlatformEventSource::GetInstance())
+    platform_event_source_ = std::make_unique<PlatformEventSourceMus>();
+#endif
 }
 
 void WindowTreeClient::RegisterWindowMus(WindowMus* window) {
@@ -494,6 +550,19 @@ void WindowTreeClient::ConvertPointerEventLocationToDip(
     ui::LocatedEvent* event) const {
   // PointerEvents shouldn't have the target set.
   DCHECK(!event->target());
+
+  // TODO(sky): this function should be removed when --mash goes away.
+  // https://crbug.com/842365.
+  if (!is_using_pixels()) {
+    if (!window) {
+      // When there is no window force the root and location to be the same.
+      // They may differ if |window| was valid at the time of the event, but
+      // was since deleted.
+      event->set_location_f(event->root_location_f());
+    }
+    return;
+  }
+
   if (window_manager_delegate_) {
     ConvertPointerEventLocationToDipInWindowManager(display_id, window, event);
     return;
@@ -525,6 +594,8 @@ void WindowTreeClient::ConvertPointerEventLocationToDipInWindowManager(
     int64_t display_id,
     WindowMus* window,
     ui::LocatedEvent* event) const {
+  // TODO(sky): this function should be removed when --mash goes away.
+  // https://crbug.com/842365.
   const WindowTreeHostMus* window_tree_host =
       GetWindowTreeHostForDisplayId(display_id);
   if (!window_tree_host)
@@ -666,12 +737,6 @@ std::unique_ptr<WindowTreeHostMus> WindowTreeClient::CreateWindowTreeHost(
   init_params.window_port = std::move(window_port);
   init_params.window_tree_client = this;
   init_params.display_id = display_id;
-  if (window_manager_delegate_ &&
-      (window_mus_type == WindowMusType::EMBED ||
-       window_mus_type == WindowMusType::DISPLAY_AUTOMATICALLY_CREATED)) {
-    init_params.uses_real_accelerated_widget =
-        !::base::FeatureList::IsEnabled(features::kMash);
-  }
   std::unique_ptr<WindowTreeHostMus> window_tree_host =
       std::make_unique<WindowTreeHostMus>(std::move(init_params));
   window_tree_host->InitHost();
@@ -701,12 +766,16 @@ WindowMus* WindowTreeClient::NewWindowFromWindowData(
   window_port_mus_ptr->should_restack_transient_children_ = false;
   Window* window = new Window(nullptr, std::move(window_port_mus));
   WindowMus* window_mus = window_port_mus_ptr;
-  SetWindowTypeFromProperties(window, window_data.properties);
+  std::map<std::string, std::vector<uint8_t>> properties =
+      mojo::FlatMapToMap(window_data.properties);
+  SetWindowType(window, GetWindowTypeFromProperties(properties));
   window->Init(ui::LAYER_NOT_DRAWN);
   SetLocalPropertiesFromServerProperties(window_mus, window_data);
   window_mus->SetBoundsFromServer(
-      gfx::ConvertRectToDIP(window_mus->GetDeviceScaleFactor(),
-                            window_data.bounds),
+      is_using_pixels()
+          ? gfx::ConvertRectToDIP(window_mus->GetDeviceScaleFactor(),
+                                  window_data.bounds)
+          : window_data.bounds,
       base::nullopt);
   if (parent)
     parent->AddChildFromServer(window_port_mus_ptr);
@@ -720,10 +789,10 @@ void WindowTreeClient::SetWindowTree(ui::mojom::WindowTreePtr window_tree_ptr) {
 
   WindowTreeConnectionEstablished(tree_ptr_.get());
   tree_ptr_->GetCursorLocationMemory(
-      base::Bind(&WindowTreeClient::OnReceivedCursorLocationMemory,
-                 weak_factory_.GetWeakPtr()));
+      base::BindOnce(&WindowTreeClient::OnReceivedCursorLocationMemory,
+                     weak_factory_.GetWeakPtr()));
 
-  tree_ptr_.set_connection_error_handler(base::Bind(
+  tree_ptr_.set_connection_error_handler(base::BindOnce(
       &WindowTreeClient::OnConnectionLost, weak_factory_.GetWeakPtr()));
 
   if (window_manager_delegate_) {
@@ -808,6 +877,8 @@ WindowTreeHostMus* WindowTreeClient::WmNewDisplayAddedImpl(
     ui::mojom::WindowDataPtr root_data,
     bool parent_drawn,
     const base::Optional<viz::LocalSurfaceId>& local_surface_id) {
+  // TODO(sky): this function should be removed when --mash goes away.
+  // https://crbug.com/842365.
   DCHECK(window_manager_delegate_);
 
   got_initial_displays_ = true;
@@ -824,11 +895,10 @@ WindowTreeHostMus* WindowTreeClient::WmNewDisplayAddedImpl(
   return window_tree_host_ptr;
 }
 
-std::unique_ptr<EventResultCallback>
-WindowTreeClient::CreateEventResultCallback(int32_t event_id) {
-  return std::make_unique<EventResultCallback>(
-      base::Bind(&ui::mojom::WindowTree::OnWindowInputEventAck,
-                 base::Unretained(tree_), event_id));
+EventResultCallback WindowTreeClient::CreateEventResultCallback(
+    int32_t event_id) {
+  return base::BindOnce(&ui::mojom::WindowTree::OnWindowInputEventAck,
+                        base::Unretained(tree_), event_id);
 }
 
 void WindowTreeClient::OnReceivedCursorLocationMemory(
@@ -839,28 +909,41 @@ void WindowTreeClient::OnReceivedCursorLocationMemory(
 
 void WindowTreeClient::SetWindowBoundsFromServer(
     WindowMus* window,
-    const gfx::Rect& revert_bounds_in_pixels,
+    const gfx::Rect& revert_bounds,
     const base::Optional<viz::LocalSurfaceId>& local_surface_id) {
   if (IsRoot(window)) {
-    // WindowTreeHost expects bounds to be in pixels.
-    GetWindowTreeHostMus(window)->SetBoundsFromServer(revert_bounds_in_pixels);
-    if (local_surface_id && local_surface_id->is_valid()) {
-      ui::Compositor* compositor = window->GetWindow()->GetHost()->compositor();
-      compositor->SetLocalSurfaceId(*local_surface_id);
-    }
+    // This uses GetScaleFactorForNativeView() as it's called at a time when the
+    // scale factor may not have been applied to the Compositor yet. In
+    // particular, when the scale-factor changes this is called in terms of the
+    // scale factor set on the display. It's the call to
+    // SetBoundsFromServerInPixels() that is responsible for updating the scale
+    // factor in the Compositor.
+    const float dsf = ui::GetScaleFactorForNativeView(window->GetWindow());
+    GetWindowTreeHostMus(window)->SetBoundsFromServerInPixels(
+        is_using_pixels() ? revert_bounds
+                          : gfx::ConvertRectToPixel(dsf, revert_bounds),
+        local_surface_id ? *local_surface_id : viz::LocalSurfaceId());
     return;
   }
 
+  // NOTE: |revert_bounds| is pixels for kMash, and DIPs for kMus2.
+  // Window::SetBoundsFromServer() expects DIPs.
   window->SetBoundsFromServer(
-      gfx::ConvertRectToDIP(window->GetDeviceScaleFactor(),
-                            revert_bounds_in_pixels),
+      is_using_pixels()
+          ? gfx::ConvertRectToDIP(window->GetDeviceScaleFactor(), revert_bounds)
+          : revert_bounds,
       local_surface_id);
 }
 
 void WindowTreeClient::SetWindowTransformFromServer(
     WindowMus* window,
     const gfx::Transform& transform) {
-  window->SetTransformFromServer(transform);
+  if (is_using_pixels()) {
+    window->SetTransformFromServer(
+        ConvertTransformFromServer(window, transform));
+  } else {
+    window->SetTransformFromServer(transform);
+  }
 }
 
 void WindowTreeClient::SetWindowVisibleFromServer(WindowMus* window,
@@ -879,6 +962,8 @@ void WindowTreeClient::SetWindowVisibleFromServer(WindowMus* window,
     window_tree_host->Hide();
 }
 
+// NOTE: this function takes pixels if is_using_pixels() is true, otherwise
+// DIPs. Eventually this will only take DIPs (https://crbug.com/842365).
 void WindowTreeClient::ScheduleInFlightBoundsChange(
     WindowMus* window,
     const gfx::Rect& old_bounds,
@@ -891,7 +976,11 @@ void WindowTreeClient::ScheduleInFlightBoundsChange(
       window->window_mus_type() == WindowMusType::EMBED_IN_OWNER ||
       window->window_mus_type() == WindowMusType::DISPLAY_MANUALLY_CREATED ||
       window->HasLocalLayerTreeFrameSink()) {
-    local_surface_id = window->GetOrAllocateLocalSurfaceId(new_bounds.size());
+    local_surface_id = window->GetOrAllocateLocalSurfaceId(
+        is_using_pixels() ? new_bounds.size()
+                          : gfx::ConvertRectToPixel(
+                                window->GetDeviceScaleFactor(), new_bounds)
+                                .size());
     // |window_tree_host| may be null if this is called during creation of
     // the window associated with the WindowTreeHostMus.
     WindowTreeHost* window_tree_host = window->GetWindow()->GetHost();
@@ -911,20 +1000,9 @@ void WindowTreeClient::OnWindowMusCreated(WindowMus* window) {
 
   DCHECK(window_manager_delegate_ || !IsRoot(window));
 
-  std::unordered_map<std::string, std::vector<uint8_t>> transport_properties;
-  std::set<const void*> property_keys =
-      window->GetWindow()->GetAllPropertyKeys();
   PropertyConverter* property_converter = delegate_->GetPropertyConverter();
-  for (const void* key : property_keys) {
-    std::string transport_name;
-    std::unique_ptr<std::vector<uint8_t>> transport_value;
-    if (!property_converter->ConvertPropertyForTransport(
-            window->GetWindow(), key, &transport_name, &transport_value)) {
-      continue;
-    }
-    transport_properties[transport_name] =
-        transport_value ? std::move(*transport_value) : std::vector<uint8_t>();
-  }
+  base::flat_map<std::string, std::vector<uint8_t>> transport_properties =
+      property_converter->GetTransportProperties(window->GetWindow());
 
   const uint32_t change_id = ScheduleInFlightChange(
       std::make_unique<CrashInFlightChange>(window, ChangeType::NEW_WINDOW));
@@ -962,10 +1040,8 @@ void WindowTreeClient::OnWindowMusCreated(WindowMus* window) {
       window_manager_client_->SetDisplayRoot(
           display, display_init_params->viewport_metrics.Clone(),
           display_init_params->is_primary_display, window->server_id(),
-          base::FeatureList::IsEnabled(features::kMash)
-              ? display_init_params->mirrors
-              : std::vector<display::Display>(),
-          base::Bind(&OnAckMustSucceed, FROM_HERE));
+          display_init_params->mirrors,
+          base::BindOnce(&OnAckMustSucceed, FROM_HERE));
     }
   }
 }
@@ -1015,28 +1091,19 @@ void WindowTreeClient::OnWindowMusBoundsChanged(WindowMus* window,
   // OnWindowTreeHostBoundsWillChange(). Any bounds that happen here are a side
   // effect of those and can be ignored.
   if (IsRoot(window)) {
-    // NOTE: this has to happen to here as during the call to
-    // OnWindowTreeHostBoundsWillChange() the compositor hasn't been updated
-    // yet.
-    if (window->window_mus_type() == WindowMusType::DISPLAY_MANUALLY_CREATED) {
-      WindowTreeHost* window_tree_host = window->GetWindow()->GetHost();
-      // |window_tree_host| may be null if this is called during creation of
-      // the window associated with the WindowTreeHostMus.
-      if (window_tree_host) {
-        viz::LocalSurfaceId local_surface_id =
-            window->GetOrAllocateLocalSurfaceId(
-                window_tree_host->GetBoundsInPixels().size());
-        DCHECK(local_surface_id.is_valid());
-        window_tree_host->compositor()->SetLocalSurfaceId(local_surface_id);
-      }
-    }
+    // Do not set the LocalSurfaceId on the compositor here, because it has
+    // already been set.
     return;
   }
-
-  float device_scale_factor = window->GetDeviceScaleFactor();
+  const float device_scale_factor = window->GetDeviceScaleFactor();
   ScheduleInFlightBoundsChange(
-      window, gfx::ConvertRectToPixel(device_scale_factor, old_bounds),
-      gfx::ConvertRectToPixel(device_scale_factor, new_bounds));
+      window,
+      is_using_pixels()
+          ? gfx::ConvertRectToPixel(device_scale_factor, old_bounds)
+          : old_bounds,
+      is_using_pixels()
+          ? gfx::ConvertRectToPixel(device_scale_factor, new_bounds)
+          : new_bounds);
 }
 
 void WindowTreeClient::OnWindowMusTransformChanged(
@@ -1045,7 +1112,10 @@ void WindowTreeClient::OnWindowMusTransformChanged(
     const gfx::Transform& new_transform) {
   const uint32_t change_id = ScheduleInFlightChange(
       std::make_unique<InFlightTransformChange>(this, window, old_transform));
-  tree_->SetWindowTransform(change_id, window->server_id(), new_transform);
+  tree_->SetWindowTransform(
+      change_id, window->server_id(),
+      is_using_pixels() ? ConvertTransformToServer(window, new_transform)
+                        : new_transform);
 }
 
 void WindowTreeClient::OnWindowMusAddChild(WindowMus* parent,
@@ -1146,6 +1216,9 @@ void WindowTreeClient::OnWindowMusDeviceScaleFactorChanged(
     WindowMus* window,
     float old_scale_factor,
     float new_scale_factor) {
+  if (!is_using_pixels())
+    return;  // device-scale factor doesn't impact DIP bounds.
+
   // Root changes are handled else where.
   if (IsRoot(window))
     return;
@@ -1183,9 +1256,8 @@ bool WindowTreeClient::WasCreatedByThisClient(const WindowMus* window) const {
 }
 
 gfx::Point WindowTreeClient::GetCursorScreenPoint() {
-  // We raced initialization. Return (0, 0).
   if (!cursor_location_memory())
-    return gfx::Point();
+    return gfx::Point();  // We raced initialization. Return (0, 0).
 
   base::subtle::Atomic32 location =
       base::subtle::NoBarrier_Load(cursor_location_memory());
@@ -1312,8 +1384,6 @@ void WindowTreeClient::OnCaptureChanged(ui::Id new_capture_window_id,
 void WindowTreeClient::OnFrameSinkIdAllocated(
     ui::Id window_id,
     const viz::FrameSinkId& frame_sink_id) {
-  if (!base::FeatureList::IsEnabled(features::kMash))
-    return;
   WindowMus* window = GetWindowByServerId(window_id);
   if (!window)
     return;
@@ -1367,10 +1437,14 @@ void WindowTreeClient::OnTopLevelCreated(
         GetOldestInFlightChangeMatching(bounds_change);
     if (current_change) {
       current_change->SetRevertValueFrom(bounds_change);
-    } else if (gfx::ConvertRectToPixel(window->GetDeviceScaleFactor(),
-                                       window->GetWindow()->bounds()) !=
-               bounds) {
-      SetWindowBoundsFromServer(window, bounds, local_surface_id);
+    } else {
+      const gfx::Rect window_bounds =
+          is_using_pixels()
+              ? gfx::ConvertRectToPixel(window->GetDeviceScaleFactor(),
+                                        window->GetWindow()->bounds())
+              : window->GetWindow()->bounds();
+      if (window_bounds != bounds)
+        SetWindowBoundsFromServer(window, bounds, local_surface_id);
     }
   }
 
@@ -1429,6 +1503,11 @@ void WindowTreeClient::OnClientAreaChanged(
     ui::Id window_id,
     const gfx::Insets& new_client_area,
     const std::vector<gfx::Rect>& new_additional_client_areas) {
+  // TODO(sky): this function should be removed when --mash goes away.
+  // https://crbug.com/842365.
+  if (!is_using_pixels())
+    return;
+
   WindowMus* window = GetWindowByServerId(window_id);
   if (!window)
     return;
@@ -1596,6 +1675,7 @@ void WindowTreeClient::OnWindowInputEvent(
     ConvertPointerEventLocationToDip(display_id, window,
                                      event_in_dip->AsLocatedEvent());
     delegate_->OnPointerEventObserved(*event_in_dip->AsPointerEvent(),
+                                      display_id,
                                       window ? window->GetWindow() : nullptr);
   }
 
@@ -1624,7 +1704,6 @@ void WindowTreeClient::OnWindowInputEvent(
     }
   }
 
-  EventAckHandler ack_handler(CreateEventResultCallback(event_id));
   // TODO(moshayedi): crbug.com/617222. No need to convert to ui::MouseEvent or
   // ui::TouchEvent once we have proper support for pointer events.
   std::unique_ptr<ui::Event> mapped_event = MapEvent(*event.get());
@@ -1636,24 +1715,39 @@ void WindowTreeClient::OnWindowInputEvent(
 // TODO: this should really be covered by |root_location|. See 608547 for
 // details.
 #if defined(USE_OZONE)
+  // TODO(sky): remove conditional. This code was only necessary when ash used
+  // this code. Now that ash does not use it, it can be removed once --mash is
+  // removed. https://crbug.com/842365.
   std::unique_ptr<ui::MouseEvent> mapped_event_with_native;
-  if (mapped_event->type() == ui::ET_MOUSE_MOVED ||
-      mapped_event->type() == ui::ET_MOUSE_DRAGGED) {
-    mapped_event_with_native = std::make_unique<ui::MouseEvent>(
-        static_cast<const base::NativeEvent&>(mapped_event.get()));
-    // MouseEvent(NativeEvent) sets the root_location to location.
-    mapped_event_with_native->set_root_location_f(
-        event_location_in_screen_pixel_layout);
-    // |mapped_event| is now the NativeEvent. It's expected the location of the
-    // NativeEvent is the same as root_location.
-    mapped_event->AsMouseEvent()->set_location_f(
-        event_location_in_screen_pixel_layout);
-    event_to_dispatch = mapped_event_with_native.get();
+  if (config_ == Config::kMashDeprecated) {
+    if (mapped_event->type() == ui::ET_MOUSE_MOVED ||
+        mapped_event->type() == ui::ET_MOUSE_DRAGGED) {
+      mapped_event_with_native = std::make_unique<ui::MouseEvent>(
+          static_cast<const ui::PlatformEvent&>(mapped_event.get()));
+      // MouseEvent(NativeEvent) sets the root_location to location.
+      mapped_event_with_native->set_root_location_f(
+          event_location_in_screen_pixel_layout);
+      // |mapped_event| is now the NativeEvent. It's expected the location of
+      // the NativeEvent is the same as root_location.
+      mapped_event->AsMouseEvent()->set_location_f(
+          event_location_in_screen_pixel_layout);
+      event_to_dispatch = mapped_event_with_native.get();
+    }
   }
+#endif
+  // |ack_handler| may use |event_to_dispatch| from its destructor, so it needs
+  // to be destroyed after |event_to_dispatch| is destroyed.
+  EventAckHandler ack_handler(CreateEventResultCallback(event_id));
+#if defined(USE_OZONE)
+  ack_handler.SetPlatformEventSourceAndEvent(platform_event_source_.get(),
+                                             event_to_dispatch);
 #endif
 
   WindowMus* display_root_window = GetWindowByServerId(display_root_window_id);
-  if (display_root_window && event->IsLocatedEvent() &&
+  // TODO(sky): simplify conditional. See comment in USE_OZONE above for why
+  // this isn't necessary with kMus2. https://crbug.com/842365.
+  if (config_ == Config::kMashDeprecated && display_root_window &&
+      event->IsLocatedEvent() &&
       display::Screen::GetScreen()->GetPrimaryDisplay().id() ==
           display::kUnifiedDisplayId) {
     // In Ash's unified desktop mode, each physical display mirrors part of a
@@ -1670,6 +1764,11 @@ void WindowTreeClient::OnWindowInputEvent(
     // focused window, which may have changed by the time we process the event.
     ui::Event::DispatcherApi(event_to_dispatch).set_target(window->GetWindow());
   }
+#if defined(USE_OZONE)
+  if (platform_event_source_)
+    platform_event_source_->OnWillProcessEvent(event_to_dispatch);
+#endif
+
   GetWindowTreeHostMus(window)->SendEventToSink(event_to_dispatch);
 
   ack_handler.set_handled(event_to_dispatch->handled());
@@ -1687,7 +1786,7 @@ void WindowTreeClient::OnPointerEventObserved(std::unique_ptr<ui::Event> event,
   ConvertPointerEventLocationToDip(display_id, target_window,
                                    event->AsLocatedEvent());
   delegate_->OnPointerEventObserved(
-      *event->AsPointerEvent(),
+      *event->AsPointerEvent(), display_id,
       target_window ? target_window->GetWindow() : nullptr);
 }
 
@@ -1730,8 +1829,8 @@ void WindowTreeClient::OnWindowSurfaceChanged(
 }
 
 void WindowTreeClient::OnDragDropStart(
-    const std::unordered_map<std::string, std::vector<uint8_t>>& mime_data) {
-  drag_drop_controller_->OnDragDropStart(mojo::UnorderedMapToMap(mime_data));
+    const base::flat_map<std::string, std::vector<uint8_t>>& mime_data) {
+  drag_drop_controller_->OnDragDropStart(mojo::FlatMapToMap(mime_data));
 }
 
 void WindowTreeClient::OnDragEnter(ui::Id window_id,
@@ -1824,7 +1923,7 @@ void WindowTreeClient::SetBlockingContainers(
   }
   window_manager_client_->SetBlockingContainers(
       std::move(transport_all_blocking_containers),
-      base::Bind(&OnAckMustSucceed, FROM_HERE));
+      base::BindOnce(&OnAckMustSucceed, FROM_HERE));
 }
 
 void WindowTreeClient::GetWindowManager(
@@ -1832,6 +1931,21 @@ void WindowTreeClient::GetWindowManager(
   window_manager_internal_.reset(
       new mojo::AssociatedBinding<ui::mojom::WindowManager>(
           this, std::move(internal)));
+}
+
+void WindowTreeClient::GetScreenProviderObserver(
+    ui::mojom::ScreenProviderObserverAssociatedRequest observer) {
+  DCHECK_EQ(Config::kMus2, config_);
+  screen_provider_observer_binding_.Bind(std::move(observer));
+}
+
+void WindowTreeClient::OnDisplaysChanged(
+    std::vector<ui::mojom::WsDisplayPtr> ws_displays,
+    int64_t primary_display_id,
+    int64_t internal_display_id) {
+  got_initial_displays_ = true;
+  delegate_->OnDisplaysChanged(std::move(ws_displays), primary_display_id,
+                               internal_display_id);
 }
 
 void WindowTreeClient::RequestClose(ui::Id window_id) {
@@ -1910,6 +2024,8 @@ void WindowTreeClient::WmDisplayModified(const display::Display& display) {
 void WindowTreeClient::WmSetBounds(uint32_t change_id,
                                    ui::Id window_id,
                                    const gfx::Rect& transit_bounds_in_pixels) {
+  // TODO(sky): this function should be removed when --mash goes away.
+  // https://crbug.com/842365.
   WindowMus* window = GetWindowByServerId(window_id);
   if (window) {
     float device_scale_factor = window->GetDeviceScaleFactor();
@@ -1964,19 +2080,12 @@ void WindowTreeClient::WmSetCanFocus(ui::Id window_id, bool can_focus) {
 void WindowTreeClient::WmCreateTopLevelWindow(
     uint32_t change_id,
     const viz::FrameSinkId& frame_sink_id,
-    const std::unordered_map<std::string, std::vector<uint8_t>>&
+    const base::flat_map<std::string, std::vector<uint8_t>>&
         transport_properties) {
   DCHECK(frame_sink_id.is_valid());
   std::map<std::string, std::vector<uint8_t>> properties =
-      mojo::UnorderedMapToMap(transport_properties);
-  ui::mojom::WindowType window_type = ui::mojom::WindowType::UNKNOWN;
-  auto type_iter =
-      properties.find(ui::mojom::WindowManager::kWindowType_InitProperty);
-  if (type_iter != properties.end()) {
-    // TODO: validation! http://crbug.com/654924.
-    window_type = static_cast<ui::mojom::WindowType>(
-        mojo::ConvertTo<int32_t>(type_iter->second));
-  }
+      mojo::FlatMapToMap(transport_properties);
+  ui::mojom::WindowType window_type = GetWindowTypeFromProperties(properties);
   Window* window = window_manager_delegate_->OnWmCreateTopLevelWindow(
       window_type, &properties);
   if (!window) {
@@ -2007,7 +2116,7 @@ void WindowTreeClient::WmClientJankinessChanged(ui::ClientSpecificId client_id,
 }
 
 void WindowTreeClient::WmBuildDragImage(const gfx::Point& screen_location,
-                                        const SkBitmap& drag_image,
+                                        const gfx::ImageSkia& drag_image,
                                         const gfx::Vector2d& drag_image_offset,
                                         ui::mojom::PointerKind source) {
   if (!window_manager_delegate_)
@@ -2151,7 +2260,7 @@ void WindowTreeClient::OnAccelerator(uint32_t ack_id,
                                      uint32_t accelerator_id,
                                      std::unique_ptr<ui::Event> event) {
   DCHECK(event);
-  std::unordered_map<std::string, std::vector<uint8_t>> properties;
+  base::flat_map<std::string, std::vector<uint8_t>> properties;
   const ui::mojom::EventResult result = window_manager_delegate_->OnAccelerator(
       accelerator_id, *event.get(), &properties);
   if (ack_id && window_manager_client_)
@@ -2223,6 +2332,8 @@ void WindowTreeClient::SetExtendedHitRegionForChildren(
   if (!window_manager_client_)
     return;
 
+  // TODO(sky): this function should be removed when --mash goes away.
+  // https://crbug.com/842365.
   WindowMus* window_mus = WindowMus::Get(window);
   const float device_scale_factor = window_mus->GetDeviceScaleFactor();
   window_manager_client_->SetExtendedHitRegionForChildren(
@@ -2268,8 +2379,8 @@ void WindowTreeClient::InjectEvent(const ui::Event& event, int64_t display_id) {
   // Check event_injector_ so we don't crash if access to the interface was
   // refused.
   if (event_injector_) {
-    event_injector_->DispatchEvent(display_id, ui::Event::Clone(event),
-                                   base::DoNothing());
+    event_injector_->InjectEvent(display_id, ui::Event::Clone(event),
+                                 base::DoNothing());
   }
 }
 
@@ -2292,6 +2403,8 @@ void WindowTreeClient::SetDisplayConfiguration(
     std::vector<ui::mojom::WmViewportMetricsPtr> viewport_metrics,
     int64_t primary_display_id,
     const std::vector<display::Display>& mirrors) {
+  // TODO(sky): this function should be removed when --mash goes away.
+  // https://crbug.com/842365.
   DCHECK_EQ(displays.size() + mirrors.size(), viewport_metrics.size());
   if (window_manager_client_) {
     const int64_t internal_display_id =
@@ -2300,7 +2413,8 @@ void WindowTreeClient::SetDisplayConfiguration(
             : display::kInvalidDisplayId;
     window_manager_client_->SetDisplayConfiguration(
         displays, std::move(viewport_metrics), primary_display_id,
-        internal_display_id, mirrors, base::Bind(&OnAckMustSucceed, FROM_HERE));
+        internal_display_id, mirrors,
+        base::BindOnce(&OnAckMustSucceed, FROM_HERE));
   }
 }
 
@@ -2308,6 +2422,8 @@ void WindowTreeClient::AddDisplayReusingWindowTreeHost(
     WindowTreeHostMus* window_tree_host,
     const display::Display& display,
     ui::mojom::WmViewportMetricsPtr viewport_metrics) {
+  // TODO(sky): this function should be removed when --mash goes away.
+  // https://crbug.com/842365.
   DCHECK_NE(display.id(), window_tree_host->display_id());
   window_tree_host->set_display_id(display.id());
   if (window_manager_client_) {
@@ -2319,7 +2435,7 @@ void WindowTreeClient::AddDisplayReusingWindowTreeHost(
     window_manager_client_->SetDisplayRoot(
         display, std::move(viewport_metrics), is_primary_display,
         display_root_window->server_id(), mirrors,
-        base::Bind(&OnAckMustSucceed, FROM_HERE));
+        base::BindOnce(&OnAckMustSucceed, FROM_HERE));
     window_tree_host->compositor()->SetLocalSurfaceId(
         display_root_window->GetOrAllocateLocalSurfaceId(
             window_tree_host->GetBoundsInPixels().size()));
@@ -2343,15 +2459,20 @@ void WindowTreeClient::SwapDisplayRoots(WindowTreeHostMus* window_tree_host1,
 
   if (window_manager_client_) {
     window_manager_client_->SwapDisplayRoots(
-        display_id1, display_id2, base::Bind(&OnAckMustSucceed, FROM_HERE));
+        display_id1, display_id2, base::BindOnce(&OnAckMustSucceed, FROM_HERE));
   }
 }
 
 void WindowTreeClient::OnWindowTreeHostBoundsWillChange(
     WindowTreeHostMus* window_tree_host,
-    const gfx::Rect& bounds) {
+    const gfx::Rect& bounds_in_pixels) {
   gfx::Rect old_bounds = window_tree_host->GetBoundsInPixels();
-  gfx::Rect new_bounds = bounds;
+  gfx::Rect new_bounds = bounds_in_pixels;
+  if (!is_using_pixels()) {
+    const float device_scale_factor = window_tree_host->device_scale_factor();
+    old_bounds = gfx::ConvertRectToDIP(device_scale_factor, old_bounds);
+    new_bounds = gfx::ConvertRectToDIP(device_scale_factor, new_bounds);
+  }
   if (window_manager_delegate_) {
     // The window manager origins should always be 0x0. The real origin is
     // communicated by way of SetDisplayConfiguration().
@@ -2368,16 +2489,21 @@ void WindowTreeClient::OnWindowTreeHostClientAreaWillChange(
     const std::vector<gfx::Rect>& additional_client_areas) {
   DCHECK(tree_);
   WindowMus* window = WindowMus::Get(window_tree_host->window());
-  float device_scale_factor = window->GetDeviceScaleFactor();
-  std::vector<gfx::Rect> additional_client_areas_in_pixel;
-  for (const gfx::Rect& area : additional_client_areas) {
-    additional_client_areas_in_pixel.push_back(
-        gfx::ConvertRectToPixel(device_scale_factor, area));
+  if (is_using_pixels()) {
+    const float device_scale_factor = window->GetDeviceScaleFactor();
+    std::vector<gfx::Rect> additional_client_areas_in_pixels;
+    for (const gfx::Rect& area : additional_client_areas) {
+      additional_client_areas_in_pixels.push_back(
+          gfx::ConvertRectToPixel(device_scale_factor, area));
+    }
+    tree_->SetClientArea(
+        window->server_id(),
+        gfx::ConvertInsetsToPixel(device_scale_factor, client_area),
+        additional_client_areas_in_pixels);
+  } else {
+    tree_->SetClientArea(window->server_id(), client_area,
+                         additional_client_areas);
   }
-  tree_->SetClientArea(
-      window->server_id(),
-      gfx::ConvertInsetsToPixel(device_scale_factor, client_area),
-      additional_client_areas_in_pixel);
 }
 
 void WindowTreeClient::OnWindowTreeHostSetOpacity(
@@ -2471,7 +2597,7 @@ std::unique_ptr<WindowPortMus> WindowTreeClient::CreateWindowPortForTopLevel(
   window_port->set_server_id(next_window_id_++);
   RegisterWindowMus(window_port.get());
 
-  std::unordered_map<std::string, std::vector<uint8_t>> transport_properties;
+  base::flat_map<std::string, std::vector<uint8_t>> transport_properties;
   if (properties) {
     for (const auto& property_pair : *properties)
       transport_properties[property_pair.first] = property_pair.second;
@@ -2489,10 +2615,8 @@ void WindowTreeClient::OnWindowTreeHostCreated(
     WindowTreeHostMus* window_tree_host) {
   // All WindowTreeHosts are destroyed before this, so we don't need to unset
   // the DragDropClient.
-  if (install_drag_drop_client_) {
-    client::SetDragDropClient(window_tree_host->window(),
-                              drag_drop_controller_.get());
-  }
+  client::SetDragDropClient(window_tree_host->window(),
+                            drag_drop_controller_.get());
 }
 
 void WindowTreeClient::OnTransientChildWindowAdded(Window* parent,

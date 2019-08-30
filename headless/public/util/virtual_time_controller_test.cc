@@ -5,13 +5,13 @@
 #include "headless/public/util/virtual_time_controller.h"
 
 #include <memory>
+#include <tuple>
 
 #include "base/bind.h"
 #include "base/memory/ref_counted.h"
 #include "base/strings/stringprintf.h"
 #include "base/test/test_simple_task_runner.h"
 #include "headless/public/internal/headless_devtools_client_impl.h"
-#include "headless/public/util/testing/mock_devtools_agent_host.h"
 #include "testing/gmock/include/gmock/gmock.h"
 #include "testing/gtest/include/gtest/gtest.h"
 
@@ -22,16 +22,26 @@ using testing::Mock;
 using testing::Return;
 using testing::_;
 
+namespace {
+
+class MockChannel : public HeadlessDevToolsChannel {
+ public:
+  MockChannel() {}
+  ~MockChannel() override {}
+  MOCK_METHOD1(SetClient, void(HeadlessDevToolsChannel::Client*));
+  MOCK_METHOD1(SendProtocolMessage, void(const std::string&));
+};
+
+}  // namespace
+
 class VirtualTimeControllerTest : public ::testing::Test {
  protected:
   VirtualTimeControllerTest() {
     task_runner_ = base::MakeRefCounted<base::TestSimpleTaskRunner>();
+    auto channel = std::make_unique<MockChannel>();
+    mock_channel_ = channel.get();
+    client_.AttachToChannel(std::move(channel));
     client_.SetTaskRunnerForTests(task_runner_);
-    mock_host_ = base::MakeRefCounted<MockDevToolsAgentHost>();
-
-    EXPECT_CALL(*mock_host_, IsAttached()).WillOnce(Return(false));
-    EXPECT_CALL(*mock_host_, AttachClient(&client_));
-    client_.AttachToHost(mock_host_.get());
     controller_ = std::make_unique<VirtualTimeController>(&client_, 0);
   }
 
@@ -95,16 +105,15 @@ class VirtualTimeControllerTest : public ::testing::Test {
   }
 
   void SendVirtualTimeBudgetExpiredEvent() {
-    client_.DispatchProtocolMessage(
-        mock_host_.get(),
+    client_.ReceiveProtocolMessage(
         "{\"method\":\"Emulation.virtualTimeBudgetExpired\",\"params\":{}}");
     // Events are dispatched asynchronously.
     task_runner_->RunPendingTasks();
   }
 
   scoped_refptr<base::TestSimpleTaskRunner> task_runner_;
-  scoped_refptr<MockDevToolsAgentHost> mock_host_;
   HeadlessDevToolsClientImpl client_;
+  MockChannel* mock_channel_ = nullptr;
   std::unique_ptr<VirtualTimeController> controller_;
 
   bool set_up_complete_ = false;
@@ -114,26 +123,26 @@ class VirtualTimeControllerTest : public ::testing::Test {
 TEST_F(VirtualTimeControllerTest, DoesNotAdvanceTimeWithoutTasks) {
   controller_ = std::make_unique<VirtualTimeController>(&client_, 1000);
 
-  EXPECT_CALL(*mock_host_, DispatchProtocolMessage(&client_, _)).Times(0);
+  EXPECT_CALL(*mock_channel_, SendProtocolMessage(_)).Times(0);
 
   controller_->StartVirtualTime();
 }
 
 TEST_F(VirtualTimeControllerTest, MaxVirtualTimeTaskStarvationCount) {
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":0,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":5000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   GrantVirtualTimeBudget(5000);
 
-  client_.DispatchProtocolMessage(
-      mock_host_.get(), "{\"id\":0,\"result\":{\"virtualTimeBase\":1.0}}");
+  client_.ReceiveProtocolMessage(
+      "{\"id\":0,\"result\":{\"virtualTimeBase\":1."
+      "0,\"virtualTimeTicksBase\":1.0}}");
+  task_runner_->RunPendingTasks();
 
   EXPECT_TRUE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
@@ -195,7 +204,7 @@ class MockObserver : public VirtualTimeController::Observer {
 ACTION_TEMPLATE(RunClosure,
                 HAS_1_TEMPLATE_PARAMS(int, k),
                 AND_0_VALUE_PARAMS()) {
-  ::std::tr1::get<k>(args).Run();
+  std::get<k>(args).Run();
 }
 
 ACTION_P(RunClosure, closure) {
@@ -212,23 +221,23 @@ TEST_F(VirtualTimeControllerTest, InterleavesTasksWithVirtualTime) {
 
   EXPECT_CALL(observer,
               VirtualTimeStarted(base::TimeDelta::FromMilliseconds(0)));
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":0,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   GrantVirtualTimeBudget(3000);
 
   EXPECT_FALSE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
 
-  client_.DispatchProtocolMessage(
-      mock_host_.get(), "{\"id\":0,\"result\":{\"virtualTimeBase\":1.0}}");
+  client_.ReceiveProtocolMessage(
+      "{\"id\":0,\"result\":{\"virtualTimeBase\":1."
+      "0,\"virtualTimeTicksBase\":1.0}}");
+  task_runner_->RunPendingTasks();
 
   EXPECT_TRUE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
@@ -241,27 +250,23 @@ TEST_F(VirtualTimeControllerTest, InterleavesTasksWithVirtualTime) {
         base::TimeDelta::FromMilliseconds(1000 * i),
         MockTask::ContinuePolicy::NOT_REQUIRED);
 
-    EXPECT_CALL(
-        *mock_host_,
-        DispatchProtocolMessage(
-            &client_,
-            base::StringPrintf(
-                "{\"id\":%d,\"method\":\"Emulation.setVirtualTimePolicy\","
-                "\"params\":{\"budget\":1000.0,"
-                "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
-                "\"pauseIfNetworkFetchesPending\","
-                "\"waitForNavigation\":false}}",
-                i * 2)))
-        .WillOnce(Return(true));
+    EXPECT_CALL(*mock_channel_,
+                SendProtocolMessage(base::StringPrintf(
+                    "{\"id\":%d,\"method\":\"Emulation.setVirtualTimePolicy\","
+                    "\"params\":{\"budget\":1000.0,"
+                    "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
+                    "\"pauseIfNetworkFetchesPending\","
+                    "\"waitForNavigation\":false}}",
+                    i * 2)));
 
     SendVirtualTimeBudgetExpiredEvent();
 
     EXPECT_FALSE(set_up_complete_);
     EXPECT_FALSE(budget_expired_);
 
-    client_.DispatchProtocolMessage(
-        mock_host_.get(),
-        base::StringPrintf("{\"id\":%d,\"result\":{\"virtualTimeBase\":1.0}}",
+    client_.ReceiveProtocolMessage(
+        base::StringPrintf("{\"id\":%d,\"result\":{\"virtualTimeBase\":1.0,"
+                           "\"virtualTimeTicksBase\":1.0}}",
                            i * 2));
 
     EXPECT_FALSE(set_up_complete_);
@@ -284,23 +289,23 @@ TEST_F(VirtualTimeControllerTest, CanceledTask) {
   controller_->ScheduleRepeatingTask(&task,
                                      base::TimeDelta::FromMilliseconds(1000));
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":0,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   GrantVirtualTimeBudget(5000);
 
   EXPECT_FALSE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
 
-  client_.DispatchProtocolMessage(
-      mock_host_.get(), "{\"id\":0,\"result\":{\"virtualTimeBase\":1.0}}");
+  client_.ReceiveProtocolMessage(
+      "{\"id\":0,\"result\":{\"virtualTimeBase\":1."
+      "0,\"virtualTimeTicksBase\":1.0}}");
+  task_runner_->RunPendingTasks();
 
   EXPECT_TRUE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
@@ -312,48 +317,44 @@ TEST_F(VirtualTimeControllerTest, CanceledTask) {
       base::TimeDelta::FromMilliseconds(1000),
       MockTask::ContinuePolicy::NOT_REQUIRED);
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":2,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   SendVirtualTimeBudgetExpiredEvent();
 
   EXPECT_FALSE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
 
-  client_.DispatchProtocolMessage(
-      mock_host_.get(),
-      base::StringPrintf("{\"id\":2,\"result\":{\"virtualTimeBase\":1.0}}"));
+  client_.ReceiveProtocolMessage(
+      base::StringPrintf("{\"id\":2,\"result\":{\"virtualTimeBase\":1.0,"
+                         "\"virtualTimeTicksBase\":1.0}}"));
 
   EXPECT_FALSE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
 
   controller_->CancelRepeatingTask(&task);
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":4,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":3000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   SendVirtualTimeBudgetExpiredEvent();
 
   EXPECT_FALSE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
 
-  client_.DispatchProtocolMessage(
-      mock_host_.get(),
-      base::StringPrintf("{\"id\":4,\"result\":{\"virtualTimeBase\":1.0}}"));
+  client_.ReceiveProtocolMessage(
+      base::StringPrintf("{\"id\":4,\"result\":{\"virtualTimeBase\":1.0,"
+                         "\"virtualTimeTicksBase\":1.0}}"));
 
   EXPECT_FALSE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
@@ -374,24 +375,23 @@ TEST_F(VirtualTimeControllerTest, MultipleTasks) {
 
   // We should only get one call to Emulation.setVirtualTimePolicy despite
   // having two tasks.
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":0,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   GrantVirtualTimeBudget(2000);
   EXPECT_FALSE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
 
-  client_.DispatchProtocolMessage(
-      mock_host_.get(),
-      base::StringPrintf("{\"id\":0,\"result\":{\"virtualTimeBase\":1.0}}"));
+  client_.ReceiveProtocolMessage(
+      base::StringPrintf("{\"id\":0,\"result\":{\"virtualTimeBase\":1.0,"
+                         "\"virtualTimeTicksBase\":1.0}}"));
 
+  task_runner_->RunPendingTasks();
   EXPECT_TRUE(set_up_complete_);
   EXPECT_FALSE(budget_expired_);
 }
@@ -408,15 +408,13 @@ TEST_F(VirtualTimeControllerTest, StartPolicy) {
                                      base::TimeDelta::FromMilliseconds(1000));
 
   // Despite only one task asking for it we should get waitForNavigation:true
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":0,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":true}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":true}}"));
 
   GrantVirtualTimeBudget(2000);
 }
@@ -431,26 +429,25 @@ TEST_F(VirtualTimeControllerTest, DeferStartAndResume) {
   EXPECT_FALSE(deferrer.continue_callback_);
 
   // Shouldn't see the devtools command until the deferrer's callback has run.
-  EXPECT_CALL(*mock_host_, DispatchProtocolMessage(&client_, _)).Times(0);
+  EXPECT_CALL(*mock_channel_, SendProtocolMessage(_)).Times(0);
   GrantVirtualTimeBudget(2000);
   EXPECT_TRUE(deferrer.continue_callback_);
 
-  Mock::VerifyAndClearExpectations(mock_host_.get());
+  Mock::VerifyAndClearExpectations(mock_channel_);
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":0,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   std::move(deferrer.continue_callback_).Run();
 
-  client_.DispatchProtocolMessage(
-      mock_host_.get(), "{\"id\":0,\"result\":{\"virtualTimeBase\":1.0}}");
+  client_.ReceiveProtocolMessage(
+      "{\"id\":0,\"result\":{\"virtualTimeBase\":1."
+      "0,\"virtualTimeTicksBase\":1.0}}");
   EXPECT_FALSE(deferrer.continue_callback_);
 
   task1.ExpectCallOnceWithOffsetAndReturn(
@@ -459,22 +456,20 @@ TEST_F(VirtualTimeControllerTest, DeferStartAndResume) {
 
   // Even after executing task1, virtual time shouldn't resume until the
   // deferrer's callback has run.
-  EXPECT_CALL(*mock_host_, DispatchProtocolMessage(&client_, _)).Times(0);
+  EXPECT_CALL(*mock_channel_, SendProtocolMessage(_)).Times(0);
 
   SendVirtualTimeBudgetExpiredEvent();
   EXPECT_TRUE(deferrer.continue_callback_);
 
-  Mock::VerifyAndClearExpectations(mock_host_.get());
+  Mock::VerifyAndClearExpectations(mock_channel_);
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":2,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   std::move(deferrer.continue_callback_).Run();
 }
@@ -577,52 +572,46 @@ TEST_F(VirtualTimeControllerTest, ReentrantTask) {
   controller_->ScheduleRepeatingTask(&task_a,
                                      base::TimeDelta::FromMilliseconds(1000));
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":0,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   GrantVirtualTimeBudget(6000);
-  client_.DispatchProtocolMessage(
-      mock_host_.get(),
-      base::StringPrintf("{\"id\":0,\"result\":{\"virtualTimeBase\":1.0}}"));
+  client_.ReceiveProtocolMessage(
+      base::StringPrintf("{\"id\":0,\"result\":{\"virtualTimeBase\":1.0,"
+                         "\"virtualTimeTicksBase\":1.0}}"));
 
-  Mock::VerifyAndClearExpectations(&mock_host_);
+  Mock::VerifyAndClearExpectations(mock_channel_);
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":2,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1500.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   SendVirtualTimeBudgetExpiredEvent();
-  client_.DispatchProtocolMessage(
-      mock_host_.get(),
-      base::StringPrintf("{\"id\":2,\"result\":{\"virtualTimeBase\":1.0}}"));
-  Mock::VerifyAndClearExpectations(&mock_host_);
+  client_.ReceiveProtocolMessage(
+      base::StringPrintf("{\"id\":2,\"result\":{\"virtualTimeBase\":1.0,"
+                         "\"virtualTimeTicksBase\":1.0}}"));
+  Mock::VerifyAndClearExpectations(mock_channel_);
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":4,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":3500.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
   SendVirtualTimeBudgetExpiredEvent();
-  client_.DispatchProtocolMessage(
-      mock_host_.get(),
-      base::StringPrintf("{\"id\":4,\"result\":{\"virtualTimeBase\":1.0}}"));
+  client_.ReceiveProtocolMessage(
+      base::StringPrintf("{\"id\":4,\"result\":{\"virtualTimeBase\":1.0,"
+                         "\"virtualTimeTicksBase\":1.0}}"));
 
   EXPECT_THAT(
       log, ElementsAre("Virtual time started @ 0", "A: interval elapsed @ 1000",
@@ -677,30 +666,26 @@ TEST_F(VirtualTimeControllerTest, Priority) {
   controller_->ScheduleRepeatingTask(&task_c,
                                      base::TimeDelta::FromMilliseconds(1000));
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":0,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   GrantVirtualTimeBudget(2000);
-  client_.DispatchProtocolMessage(
-      mock_host_.get(),
-      base::StringPrintf("{\"id\":0,\"result\":{\"virtualTimeBase\":1.0}}"));
+  client_.ReceiveProtocolMessage(
+      base::StringPrintf("{\"id\":0,\"result\":{\"virtualTimeBase\":1.0,"
+                         "\"virtualTimeTicksBase\":1.0}}"));
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":2,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   SendVirtualTimeBudgetExpiredEvent();
 
@@ -719,44 +704,39 @@ TEST_F(VirtualTimeControllerTest, ContinuePolicyContinueMoreTimeNeeded) {
   EXPECT_CALL(observer,
               VirtualTimeStarted(base::TimeDelta::FromMilliseconds(0)));
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":0,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   controller_->StartVirtualTime();
 
-  client_.DispatchProtocolMessage(
-      mock_host_.get(), "{\"id\":0,\"result\":{\"virtualTimeBase\":1.0}}");
+  client_.ReceiveProtocolMessage(
+      "{\"id\":0,\"result\":{\"virtualTimeBase\":1."
+      "0,\"virtualTimeTicksBase\":1.0}}");
 
   for (int i = 1; i < 4; i++) {
     task.ExpectCallOnceWithOffsetAndReturn(
         base::TimeDelta::FromMilliseconds(1000 * i),
         MockTask::ContinuePolicy::CONTINUE_MORE_TIME_NEEDED);
 
-    EXPECT_CALL(
-        *mock_host_,
-        DispatchProtocolMessage(
-            &client_,
-            base::StringPrintf(
-                "{\"id\":%d,\"method\":\"Emulation.setVirtualTimePolicy\","
-                "\"params\":{\"budget\":1000.0,"
-                "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
-                "\"pauseIfNetworkFetchesPending\","
-                "\"waitForNavigation\":false}}",
-                i * 2)))
-        .WillOnce(Return(true));
+    EXPECT_CALL(*mock_channel_,
+                SendProtocolMessage(base::StringPrintf(
+                    "{\"id\":%d,\"method\":\"Emulation.setVirtualTimePolicy\","
+                    "\"params\":{\"budget\":1000.0,"
+                    "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
+                    "\"pauseIfNetworkFetchesPending\","
+                    "\"waitForNavigation\":false}}",
+                    i * 2)));
 
     SendVirtualTimeBudgetExpiredEvent();
 
-    client_.DispatchProtocolMessage(
-        mock_host_.get(),
-        base::StringPrintf("{\"id\":%d,\"result\":{\"virtualTimeBase\":1.0}}",
+    client_.ReceiveProtocolMessage(
+        base::StringPrintf("{\"id\":%d,\"result\":{\"virtualTimeBase\":1.0,"
+                           "\"virtualTimeTicksBase\":1.0}}",
                            i * 2));
   }
 
@@ -786,20 +766,19 @@ TEST_F(VirtualTimeControllerTest, ContinuePolicyStopAndRestart) {
   EXPECT_CALL(observer,
               VirtualTimeStarted(base::TimeDelta::FromMilliseconds(0)));
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":0,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   controller_->StartVirtualTime();
 
-  client_.DispatchProtocolMessage(
-      mock_host_.get(), "{\"id\":0,\"result\":{\"virtualTimeBase\":1.0}}");
+  client_.ReceiveProtocolMessage(
+      "{\"id\":0,\"result\":{\"virtualTimeBase\":1."
+      "0,\"virtualTimeTicksBase\":1.0}}");
 
   for (int i = 1; i < 4; i++) {
     task1.ExpectCallOnceWithOffsetAndReturn(
@@ -809,24 +788,20 @@ TEST_F(VirtualTimeControllerTest, ContinuePolicyStopAndRestart) {
         base::TimeDelta::FromMilliseconds(1000 * i),
         MockTask::ContinuePolicy::CONTINUE_MORE_TIME_NEEDED);
 
-    EXPECT_CALL(
-        *mock_host_,
-        DispatchProtocolMessage(
-            &client_,
-            base::StringPrintf(
-                "{\"id\":%d,\"method\":\"Emulation.setVirtualTimePolicy\","
-                "\"params\":{\"budget\":1000.0,"
-                "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
-                "\"pauseIfNetworkFetchesPending\","
-                "\"waitForNavigation\":false}}",
-                i * 2)))
-        .WillOnce(Return(true));
+    EXPECT_CALL(*mock_channel_,
+                SendProtocolMessage(base::StringPrintf(
+                    "{\"id\":%d,\"method\":\"Emulation.setVirtualTimePolicy\","
+                    "\"params\":{\"budget\":1000.0,"
+                    "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
+                    "\"pauseIfNetworkFetchesPending\","
+                    "\"waitForNavigation\":false}}",
+                    i * 2)));
 
     SendVirtualTimeBudgetExpiredEvent();
 
-    client_.DispatchProtocolMessage(
-        mock_host_.get(),
-        base::StringPrintf("{\"id\":%d,\"result\":{\"virtualTimeBase\":1.0}}",
+    client_.ReceiveProtocolMessage(
+        base::StringPrintf("{\"id\":%d,\"result\":{\"virtualTimeBase\":1.0,"
+                           "\"virtualTimeTicksBase\":1.0}}",
                            i * 2));
   }
 
@@ -849,20 +824,19 @@ TEST_F(VirtualTimeControllerTest, ContinuePolicyStopAndRestart) {
   EXPECT_CALL(observer,
               VirtualTimeStarted(base::TimeDelta::FromMilliseconds(4000)));
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":8,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   controller_->StartVirtualTime();
 
-  client_.DispatchProtocolMessage(
-      mock_host_.get(), "{\"id\":8,\"result\":{\"virtualTimeBase\":1.0}}");
+  client_.ReceiveProtocolMessage(
+      "{\"id\":8,\"result\":{\"virtualTimeBase\":1."
+      "0,\"virtualTimeTicksBase\":1.0}}");
 
   task1.ExpectCallOnceWithOffsetAndReturn(
       base::TimeDelta::FromMilliseconds(5000),
@@ -871,15 +845,13 @@ TEST_F(VirtualTimeControllerTest, ContinuePolicyStopAndRestart) {
       base::TimeDelta::FromMilliseconds(5000),
       MockTask::ContinuePolicy::CONTINUE_MORE_TIME_NEEDED);
 
-  EXPECT_CALL(*mock_host_,
-              DispatchProtocolMessage(
-                  &client_,
+  EXPECT_CALL(*mock_channel_,
+              SendProtocolMessage(
                   "{\"id\":10,\"method\":\"Emulation.setVirtualTimePolicy\","
                   "\"params\":{\"budget\":1000.0,"
                   "\"maxVirtualTimeTaskStarvationCount\":0,\"policy\":"
                   "\"pauseIfNetworkFetchesPending\","
-                  "\"waitForNavigation\":false}}"))
-      .WillOnce(Return(true));
+                  "\"waitForNavigation\":false}}"));
 
   SendVirtualTimeBudgetExpiredEvent();
 }

@@ -2,6 +2,8 @@
 // Use of this source code is governed by a BSD-style license that can be
 // found in the LICENSE file.
 
+#include <tuple>
+
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/files/file_path.h"
@@ -77,17 +79,17 @@ static void FillCastMessage(const std::string& message,
 ACTION_TEMPLATE(InvokeCompletionCallback,
                 HAS_1_TEMPLATE_PARAMS(int, k),
                 AND_1_VALUE_PARAMS(result)) {
-  ::std::tr1::get<k>(args).Run(result);
+  std::get<k>(args).Run(result);
 }
 
 }  // namespace
 
-class CastChannelAPITest : public ExtensionApiTest {
+class CastChannelAPITest : public extensions::ExtensionApiTest {
  public:
   CastChannelAPITest() : ip_endpoint_(CreateIPEndPointForTest()) {}
 
   void SetUpCommandLine(base::CommandLine* command_line) override {
-    ExtensionApiTest::SetUpCommandLine(command_line);
+    extensions::ExtensionApiTest::SetUpCommandLine(command_line);
     command_line->AppendSwitchASCII(
         extensions::switches::kWhitelistedExtensionID, kTestExtensionId);
   }
@@ -96,7 +98,7 @@ class CastChannelAPITest : public ExtensionApiTest {
     // Stub out DualMediaSinkService so it does not interfere with the test.
     media_router::DualMediaSinkService::SetInstanceForTest(
         new media_router::NoopDualMediaSinkService());
-    ExtensionApiTest::SetUp();
+    extensions::ExtensionApiTest::SetUp();
   }
 
   void SetUpMockCastSocket() {

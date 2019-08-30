@@ -28,9 +28,6 @@ const char kAshDisableSmoothScreenRotation[] =
 // Disables the split view on tablet mode.
 const char kAshDisableTabletSplitView[] = "disable-tablet-splitview";
 
-// Disables the trilinear filtering for overview and window cycle list.
-const char kAshDisableTrilinearFiltering[] = "ash-disable-trilinear-filtering";
-
 // Disable the Touch Exploration Mode. Touch Exploration Mode will no longer be
 // turned on automatically when spoken feedback is enabled when this flag is
 // set.
@@ -48,13 +45,6 @@ const char kAshEnableCursorMotionBlur[] = "ash-enable-cursor-motion-blur";
 const char kAshEnableMagnifierKeyScroller[] =
     "ash-enable-magnifier-key-scroller";
 
-// Enables the new overview ui.
-// TODO(sammiequon): Remove this once the feature is launched. crbug.com/782330.
-const char kAshEnableNewOverviewUi[] = "ash-enable-new-overview-ui";
-
-// Enable the Night Light feature.
-const char kAshEnableNightLight[] = "ash-enable-night-light";
-
 // Enables the palette on every display, instead of only the internal one.
 const char kAshEnablePaletteOnAllDisplays[] =
     "ash-enable-palette-on-all-displays";
@@ -69,7 +59,7 @@ const char kAshSidebarDisabled[] = "disable-ash-sidebar";
 const char kAshEnableTabletMode[] = "enable-touchview";
 
 // Enable the wayland server.
-const char kAshEnableWaylandServer[] = "ash-enable-wayland-server";
+const char kAshEnableWaylandServer[] = "enable-wayland-server";
 
 // Enables mirrored screen.
 const char kAshEnableMirroredScreen[] = "ash-enable-mirrored-screen";
@@ -80,6 +70,17 @@ const char kAshEnableScaleSettingsTray[] = "ash-enable-scale-settings-tray";
 
 // Enables the stylus tools next to the status area.
 const char kAshForceEnableStylusTools[] = "force-enable-stylus-tools";
+
+// Power button position includes the power button's physical display side and
+// the percentage for power button center position to the display's
+// width/height in landscape_primary screen orientation. The value is a JSON
+// object containing a "position" property with the value "left", "right",
+// "top", or "bottom". For "left" and "right", a "y" property specifies the
+// button's center position as a fraction of the display's height (in [0.0,
+// 1.0]) relative to the top of the display. For "top" and "bottom", an "x"
+// property gives the position as a fraction of the display's width relative to
+// the left side of the display.
+const char kAshPowerButtonPosition[] = "ash-power-button-position";
 
 // Enables required things for the selected UI mode, regardless of whether the
 // Chromebook is currently in the selected UI mode.
@@ -118,10 +119,6 @@ const char kAshTouchHud[] = "ash-touch-hud";
 // instead of displaying an interactive animation.
 const char kAuraLegacyPowerButton[] = "aura-legacy-power-button";
 
-// Forces non-tablet-style power button behavior even if the device has a
-// convertible form factor.
-const char kForceClamshellPowerButton[] = "force-clamshell-power-button";
-
 // Whether this device has an internal stylus.
 const char kHasInternalStylus[] = "has-internal-stylus";
 
@@ -129,13 +126,12 @@ const char kHasInternalStylus[] = "has-internal-stylus";
 // option "Show taps".
 const char kShowTaps[] = "show-taps";
 
-// If true, the views login screen will be shown. This will become the default
-// in the future.
-const char kShowViewsLogin[] = "show-views-login";
-
 // If true, the webui lock screen wil be shown. This is deprecated and will be
 // removed in the future.
 const char kShowWebUiLock[] = "show-webui-lock";
+
+// Forces the webui login implementation.
+const char kShowWebUiLogin[] = "show-webui-login";
 
 // Chromebases' touchscreens can be used to wake from suspend, unlike the
 // touchscreens on other Chrome OS devices. If set, the touchscreen is kept
@@ -148,29 +144,9 @@ const char kTouchscreenUsableWhileScreenOff[] =
 // Hides all Message Center notification popups (toasts). Used for testing.
 const char kSuppressMessageCenterPopups[] = "suppress-message-center-popups";
 
-// By default we use classic IME (i.e. InputMethodChromeOS) in kMus. This flag
-// enables the IME service (i.e. InputMethodMus) instead.
-const char kUseIMEService[] = "use-ime-service";
-
-bool IsNightLightEnabled() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(
-      kAshEnableNightLight);
-}
-
 bool IsSidebarEnabled() {
   return base::CommandLine::ForCurrentProcess()->HasSwitch(
       switches::kAshSidebarEnabled);
-}
-
-bool IsTrilinearFilteringEnabled() {
-  static bool use_trilinear_filtering =
-      !base::CommandLine::ForCurrentProcess()->HasSwitch(
-          switches::kAshDisableTrilinearFiltering);
-  return use_trilinear_filtering;
-}
-
-bool IsUsingViewsLogin() {
-  return base::CommandLine::ForCurrentProcess()->HasSwitch(kShowViewsLogin);
 }
 
 bool IsUsingViewsLock() {

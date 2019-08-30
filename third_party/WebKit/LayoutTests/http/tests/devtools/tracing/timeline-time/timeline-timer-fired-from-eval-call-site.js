@@ -12,7 +12,7 @@ function performActions()
     var promise = new Promise((fulfill) => window.callWhenDone = fulfill);
     var content = "" +
         "var fn2 = function() {" +
-        "    console.markTimeline(\\"Script evaluated\\");" +
+        "    console.timeStamp(\\"Script evaluated\\");" +
         "    window.callWhenDone();" +
         "};\\\\n" +
         "var fn1 = function() {" +
@@ -32,7 +32,7 @@ function performActions()
 
   await PerformanceTestRunner.invokeAsyncWithTimeline('performActions');
 
-  var events = PerformanceTestRunner.timelineModel().mainThreadEvents();
+  var events = PerformanceTestRunner.mainTrackEvents();
   for (var i = 0; i < events.length; ++i) {
     if (events[i].name !== TimelineModel.TimelineModel.RecordType.TimerFire)
       continue;

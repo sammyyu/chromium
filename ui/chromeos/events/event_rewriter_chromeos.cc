@@ -11,7 +11,6 @@
 #include "base/command_line.h"
 #include "base/logging.h"
 #include "base/macros.h"
-#include "base/memory/ptr_util.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/string_split.h"
 #include "base/strings/string_util.h"
@@ -933,7 +932,10 @@ void EventRewriterChromeOS::RewriteExtendedKeys(const ui::KeyEvent& key_event,
          {ui::EF_COMMAND_DOWN, ui::VKEY_OEM_PERIOD},
          {ui::EF_NONE, ui::DomCode::INSERT, ui::DomKey::INSERT,
           ui::VKEY_INSERT}}};
-    if (RewriteWithKeyboardRemappings(
+    bool skip_search_key_remapping =
+        delegate_ && delegate_->IsSearchKeyAcceleratorReserved();
+    if (!skip_search_key_remapping &&
+        RewriteWithKeyboardRemappings(
             kSearchRemappings, arraysize(kSearchRemappings), incoming, state)) {
       return;
     }

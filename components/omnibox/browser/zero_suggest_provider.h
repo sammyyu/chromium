@@ -17,7 +17,6 @@
 #include "components/history/core/browser/history_types.h"
 #include "components/omnibox/browser/base_search_provider.h"
 #include "components/omnibox/browser/search_provider.h"
-#include "net/url_request/url_fetcher_delegate.h"
 #include "third_party/metrics_proto/omnibox_event.pb.h"
 
 class AutocompleteProviderListener;
@@ -27,8 +26,8 @@ namespace base {
 class Value;
 }
 
-namespace net {
-class URLFetcher;
+namespace network {
+class SimpleURLLoader;
 }
 
 namespace user_prefs {
@@ -37,16 +36,14 @@ class PrefRegistrySyncable;
 
 // Autocomplete provider for searches based on the current URL.
 //
-// The controller will call Start() with |on_focus| set when the user focuses
-// the omnibox. After construction, the autocomplete controller repeatedly calls
-// Start() with some user input, each time expecting to receive an updated set
-// of matches.
+// The controller will call Start() when the user focuses the omnibox. After
+// construction, the autocomplete controller repeatedly calls Start() with some
+// user input, each time expecting to receive an updated set of matches.
 //
 // TODO(jered): Consider deleting this class and building this functionality
 // into SearchProvider after dogfood and after we break the association between
 // omnibox text and suggestions.
-class ZeroSuggestProvider : public BaseSearchProvider,
-                            public net::URLFetcherDelegate {
+class ZeroSuggestProvider : public BaseSearchProvider {
  public:
   // Creates and returns an instance of this provider.
   static ZeroSuggestProvider* Create(AutocompleteProviderClient* client,
@@ -67,6 +64,8 @@ class ZeroSuggestProvider : public BaseSearchProvider,
   void ResetSession() override;
 
  private:
+  FRIEND_TEST_ALL_PREFIXES(ZeroSuggestProviderTest,
+                           TestStartWillStopForSomeInput);
   ZeroSuggestProvider(AutocompleteProviderClient* client,
                       HistoryURLProvider* history_url_provider,
                       AutocompleteProviderListener* listener);
@@ -92,8 +91,9 @@ class ZeroSuggestProvider : public BaseSearchProvider,
       const SearchSuggestionParser::SuggestResult& result) const override;
   void RecordDeletionResult(bool success) override;
 
-  // net::URLFetcherDelegate:
-  void OnURLFetchComplete(const net::URLFetcher* source) override;
+  // Called when loading is complete.
+  void OnURLLoadComplete(const network::SimpleURLLoader* source,
+                         std::unique_ptr<std::string> response_body);
 
   // The function updates |results_| with data parsed from |json_data|.
   //
@@ -131,14 +131,15 @@ class ZeroSuggestProvider : public BaseSearchProvider,
   // When the user is in the Most Visited field trial, we ask the TopSites
   // service for the most visited URLs. It then calls back to this function to
   // return those |urls|.
-  void OnMostVisitedUrlsAvailable(const history::MostVisitedURLList& urls);
+  void OnMostVisitedUrlsAvailable(size_t request_num,
+                                  const history::MostVisitedURLList& urls);
 
   // When the user is in the contextual omnibox suggestions field trial, we ask
-  // the ContextualSuggestionsService for a fetcher to retrieve recommendations.
-  // When the fetcher is ready, the contextual suggestion service then calls
-  // back to this function with the |fetcher| to use for the request.
-  void OnContextualSuggestionsFetcherAvailable(
-      std::unique_ptr<net::URLFetcher> fetcher);
+  // the ContextualSuggestionsService for a loader to retrieve recommendations.
+  // When the loader has started, the contextual suggestion service then calls
+  // back to this function with the |loader| to pass its ownership to |this|.
+  void OnContextualSuggestionsLoaderAvailable(
+      std::unique_ptr<network::SimpleURLLoader> loader);
 
   // Whether zero suggest suggestions are allowed in the given context.
   bool AllowZeroSuggestSuggestions(const GURL& current_page_url) const;
@@ -163,6 +164,9 @@ class ZeroSuggestProvider : public BaseSearchProvider,
   // When the provider is not running, the result type is set to NONE.
   ResultType result_type_running_;
 
+  // For reconciling asynchronous requests for most visited URLs.
+  size_t most_visited_request_num_ = 0;
+
   // The URL for which a suggestion fetch is pending.
   std::string current_query_;
 
@@ -176,8 +180,8 @@ class ZeroSuggestProvider : public BaseSearchProvider,
   // Copy of OmniboxEditModel::permanent_text_.
   base::string16 permanent_text_;
 
-  // Fetcher used to retrieve results.
-  std::unique_ptr<net::URLFetcher> fetcher_;
+  // Loader used to retrieve results.
+  std::unique_ptr<network::SimpleURLLoader> loader_;
 
   // Suggestion for the current URL.
   AutocompleteMatch current_url_match_;

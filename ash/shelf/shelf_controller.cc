@@ -17,6 +17,7 @@
 #include "ash/shelf/shelf_constants.h"
 #include "ash/shell.h"
 #include "ash/strings/grit/ash_strings.h"
+#include "ash/system/message_center/arc/arc_notification_constants.h"
 #include "ash/wm/tablet_mode/tablet_mode_controller.h"
 #include "base/auto_reset.h"
 #include "base/strings/utf_string_conversions.h"
@@ -82,6 +83,14 @@ void SetShelfAlignmentFromPrefs() {
   }
 }
 
+void UpdateShelfVisibility() {
+  for (const auto& display : display::Screen::GetScreen()->GetAllDisplays()) {
+    Shelf* shelf = GetShelfForDisplay(display.id());
+    if (shelf)
+      shelf->UpdateVisibilityState();
+  }
+}
+
 // Set each Shelf's auto-hide behavior and alignment from the per-display prefs.
 void SetShelfBehaviorsFromPrefs() {
   // The shelf should always be bottom-aligned and not hidden in tablet mode;
@@ -99,8 +108,8 @@ void SetShelfBehaviorsFromPrefs() {
 }  // namespace
 
 ShelfController::ShelfController()
-    : is_touchable_app_context_menu_enabled_(
-          features::IsTouchableAppContextMenuEnabled()),
+    : is_notification_indicator_enabled_(
+          features::IsNotificationIndicatorEnabled()),
       message_center_observer_(this) {
   // Set the delegate and title string for the back button.
   model_.SetShelfItemDelegate(ShelfID(kBackButtonId), nullptr);
@@ -122,24 +131,26 @@ ShelfController::ShelfController()
   Shell::Get()->session_controller()->AddObserver(this);
   Shell::Get()->tablet_mode_controller()->AddObserver(this);
   Shell::Get()->window_tree_host_manager()->AddObserver(this);
-  if (is_touchable_app_context_menu_enabled_)
+  if (is_notification_indicator_enabled_)
     message_center_observer_.Add(message_center::MessageCenter::Get());
 }
 
 ShelfController::~ShelfController() {
-  Shell::Get()->window_tree_host_manager()->RemoveObserver(this);
-  if (Shell::Get()->tablet_mode_controller())
-    Shell::Get()->tablet_mode_controller()->RemoveObserver(this);
-  Shell::Get()->session_controller()->RemoveObserver(this);
   model_.RemoveObserver(this);
   model_.DestroyItemDelegates();
 }
 
+void ShelfController::Shutdown() {
+  Shell::Get()->window_tree_host_manager()->RemoveObserver(this);
+  Shell::Get()->tablet_mode_controller()->RemoveObserver(this);
+  Shell::Get()->session_controller()->RemoveObserver(this);
+}
+
 // static
 void ShelfController::RegisterProfilePrefs(PrefRegistrySimple* registry) {
-  // These prefs are public for ChromeLauncherController's OnIsSyncingChanged
-  // and ShelfBoundsChangesProbablyWithUser. See the pref names definitions for
-  // explanations of the synced, local, and per-display behaviors.
+  // These prefs are public for ChromeLauncherController's OnIsSyncingChanged.
+  // See the pref names definitions for explanations of the synced, local, and
+  // per-display behaviors.
   registry->RegisterStringPref(
       prefs::kShelfAutoHideBehavior, kShelfAutoHideBehaviorNever,
       user_prefs::PrefRegistrySyncable::SYNCABLE_PREF | PrefRegistry::PUBLIC);
@@ -231,7 +242,7 @@ void ShelfController::UpdateShelfItem(const ShelfItem& item) {
   base::AutoReset<bool> reset(&applying_remote_shelf_model_changes_, true);
 
   // Keep any existing image if the item was sent without one for efficiency.
-  ash::ShelfItem new_item = item;
+  ShelfItem new_item = item;
   if (item.image.isNull())
     new_item.image = model_.items()[index].image;
   model_.Set(index, new_item);
@@ -323,6 +334,10 @@ void ShelfController::OnActiveUserPrefServiceChanged(
 }
 
 void ShelfController::OnTabletModeStarted() {
+  // Do nothing when running in app mode.
+  if (Shell::Get()->session_controller()->IsRunningInAppMode())
+    return;
+
   // Force the shelf to be visible and to be bottom aligned in tablet mode; the
   // prefs are restored on exit.
   for (const auto& display : display::Screen::GetScreen()->GetAllDisplays()) {
@@ -338,6 +353,10 @@ void ShelfController::OnTabletModeStarted() {
 }
 
 void ShelfController::OnTabletModeEnded() {
+  // Do nothing when running in app mode.
+  if (Shell::Get()->session_controller()->IsRunningInAppMode())
+    return;
+
   SetShelfBehaviorsFromPrefs();
   // Only animate out of tablet mode if the shelf alignment will not change.
   for (const auto& display : display::Screen::GetScreen()->GetAllDisplays()) {
@@ -350,6 +369,10 @@ void ShelfController::OnTabletModeEnded() {
 void ShelfController::OnDisplayConfigurationChanged() {
   // Set/init the shelf behaviors from preferences, in case a display was added.
   SetShelfBehaviorsFromPrefs();
+
+  // Update shelf visibility to adapt to display changes. For instance shelf
+  // should be hidden on secondary display during inactive session states.
+  UpdateShelfVisibility();
 }
 
 void ShelfController::OnWindowTreeHostReusedForDisplay(
@@ -357,6 +380,10 @@ void ShelfController::OnWindowTreeHostReusedForDisplay(
     const display::Display& display) {
   // See comment in OnWindowTreeHostsSwappedDisplays().
   SetShelfBehaviorsFromPrefs();
+
+  // Update shelf visibility to adapt to display changes. For instance shelf
+  // should be hidden on secondary display during inactive session states.
+  UpdateShelfVisibility();
 }
 
 void ShelfController::OnWindowTreeHostsSwappedDisplays(
@@ -365,10 +392,14 @@ void ShelfController::OnWindowTreeHostsSwappedDisplays(
   // The display ids for existing shelf instances may have changed, so update
   // the alignment and auto-hide state from prefs. See http://crbug.com/748291
   SetShelfBehaviorsFromPrefs();
+
+  // Update shelf visibility to adapt to display changes. For instance shelf
+  // should be hidden on secondary display during inactive session states.
+  UpdateShelfVisibility();
 }
 
 void ShelfController::OnNotificationAdded(const std::string& notification_id) {
-  if (!is_touchable_app_context_menu_enabled_)
+  if (!is_notification_indicator_enabled_)
     return;
 
   message_center::Notification* notification =
@@ -387,7 +418,7 @@ void ShelfController::OnNotificationAdded(const std::string& notification_id) {
   }
 
   // Skip this if the notification doesn't have a valid app id.
-  if (notification->notifier_id().id == ash::kDefaultArcNotifierId)
+  if (notification->notifier_id().id == kDefaultArcNotifierId)
     return;
 
   model_.AddNotificationRecord(notification->notifier_id().id, notification_id);
@@ -395,7 +426,7 @@ void ShelfController::OnNotificationAdded(const std::string& notification_id) {
 
 void ShelfController::OnNotificationRemoved(const std::string& notification_id,
                                             bool by_user) {
-  if (!is_touchable_app_context_menu_enabled_)
+  if (!is_notification_indicator_enabled_)
     return;
 
   model_.RemoveNotificationRecord(notification_id);

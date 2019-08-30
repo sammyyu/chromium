@@ -10,7 +10,7 @@
 #include "chrome/browser/engagement/site_engagement_service.h"
 #include "content/public/browser/web_contents_observer.h"
 #include "content/public/browser/web_contents_user_data.h"
-#include "third_party/WebKit/public/platform/site_engagement.mojom.h"
+#include "third_party/blink/public/platform/site_engagement.mojom.h"
 
 class GURL;
 
@@ -65,7 +65,7 @@ class SiteEngagementService::Helper
     bool IsTimerRunning();
 
     // Set the timer object for testing.
-    void SetPauseTimerForTesting(std::unique_ptr<base::Timer> timer);
+    void SetPauseTimerForTesting(std::unique_ptr<base::OneShotTimer> timer);
 
     SiteEngagementService::Helper* helper() { return helper_; }
 
@@ -84,7 +84,7 @@ class SiteEngagementService::Helper
 
    private:
     SiteEngagementService::Helper* helper_;
-    std::unique_ptr<base::Timer> pause_timer_;
+    std::unique_ptr<base::OneShotTimer> pause_timer_;
 
     DISALLOW_COPY_AND_ASSIGN(PeriodicTracker);
   };

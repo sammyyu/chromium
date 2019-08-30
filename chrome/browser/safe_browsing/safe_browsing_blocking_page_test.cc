@@ -14,11 +14,10 @@
 #include "base/bind.h"
 #include "base/command_line.h"
 #include "base/macros.h"
-#include "base/message_loop/message_loop.h"
 #include "base/run_loop.h"
 #include "base/strings/string_number_conversions.h"
 #include "base/strings/utf_string_conversions.h"
-#include "base/test/histogram_tester.h"
+#include "base/test/metrics/histogram_tester.h"
 #include "base/test/scoped_feature_list.h"
 #include "base/values.h"
 #include "build/build_config.h"
@@ -75,6 +74,7 @@
 #include "net/dns/mock_host_resolver.h"
 #include "net/test/embedded_test_server/embedded_test_server.h"
 #include "net/test/url_request/url_request_mock_http_job.h"
+#include "services/network/public/cpp/shared_url_loader_factory.h"
 #include "testing/gmock/include/gmock/gmock-matchers.h"
 #include "ui/base/l10n/l10n_util.h"
 
@@ -251,13 +251,15 @@ class TestThreatDetailsFactory : public ThreatDetailsFactory {
       BaseUIManager* delegate,
       WebContents* web_contents,
       const security_interstitials::UnsafeResource& unsafe_resource,
-      net::URLRequestContextGetter* request_context_getter,
+      scoped_refptr<network::SharedURLLoaderFactory> url_loader_factory,
       history::HistoryService* history_service,
+      ReferrerChainProvider* referrer_chain_provider,
       bool trim_to_ad_tags,
       ThreatDetailsDoneCallback done_callback) override {
     details_ = new ThreatDetails(delegate, web_contents, unsafe_resource,
-                                 request_context_getter, history_service,
-                                 trim_to_ad_tags, done_callback);
+                                 url_loader_factory, history_service,
+                                 referrer_chain_provider, trim_to_ad_tags,
+                                 done_callback);
     return details_;
   }
 
@@ -1386,10 +1388,6 @@ IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest,
   if (expect_threat_details)
     SetReportSentCallback(threat_report_sent_runner->QuitClosure());
 
-  // Turn on both SBER and Scout prefs so we're independent of the Scout
-  // rollout.
-  browser()->profile()->GetPrefs()->SetBoolean(
-      prefs::kSafeBrowsingExtendedReportingEnabled, true);
   browser()->profile()->GetPrefs()->SetBoolean(
       prefs::kSafeBrowsingScoutReportingEnabled, true);
   GURL url = SetupWarningAndNavigate(browser());            // not incognito
@@ -1411,7 +1409,7 @@ IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest,
 
   Browser* incognito_browser = CreateIncognitoBrowser();
   incognito_browser->profile()->GetPrefs()->SetBoolean(
-      prefs::kSafeBrowsingExtendedReportingEnabled, true);  // set up SBER
+      prefs::kSafeBrowsingScoutReportingEnabled, true);     // set up SBER
   GURL url = SetupWarningAndNavigate(incognito_browser);    // incognito
   EXPECT_FALSE(hit_report_sent());
 }
@@ -1430,7 +1428,7 @@ IN_PROC_BROWSER_TEST_P(SafeBrowsingBlockingPageBrowserTest,
     SetReportSentCallback(threat_report_sent_runner->QuitClosure());
 
   browser()->profile()->GetPrefs()->SetBoolean(
-      prefs::kSafeBrowsingExtendedReportingEnabled, false);  // set up SBER
+      prefs::kSafeBrowsingScoutReportingEnabled, false);     // set up SBER
   GURL url = SetupWarningAndNavigate(browser());             // not incognito
   EXPECT_FALSE(hit_report_sent());
 }

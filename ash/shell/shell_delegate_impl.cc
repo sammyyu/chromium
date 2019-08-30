@@ -8,19 +8,7 @@
 
 #include "ash/accessibility/default_accessibility_delegate.h"
 #include "ash/keyboard/test_keyboard_ui.h"
-#include "ash/public/cpp/shell_window_ids.h"
-#include "ash/root_window_controller.h"
-#include "ash/shelf/shelf.h"
-#include "ash/shell.h"
-#include "ash/shell/example_factory.h"
-#include "ash/shell/toplevel_window.h"
 #include "ash/test_screenshot_delegate.h"
-#include "ash/wm/window_state.h"
-#include "base/strings/utf_string_conversions.h"
-#include "components/user_manager/user_info_impl.h"
-#include "ui/aura/window.h"
-#include "ui/gfx/image/image.h"
-#include "ui/gfx/image/image_skia.h"
 
 namespace ash {
 namespace shell {
@@ -33,27 +21,15 @@ ShellDelegateImpl::~ShellDelegateImpl() = default;
   return nullptr;
 }
 
-bool ShellDelegateImpl::IsRunningInForcedAppMode() const {
-  return false;
-}
-
 bool ShellDelegateImpl::CanShowWindowForUser(aura::Window* window) const {
   return true;
 }
 
-bool ShellDelegateImpl::IsForceMaximizeOnFirstRun() const {
-  return false;
-}
-
 void ShellDelegateImpl::PreInit() {}
-
-void ShellDelegateImpl::PreShutdown() {}
 
 std::unique_ptr<keyboard::KeyboardUI> ShellDelegateImpl::CreateKeyboardUI() {
   return std::make_unique<TestKeyboardUI>();
 }
-
-void ShellDelegateImpl::OpenUrlFromArc(const GURL& url) {}
 
 NetworkingConfigDelegate* ShellDelegateImpl::GetNetworkingConfigDelegate() {
   return nullptr;

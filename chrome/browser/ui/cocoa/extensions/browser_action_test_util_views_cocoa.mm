@@ -67,7 +67,7 @@ TestToolbarActionsBarHelperCocoa::TestToolbarActionsBarHelperCocoa(
   if (!base::mac::FrameworkBundle()) {
     // Look in the framework bundle for resources.
     base::FilePath path;
-    PathService::Get(base::DIR_EXE, &path);
+    base::PathService::Get(base::DIR_EXE, &path);
     path = path.Append(chrome::kFrameworkName);
     base::mac::SetOverrideFrameworkBundlePath(path);
   }
@@ -215,6 +215,7 @@ class BrowserActionTestUtilCocoa : public BrowserActionTestUtil {
   std::unique_ptr<BrowserActionTestUtil> CreateOverflowBar() override;
   gfx::Size GetMinPopupSize() override;
   gfx::Size GetMaxPopupSize() override;
+  bool CanBeResized() override;
 
  private:
   friend class BrowserActionTestUtil;
@@ -332,6 +333,12 @@ gfx::Size BrowserActionTestUtilCocoa::GetMinPopupSize() {
 
 gfx::Size BrowserActionTestUtilCocoa::GetMaxPopupSize() {
   return GetExtensionPopupTestManager()->GetMaxPopupSize();
+}
+
+bool BrowserActionTestUtilCocoa::CanBeResized() {
+  BrowserActionsContainerView* containerView =
+      [GetController(browser_, test_helper_.get()) containerView];
+  return [containerView canBeResized];
 }
 
 BrowserActionTestUtilCocoa::BrowserActionTestUtilCocoa(

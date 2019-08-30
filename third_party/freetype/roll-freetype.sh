@@ -14,13 +14,14 @@ previousrev() {
 addtrybots() {
   STEP="add trybots" &&
   OLD_MSG=$(git show -s --format=%B HEAD) &&
-  git commit --amend -m"$OLD_MSG" -m"CQ_INCLUDE_TRYBOTS=master.tryserver.chromium.linux:linux_chromium_msan_rel_ng"
+  git commit --amend -m"$OLD_MSG" -m"CQ_INCLUDE_TRYBOTS=luci.chromium.try:linux_chromium_msan_rel_ng"
 }
 
-addpdfiumbug() {
+addotherprojectbugs() {
   STEP="add pdfium bug" &&
   OLD_MSG=$(git show -s --format=%B HEAD) &&
-  git commit --amend -m"$OLD_MSG" -m"PDFium-Issue: pdfium:"
+  git commit --amend -m"$OLD_MSG" -m"
+PDFium-Issue: pdfium:"
 }
 
 checkmodules() {
@@ -42,8 +43,8 @@ updatereadme() {
   STEP="update README.chromium" &&
   FTVERSION=$(git -C third_party/freetype/src/ describe --long) &&
   FTCOMMIT=$(git -C third_party/freetype/src/ rev-parse HEAD) &&
-  sed -i "s/^Version: .*\$/Version: ${FTVERSION%-*}/" third_party/freetype/README.chromium &&
-  sed -i "s/^Revision: .*\$/Revision: ${FTCOMMIT}/" third_party/freetype/README.chromium &&
+  sed -i'' -e "s/^Version: .*\$/Version: ${FTVERSION%-*}/" third_party/freetype/README.chromium &&
+  sed -i'' -e "s/^Revision: .*\$/Revision: ${FTCOMMIT}/" third_party/freetype/README.chromium &&
   git add third_party/freetype/README.chromium
 }
 
@@ -55,7 +56,7 @@ commit() {
 rolldeps "$@" &&
 previousrev &&
 addtrybots &&
-addpdfiumbug &&
+addotherprojectbugs &&
 checkmodules &&
 mergeinclude ftoption.h &&
 mergeinclude ftconfig.h &&

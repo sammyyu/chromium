@@ -43,9 +43,11 @@
     <template is="dom-if" if="[[showPages_.settings]]">
       <settings-basic-page prefs="{{prefs}}"
           page-visibility="[[pageVisibility]]"
+          show-crostini="[[showCrostini]]"
           show-android-apps="[[showAndroidApps]]"
           show-multidevice="[[showMultidevice]]"
           have-play-store-app="[[havePlayStoreApp]]"
+          autofill-home-enabled="[[autofillHomeEnabled]]"
           on-subpage-expand="onSubpageExpand_"
           in-search-mode="[[inSearchMode_]]"
           advanced-toggle-expanded="{{advancedToggleExpanded}}">

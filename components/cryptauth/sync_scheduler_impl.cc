@@ -13,7 +13,7 @@
 #include "base/numerics/safe_conversions.h"
 #include "base/rand_util.h"
 #include "base/strings/stringprintf.h"
-#include "components/proximity_auth/logging/logging.h"
+#include "chromeos/components/proximity_auth/logging/logging.h"
 
 namespace cryptauth {
 
@@ -116,10 +116,8 @@ void SyncSchedulerImpl::OnTimerFired() {
       std::make_unique<SyncRequest>(weak_ptr_factory_.GetWeakPtr()));
 }
 
-std::unique_ptr<base::Timer> SyncSchedulerImpl::CreateTimer() {
-  bool retain_user_task = false;
-  bool is_repeating = false;
-  return std::make_unique<base::Timer>(retain_user_task, is_repeating);
+std::unique_ptr<base::OneShotTimer> SyncSchedulerImpl::CreateTimer() {
+  return std::make_unique<base::OneShotTimer>();
 }
 
 void SyncSchedulerImpl::ScheduleNextSync(const base::TimeDelta& sync_delta) {

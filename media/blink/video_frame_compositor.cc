@@ -6,14 +6,14 @@
 
 #include "base/bind.h"
 #include "base/callback_helpers.h"
-#include "base/message_loop/message_loop.h"
 #include "base/time/default_tick_clock.h"
 #include "base/trace_event/auto_open_close_event.h"
 #include "base/trace_event/trace_event.h"
+#include "media/base/bind_to_current_loop.h"
 #include "media/base/media_switches.h"
 #include "media/base/video_frame.h"
 #include "media/blink/webmediaplayer_params.h"
-#include "third_party/WebKit/public/platform/WebVideoFrameSubmitter.h"
+#include "third_party/blink/public/platform/web_video_frame_submitter.h"
 
 namespace media {
 
@@ -31,9 +31,7 @@ VideoFrameCompositor::VideoFrameCompositor(
           FROM_HERE,
           base::TimeDelta::FromMilliseconds(kBackgroundRenderingTimeoutMs),
           base::Bind(&VideoFrameCompositor::BackgroundRender,
-                     base::Unretained(this)),
-          // Task is not repeating, CallRender() will reset the task as needed.
-          false),
+                     base::Unretained(this))),
       client_(nullptr),
       rendering_(false),
       rendered_last_frame_(false),
@@ -49,7 +47,21 @@ VideoFrameCompositor::VideoFrameCompositor(
     task_runner_->PostTask(
         FROM_HERE, base::Bind(&VideoFrameCompositor::InitializeSubmitter,
                               weak_ptr_factory_.GetWeakPtr()));
+    update_submission_state_callback_ = media::BindToLoop(
+        task_runner_,
+        base::BindRepeating(&VideoFrameCompositor::UpdateSubmissionState,
+                            weak_ptr_factory_.GetWeakPtr()));
   }
+}
+
+cc::UpdateSubmissionStateCB
+VideoFrameCompositor::GetUpdateSubmissionStateCallback() {
+  return update_submission_state_callback_;
+}
+
+void VideoFrameCompositor::UpdateSubmissionState(bool state) {
+  DCHECK(task_runner_->BelongsToCurrentThread());
+  submitter_->UpdateSubmissionState(state);
 }
 
 void VideoFrameCompositor::InitializeSubmitter() {
@@ -65,11 +77,13 @@ VideoFrameCompositor::~VideoFrameCompositor() {
     client_->StopUsingProvider();
 }
 
-void VideoFrameCompositor::EnableSubmission(const viz::FrameSinkId& id,
-                                            media::VideoRotation rotation) {
+void VideoFrameCompositor::EnableSubmission(
+    const viz::SurfaceId& id,
+    media::VideoRotation rotation,
+    blink::WebFrameSinkDestroyedCallback frame_sink_destroyed_callback) {
   DCHECK(task_runner_->BelongsToCurrentThread());
   submitter_->SetRotation(rotation);
-  submitter_->StartSubmitting(id);
+  submitter_->EnableSubmission(id, std::move(frame_sink_destroyed_callback));
   client_ = submitter_.get();
 }
 

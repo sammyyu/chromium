@@ -46,6 +46,7 @@
 #include "net/socket/ssl_client_socket.h"
 #include "net/socket/stream_socket.h"
 #include "net/socket/tcp_client_socket.h"
+#include "net/socket/transport_client_socket.h"
 #include "net/ssl/ssl_config_service.h"
 #include "net/ssl/ssl_info.h"
 #include "net/traffic_annotation/network_traffic_annotation.h"
@@ -77,7 +78,7 @@ class FakeCertVerifier : public net::CertVerifier {
   int Verify(const RequestParams& params,
              net::CRLSet*,
              net::CertVerifyResult* verify_result,
-             const net::CompletionCallback&,
+             net::CompletionOnceCallback,
              std::unique_ptr<Request>*,
              const net::NetLogWithSource&) override {
     verify_result->Reset();
@@ -152,7 +153,7 @@ bool CastSocketImpl::audio_only() const {
   return audio_only_;
 }
 
-std::unique_ptr<net::TCPClientSocket> CastSocketImpl::CreateTcpSocket() {
+std::unique_ptr<net::TransportClientSocket> CastSocketImpl::CreateTcpSocket() {
   net::AddressList addresses(open_params_.ip_endpoint);
   return std::unique_ptr<net::TCPClientSocket>(new net::TCPClientSocket(
       addresses, nullptr, open_params_.net_log, net_log_source_));
@@ -167,7 +168,7 @@ std::unique_ptr<net::SSLClientSocket> CastSocketImpl::CreateSslSocket(
   cert_verifier_ = base::WrapUnique(new FakeCertVerifier);
   transport_security_state_.reset(new net::TransportSecurityState);
   cert_transparency_verifier_.reset(new net::MultiLogCTVerifier());
-  ct_policy_enforcer_.reset(new net::CTPolicyEnforcer());
+  ct_policy_enforcer_.reset(new net::DefaultCTPolicyEnforcer());
 
   // Note that |context| fields remain owned by CastSocketImpl.
   net::SSLClientSocketContext context;
@@ -188,7 +189,7 @@ std::unique_ptr<net::SSLClientSocket> CastSocketImpl::CreateSslSocket(
 
 scoped_refptr<net::X509Certificate> CastSocketImpl::ExtractPeerCert() {
   net::SSLInfo ssl_info;
-  if (!socket_->GetSSLInfo(&ssl_info) || !ssl_info.cert.get())
+  if (!socket_->GetSSLInfo(&ssl_info) || !ssl_info.cert)
     return nullptr;
 
   return ssl_info.cert;
@@ -429,7 +430,7 @@ int CastSocketImpl::DoSslConnectComplete(int result) {
     }
 
     // SSL connection succeeded.
-    if (!transport_.get()) {
+    if (!transport_) {
       // Create a channel transport if one wasn't already set (e.g. by test
       // code).
       transport_.reset(new CastTransportImpl(
@@ -622,7 +623,7 @@ void CastSocketImpl::CloseInternal() {
   SetReadyState(ReadyState::CLOSED);
 }
 
-base::Timer* CastSocketImpl::GetTimer() {
+base::OneShotTimer* CastSocketImpl::GetTimer() {
   return connect_timeout_timer_.get();
 }
 

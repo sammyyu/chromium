@@ -136,6 +136,14 @@ void ImeController::UpdateCapsLockState(bool caps_enabled) {
     observer.OnCapsLockChanged(caps_enabled);
 }
 
+void ImeController::OnKeyboardLayoutNameChanged(
+    const std::string& layout_name) {
+  keyboard_layout_name_ = layout_name;
+
+  for (ImeController::Observer& observer : observers_)
+    observer.OnKeyboardLayoutNameChanged(layout_name);
+}
+
 void ImeController::SetExtraInputOptionsEnabledState(
     bool is_extra_input_options_enabled,
     bool is_emoji_enabled,
@@ -152,6 +160,18 @@ void ImeController::SetCapsLockEnabled(bool caps_enabled) {
 
   if (client_)
     client_->SetCapsLockEnabled(caps_enabled);
+}
+
+void ImeController::OverrideKeyboardKeyset(
+    chromeos::input_method::mojom::ImeKeyset keyset) {
+  OverrideKeyboardKeyset(keyset, base::DoNothing());
+}
+
+void ImeController::OverrideKeyboardKeyset(
+    chromeos::input_method::mojom::ImeKeyset keyset,
+    mojom::ImeControllerClient::OverrideKeyboardKeysetCallback callback) {
+  if (client_)
+    client_->OverrideKeyboardKeyset(keyset, std::move(callback));
 }
 
 void ImeController::FlushMojoForTesting() {

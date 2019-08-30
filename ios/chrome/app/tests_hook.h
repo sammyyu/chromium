@@ -7,6 +7,11 @@
 
 namespace tests_hook {
 
+// Returns true if app group access should be disabled as tests don't have the
+// required entitlements.
+// This is used by internal code.
+bool DisableAppGroupAccess();
+
 // Returns true if ContentSuggestions should be disabled to allow other tests to
 // run unimpeded.
 bool DisableContentSuggestions();
@@ -35,11 +40,6 @@ bool DisableUpdateService();
 // Returns true if the first phase of the UI refresh will be displayed,
 // overriding the flag value.
 bool ForceUIRefreshPhase1();
-
-// TODO(crbug.com/818560): Removes this hook.
-// Returns true if the tab grid will be displayed as the tab switcher,
-// overriding the flag value.
-bool ForceTabSwitcherTabGrid();
 
 // Global integration tests setup.  This is not used by EarlGrey-based
 // integration tests.

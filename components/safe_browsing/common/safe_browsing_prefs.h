@@ -19,9 +19,6 @@ namespace prefs {
 // Boolean that is true when SafeBrowsing is enabled.
 extern const char kSafeBrowsingEnabled[];
 
-// Boolean that tell us whether Safe Browsing extended reporting is enabled.
-extern const char kSafeBrowsingExtendedReportingEnabled[];
-
 // Boolean that tells us whether users are given the option to opt in to Safe
 // Browsing extended reporting. This is exposed as a preference that can be
 // overridden by enterprise policy.
@@ -51,6 +48,10 @@ extern const char kSafeBrowsingScoutGroupSelected[];
 // collects data for malware detection.
 extern const char kSafeBrowsingScoutReportingEnabled[];
 
+// Dictionary containing safe browsing triggers and the list of times they have
+// fired recently.
+extern const char kSafeBrowsingTriggerEventTimestamps[];
+
 // Dictionary that records the origin and navigation ID pairs of unhandled sync
 // password reuses.
 extern const char kSafeBrowsingUnhandledSyncPasswordReuses[];
@@ -75,11 +76,6 @@ extern const char kPasswordProtectionLoginURLs[];
 // by enterprise policy and has no effect on users who are not managed by
 // enterprise policy.
 extern const char kPasswordProtectionWarningTrigger[];
-
-// Integer indicating the password protection at-risk account flagging trigger.
-// This is managed by enterprise policy and has no effect on users who are not
-// managed by enterprise policy.
-extern const char kPasswordProtectionRiskTrigger[];
 }
 
 namespace safe_browsing {
@@ -160,11 +156,6 @@ ExtendedReportingLevel GetExtendedReportingLevel(const PrefService& prefs);
 // currently in effect. The specific pref in-use may change through experiments.
 const char* GetExtendedReportingPrefName(const PrefService& prefs);
 
-// Initializes Safe Browsing preferences based on data such as experiment state,
-// command line flags, etc.
-// TODO: this is temporary (crbug.com/662944)
-void InitializeSafeBrowsingPrefs(PrefService* prefs);
-
 // Returns whether the user is able to modify the Safe Browsing Extended
 // Reporting opt-in.
 bool IsExtendedReportingOptInAllowed(const PrefService& prefs);
@@ -186,6 +177,9 @@ void RecordExtendedReportingMetrics(const PrefService& prefs);
 
 // Registers user preferences related to Safe Browsing.
 void RegisterProfilePrefs(PrefRegistrySimple* registry);
+
+// Registers local state prefs related to Safe Browsing.
+void RegisterLocalStatePrefs(PrefRegistrySimple* registry);
 
 // Sets the currently active Safe Browsing Extended Reporting preference to the
 // specified value. The |location| indicates the UI where the change was
@@ -252,6 +246,9 @@ GURL GetPasswordProtectionChangePasswordURLPref(const PrefService& prefs);
 // change password URL. Returns false otherwise.
 bool MatchesPasswordProtectionChangePasswordURL(const GURL& url,
                                                 const PrefService& prefs);
+
+// Helper function to match a |target_url| against |url_list|.
+bool MatchesURLList(const GURL& target_url, const std::vector<GURL> url_list);
 
 }  // namespace safe_browsing
 

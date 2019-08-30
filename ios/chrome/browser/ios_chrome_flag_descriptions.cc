@@ -11,10 +11,95 @@
 
 namespace flag_descriptions {
 
+const char kAutofillCacheQueryResponsesName[] =
+    "Cache Autofill Query Responses";
+const char kAutofillCacheQueryResponsesDescription[] =
+    "When enabled, autofill will cache the responses it receives from the "
+    "crowd-sourced field type prediction server.";
+
+const char kAutofillCreditCardUploadName[] =
+    "Offers uploading Autofilled credit cards";
+const char kAutofillCreditCardUploadDescription[] =
+    "Offers uploading Autofilled credit cards to Google Payments after form "
+    "submission.";
+
+const char kAutofillDownstreamUseGooglePayBrandingOniOSName[] =
+    "Enable Google Pay branding when offering credit card downstream";
+const char kAutofillDownstreamUseGooglePayBrandingOniOSDescription[] =
+    "When enabled, shows the Google Pay logo animation when showing payments"
+    "credit card suggestions in downstream keyboard accessory";
+
+const char kEnableAutofillCreditCardUploadUpdatePromptExplanationName[] =
+    "Enable updated prompt explanation when offering credit card upload";
+const char kEnableAutofillCreditCardUploadUpdatePromptExplanationDescription[] =
+    "If enabled, changes the server save card prompt's explanation to mention "
+    "the saving of the billing address.";
+
+const char kSyncSandboxName[] = "Use Chrome Sync sandbox";
+const char kSyncSandboxDescription[] =
+    "Connects to the testing server for Chrome Sync.";
+
+const char kWalletServiceUseSandboxName[] = "Use Google Payments sandbox";
+const char kWalletServiceUseSandboxDescription[] =
+    "Uses the sandbox service for Google Payments API calls.";
+
+const char kAutofillDynamicFormsName[] = "Autofill dynamic forms";
+const char kAutofillDynamicFormsDescription[] =
+    "Refills forms that dynamically change after an initial fill";
+
+const char kAutofillPrefilledFieldsName[] = "Autofill prefilled forms";
+const char kAutofillPrefilledFieldsDescription[] =
+    "Fills forms that contain a programmatically filled value.";
+
+const char kAutofillEnforceMinRequiredFieldsForHeuristicsName[] =
+    "Autofill Enforce Min Required Fields For Heuristics";
+const char kAutofillEnforceMinRequiredFieldsForHeuristicsDescription[] =
+    "When enabled, autofill will generally require a form to have at least 3 "
+    "fields before allowing heuristic field-type prediction to occur.";
+
+const char kAutofillEnforceMinRequiredFieldsForQueryName[] =
+    "Autofill Enforce Min Required Fields For Query";
+const char kAutofillEnforceMinRequiredFieldsForQueryDescription[] =
+    "When enabled, autofill will generally require a form to have at least 3 "
+    "fields before querying the autofill server for field-type predictions.";
+
+const char kAutofillEnforceMinRequiredFieldsForUploadName[] =
+    "Autofill Enforce Min Required Fields For Upload";
+const char kAutofillEnforceMinRequiredFieldsForUploadDescription[] =
+    "When enabled, autofill will generally require a form to have at least 3 "
+    "fillable fields before uploading field-type votes for that form.";
+
 const char kAutofillIOSDelayBetweenFieldsName[] = "Autofill delay";
 const char kAutofillIOSDelayBetweenFieldsDescription[] =
     "Delay between the different fields of a form being autofilled. In "
     "milliseconds.";
+
+const char kAutofillManualFallbackName[] = "Enable autofill manual fallback";
+const char kAutofillManualFallbackDescription[] =
+    "When enabled, it shows the autofill UI with manual fallback when filling "
+    "forms.";
+
+const char kAutofillShowAllSuggestionsOnPrefilledFormsName[] =
+    "Enable showing all suggestions when focusing prefilled field";
+const char kAutofillShowAllSuggestionsOnPrefilledFormsDescription[] =
+    "When enabled: show all suggestions when the focused field value has not "
+    "been entered by the user. When disabled: use the field value as a filter.";
+
+const char kAutofillRestrictUnownedFieldsToFormlessCheckoutName[] =
+    "Restrict formless form extraction";
+const char kAutofillRestrictUnownedFieldsToFormlessCheckoutDescription[] =
+    "Restrict extraction of formless forms to checkout flows";
+
+const char kAutofillUpstreamUseGooglePayBrandingOnMobileName[] =
+    "Enable Google Pay branding when offering credit card upload";
+const char kAutofillUpstreamUseGooglePayBrandingOnMobileDescription[] =
+    "If enabled, shows the Google Pay logo and a shorter header message when "
+    "credit card upload to Google Payments is offered.";
+
+const char kBrowserContainerFullscreenName[] = "Browser Container Fullscreen";
+const char kBrowserContainerFullscreenDescription[] =
+    "When enabled, the BrowserContainer is fullscreen. No UI change should be "
+    "visible.";
 
 const char kBrowserTaskScheduler[] = "Task Scheduler";
 const char kBrowserTaskSchedulerDescription[] =
@@ -41,6 +126,10 @@ const char kContextMenuElementPostMessageDescription[] =
     "webkit postMessage call instead of directly returned from the JavaScript "
     "function.";
 
+const char kCopyImageName[] = "Copy Image";
+const char kCopyImageDescription[] =
+    "Enable copying image to system pasteboard via context menu.";
+
 const char kDragAndDropName[] = "Drag and Drop";
 const char kDragAndDropDescription[] = "Enable support for drag and drop.";
 
@@ -51,8 +140,11 @@ const char kNewClearBrowsingDataUIDescription[] =
 const char kExternalSearchName[] = "External Search";
 const char kExternalSearchDescription[] = "Enable support for External Search.";
 
-const char kFeedbackKitV2Name[] = "FeedbackKit V2";
-const char kFeedbackKitV2Description[] = "Enable use of FeedbackKit V2.";
+const char kFullscreenViewportAdjustmentExperimentName[] =
+    "Fullscreen Viewport Adjustment Mode";
+const char kFullscreenViewportAdjustmentExperimentDescription[] =
+    "The different ways in which the web view's viewport is updated for scroll "
+    "events.  The default option updates the web view's frame.";
 
 const char kHistoryBatchUpdatesFilterName[] = "History Single Batch Filtering";
 const char kHistoryBatchUpdatesFilterDescription[] =
@@ -65,6 +157,12 @@ const char kInProductHelpDemoModeDescription[] =
     "start. Enabled causes all in-product help promotions to occur. Enabling "
     "an individual promotion causes that promotion but no other promotions to "
     "occur.";
+
+const char kITunesUrlsStoreKitHandlingName[] =
+    "Store kit handling for ITunes links";
+const char kITunesUrlsStoreKitHandlingDescription[] =
+    "When enabled, opening itunes product URLs will be handled using the store "
+    "kit.";
 
 const char kMailtoHandlingWithGoogleUIName[] = "Mailto Handling with Google UI";
 const char kMailtoHandlingWithGoogleUIDescription[] =
@@ -82,6 +180,12 @@ const char kMemexTabSwitcherDescription[] =
     "prototype site instead of triggering the native Tab Switcher. The native "
     "TabSwitcher is accessible by long pressing the button";
 
+const char kNewPasswordFormParsingName[] = "New password form parsing";
+const char kNewPasswordFormParsingDescription[] =
+    "Replaces existing form parsing in password manager with a new version, "
+    "currently under development. WARNING: when enabled Password Manager might "
+    "stop working";
+
 const char kOmniboxUIElideSuggestionUrlAfterHostName[] =
     "Hide the path, query, and ref of omnibox suggestions";
 const char kOmniboxUIElideSuggestionUrlAfterHostDescription[] =
@@ -97,6 +201,10 @@ const char kPhysicalWebDescription[] =
     "When enabled, the omnibox will include suggestions for web pages "
     "broadcast by devices near you.";
 
+const char kInfobarsUIRebootName[] = "Infobars UI Reboot";
+const char kInfobarsUIRebootDescription[] =
+    "When enabled, Infobars will use the new UI Reboot layout.";
+
 const char kCollectionsUIRebootName[] = "Collections UI Reboot";
 const char kCollectionsUIRebootDescription[] =
     "When enabled, Collections will use the new UI Reboot stack.";
@@ -111,6 +219,13 @@ const char kNewFileDownloadDescription[] =
     "When enabled, uses new Download Manager UI and ios/web Download API as "
     "backend.";
 
+const char kWebErrorPagesName[] =
+    "Present load errors in web contents area, instead of using "
+    "CRWNativeContent";
+const char kWebErrorPagesDescription[] =
+    "When enabled the error pages will load in web contents area, instead of "
+    "presenting CRWNativeContent. Does not have sensible UI changes.";
+
 const char kShowAutofillTypePredictionsName[] = "Show Autofill predictions";
 const char kShowAutofillTypePredictionsDescription[] =
     "Annotates web forms with Autofill field type predictions as placeholder "
@@ -122,18 +237,35 @@ const char kTabSwitcherPresentsBVCDescription[] =
     "BVC is visible, the tab switcher will remain in the VC hierarchy "
     "underneath it.";
 
-const char kTabSwitcherTabGridName[] = "TabSwitcher Tab Grid";
-const char kTabSwitcherTabGridDescription[] =
-    "When enabled, the tab grid will be used as the tab switcher for both "
-    "phone and tablet.";
+const char kUIRefreshLocationBarName[] = "UI Refresh Location Bar";
+const char kUIRefreshLocationBarDescription[] =
+    "When enabled, the UI Refresh location bar with a custom steady-state will "
+    "be displayed.";
 
 const char kUIRefreshPhase1Name[] = "UI Refresh Phase 1";
 const char kUIRefreshPhase1Description[] =
     "When enabled, the first phase of the iOS UI refresh will be displayed.";
 
+const char kUnifiedConsentName[] = "Unified Consent";
+const char kUnifiedConsentDescription[] =
+    "Enables a unified management of user consent for privacy-related "
+    "features. This includes new confirmation screens and improved settings "
+    "pages.";
+
 const char kUseDdljsonApiName[] = "Use new ddljson API for Doodles";
 const char kUseDdljsonApiDescription[] =
     "Enables the new ddljson API to fetch Doodles for the NTP.";
+
+const char kWebFrameMessagingName[] = "Web Frame Messaging";
+const char kWebFrameMessagingDescription[] =
+    "When enabled, API will be injected into webpages to allow sending messages"
+    " directly to any frame of a webpage.";
+
+const char kWebPageTextAccessibilityName[] =
+    "Enable text accessibility in web pages";
+const char kWebPageTextAccessibilityDescription[] =
+    "When enabled, text in web pages will respect the user's Dynamic Type "
+    "setting.";
 
 const char kWebPaymentsName[] = "Web Payments";
 const char kWebPaymentsDescription[] =

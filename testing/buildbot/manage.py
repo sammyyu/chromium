@@ -59,7 +59,7 @@ SKIP = {
   'WebKit Mac10.11',
   'WebKit Mac10.12',
   'WebKit Mac10.11 (dbg)',
-  'WebKit Mac10.12 (retina)',
+  'WebKit Mac10.13 (retina)',
   'Chromium Mac10.10 Tests',
   'Chromium Mac10.11 Tests',
 
@@ -88,7 +88,7 @@ SKIP_GN_ISOLATE_MAP_TARGETS = {
   'chromium_builder_perf',
   'chromiumos_preflight',
   'mini_installer',
-  'next_version_mini_installer',
+  'previous_version_mini_installer',
 
   # iOS tests are listed in //ios/build/bots.
   'cronet_test',
@@ -126,8 +126,8 @@ SKIP_GN_ISOLATE_MAP_TARGETS = {
   'content_junit_tests',
   'device_junit_tests',
   'junit_unit_tests',
+  'media_router_e2e_tests',
   'media_router_perf_tests',
-  'media_router_tests',
   'motopho_latency_test',
   'net_junit_tests',
   'net_junit_tests',

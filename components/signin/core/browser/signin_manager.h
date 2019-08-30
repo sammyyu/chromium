@@ -15,7 +15,10 @@
 #ifndef COMPONENTS_SIGNIN_CORE_BROWSER_SIGNIN_MANAGER_H_
 #define COMPONENTS_SIGNIN_CORE_BROWSER_SIGNIN_MANAGER_H_
 
+#include "build/build_config.h"
+
 #if defined(OS_CHROMEOS)
+
 #include "components/signin/core/browser/signin_manager_base.h"
 
 #else
@@ -28,7 +31,6 @@
 #include "base/logging.h"
 #include "base/macros.h"
 #include "base/observer_list.h"
-#include "build/build_config.h"
 #include "components/keyed_service/core/keyed_service.h"
 #include "components/prefs/pref_change_registrar.h"
 #include "components/prefs/pref_member.h"
@@ -61,6 +63,16 @@ class SigninManager : public SigninManagerBase,
   // callers to load policy and prompt the user appropriately before completing
   // signin. The callback is passed the just-fetched OAuth login refresh token.
   typedef base::Callback<void(const std::string&)> OAuthTokenFetchedCallback;
+
+  // Used to remove accounts from the token service and the account tracker.
+  enum class RemoveAccountsOption {
+    // Do not remove accounts.
+    kKeepAllAccounts,
+    // Remove all the accounts.
+    kRemoveAllAccounts,
+    // Removes the authenticated account if it is in authentication error.
+    kRemoveAuthenticatedAccountIfInError
+  };
 
   // This is used to distinguish URLs belonging to the special web signin flow
   // running in the special signin process from other URLs on the same domain.
@@ -109,8 +121,9 @@ class SigninManager : public SigninManagerBase,
   // associated with the authenticated user, and canceling all auth in progress.
   // On mobile and on desktop pre-DICE, this also removes all accounts from
   // Chrome by revoking all refresh tokens.
-  // On desktop with DICE enabled, this will not remove all accounts from
-  // Chrome.
+  // On desktop with DICE enabled, this will remove the authenticated account
+  // from Chrome only if it is in authentication error. No other accounts are
+  // removed.
   void SignOut(signin_metrics::ProfileSignout signout_source_metric,
                signin_metrics::SignoutDelete signout_delete_metric);
 
@@ -159,6 +172,10 @@ class SigninManager : public SigninManagerBase,
   // authenticated. Returns an empty string if no auth is in progress.
   const std::string& GetAccountIdForAuthInProgress() const;
 
+  // If an authentication is in progress, return the gaia id being
+  // authenticated. Returns an empty string if no auth is in progress.
+  const std::string& GetGaiaIdForAuthInProgress() const;
+
   // If an authentication is in progress, return the username being
   // authenticated. Returns an empty string if no auth is in progress.
   const std::string& GetUsernameForAuthInProgress() const;
@@ -183,7 +200,7 @@ class SigninManager : public SigninManagerBase,
   // The sign out process which is started by SigninClient::PreSignOut()
   virtual void DoSignOut(signin_metrics::ProfileSignout signout_source_metric,
                          signin_metrics::SignoutDelete signout_delete_metric,
-                         bool remove_all_accounts);
+                         RemoveAccountsOption remove_option);
 
  private:
   // Interface that gives information on internal SigninManager operations. Only
@@ -265,7 +282,7 @@ class SigninManager : public SigninManagerBase,
   // Starts the sign out process.
   void StartSignOut(signin_metrics::ProfileSignout signout_source_metric,
                     signin_metrics::SignoutDelete signout_delete_metric,
-                    bool remove_all_accounts);
+                    RemoveAccountsOption remove_option);
 
   void OnSigninAllowedPrefChanged();
   void OnGoogleServicesUsernamePatternChanged();

@@ -74,7 +74,7 @@ class QuotaDatabaseTest : public testing::Test {
     EXPECT_TRUE(db.LazyOpen(true));
     EXPECT_TRUE(db.db_.get());
 
-    typedef EntryVerifier<QuotaTableEntry> Verifier;
+    using Verifier = EntryVerifier<QuotaTableEntry>;
     Verifier verifier(entries, entries + arraysize(entries));
     EXPECT_TRUE(db.DumpQuotaTable(
         base::BindRepeating(&Verifier::Run, base::Unretained(&verifier))));
@@ -112,6 +112,10 @@ class QuotaDatabaseTest : public testing::Test {
     // Delete temporary storage quota.
     EXPECT_TRUE(db.DeleteHostQuota(kHost, kTemporary));
     EXPECT_FALSE(db.GetHostQuota(kHost, kTemporary, &quota));
+
+    // Delete persistent quota by setting it to zero.
+    EXPECT_TRUE(db.SetHostQuota(kHost, kPersistent, 0));
+    EXPECT_FALSE(db.GetHostQuota(kHost, kPersistent, &quota));
   }
 
   void GlobalQuota(const base::FilePath& kDbFile) {
@@ -399,7 +403,7 @@ class QuotaDatabaseTest : public testing::Test {
     AssignQuotaTable(db.db_.get(), begin, end);
     db.Commit();
 
-    typedef EntryVerifier<QuotaTableEntry> Verifier;
+    using Verifier = EntryVerifier<QuotaTableEntry>;
     Verifier verifier(begin, end);
     EXPECT_TRUE(db.DumpQuotaTable(
         base::BindRepeating(&Verifier::Run, base::Unretained(&verifier))));
@@ -408,7 +412,7 @@ class QuotaDatabaseTest : public testing::Test {
 
   void DumpOriginInfoTable(const base::FilePath& kDbFile) {
     base::Time now(base::Time::Now());
-    typedef QuotaDatabase::OriginInfoTableEntry Entry;
+    using Entry = QuotaDatabase::OriginInfoTableEntry;
     Entry kTableEntries[] = {
         Entry(GURL("http://go/"), kTemporary, 2147483647, now, now),
         Entry(GURL("http://oo/"), kTemporary, 0, now, now),
@@ -422,7 +426,7 @@ class QuotaDatabaseTest : public testing::Test {
     AssignOriginInfoTable(db.db_.get(), begin, end);
     db.Commit();
 
-    typedef EntryVerifier<Entry> Verifier;
+    using Verifier = EntryVerifier<Entry>;
     Verifier verifier(begin, end);
     EXPECT_TRUE(db.DumpOriginInfoTable(
         base::BindRepeating(&Verifier::Run, base::Unretained(&verifier))));
@@ -431,7 +435,7 @@ class QuotaDatabaseTest : public testing::Test {
 
   void GetOriginInfo(const base::FilePath& kDbFile) {
     const GURL kOrigin = GURL("http://go/");
-    typedef QuotaDatabase::OriginInfoTableEntry Entry;
+    using Entry = QuotaDatabase::OriginInfoTableEntry;
     Entry kTableEntries[] = {
         Entry(kOrigin, kTemporary, 100, base::Time(), base::Time())};
     Entry* begin = kTableEntries;

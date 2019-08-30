@@ -12,6 +12,7 @@
 #include "base/callback_list.h"
 #include "base/macros.h"
 #include "base/time/tick_clock.h"
+#include "chrome/browser/resource_coordinator/tab_load_tracker.h"
 #include "chrome/browser/sessions/session_restore.h"
 #include "chrome/browser/sessions/session_restore_delegate.h"
 #include "content/public/browser/notification_observer.h"
@@ -47,8 +48,9 @@ class RenderWidgetHost;
 // presence of an unavailable network, or when tabs are closed during loading.
 // Rethink the collection in these cases.
 class SessionRestoreStatsCollector
-    : public content::NotificationObserver,
-      public base::RefCounted<SessionRestoreStatsCollector> {
+    : public base::RefCounted<SessionRestoreStatsCollector>,
+      public content::NotificationObserver,
+      public resource_coordinator::TabLoadTracker::Observer {
  public:
   // Houses all of the statistics gathered by the SessionRestoreStatsCollector
   // while the underlying TabLoader is active. These statistics are all reported
@@ -91,7 +93,7 @@ class SessionRestoreStatsCollector
     base::TimeDelta foreground_tab_first_loaded;
 
     // The time elapsed between |restore_started| and reception of the first
-    // NOTIFICATION_RENDER_WIDGET_HOST_DID_COMPLETE_RESIZE_OR_REPAINT event for
+    // NOTIFICATION_RENDER_WIDGET_HOST_DID_UPDATE_VISUAL_PROPERTIES event for
     // any of the tabs involved in the session restore. If this is zero it is
     // because it has not been recorded (all visible tabs were closed or
     // switched away from before they were painted). Corresponds to
@@ -160,19 +162,24 @@ class SessionRestoreStatsCollector
 
   ~SessionRestoreStatsCollector() override;
 
-  // NotificationObserver method. This is the workhorse of the class and drives
-  // all state transitions.
+  // NotificationObserver method. Used for detecting first paint.
   void Observe(int type,
                const content::NotificationSource& source,
                const content::NotificationDetails& details) override;
 
-  // Called when a tab is no longer tracked. This is called by the 'Observe'
-  // notification callback. Takes care of unregistering all observers and
-  // removing the tab from all internal data structures.
+  // resource_coordinator::TabLoadTracker::Observer implementation:
+  void OnLoadingStateChange(content::WebContents* contents,
+                            LoadingState old_loading_state,
+                            LoadingState new_loading_state) override;
+  void OnStopTracking(content::WebContents* contents,
+                      LoadingState loading_state) override;
+
+  // Called when a tab is no longer tracked. Takes care of unregistering all
+  // observers and removing the tab from all internal data structures.
   void RemoveTab(content::NavigationController* tab);
 
   // Registers for relevant notifications for a tab and inserts the tab into
-  // to tabs_tracked_ map. Return a pointer to the newly created TabState.
+  // the |tabs_tracked_| map. Return a pointer to the newly created TabState.
   TabState* RegisterForNotifications(content::NavigationController* tab);
 
   // Returns the tab state, nullptr if not found.
@@ -182,12 +189,15 @@ class SessionRestoreStatsCollector
   // Marks a tab as loading.
   void MarkTabAsLoading(TabState* tab_state);
 
+  // Marks a tab as loaded.
+  void MarkTabAsLoaded(TabState* tab_state);
+
   // Checks to see if the SessionRestoreStatsCollector has finished collecting,
   // and if so, releases the self reference to the shared pointer.
   void ReleaseIfDoneTracking();
 
   // Testing seam for configuring the tick clock in use.
-  void set_tick_clock(std::unique_ptr<base::TickClock> tick_clock) {
+  void set_tick_clock(std::unique_ptr<const base::TickClock> tick_clock) {
     tick_clock_ = std::move(tick_clock);
   }
 
@@ -226,7 +236,7 @@ class SessionRestoreStatsCollector
   // The source of ticks used for taking timing information. This is
   // configurable as a testing seam. Defaults to using base::DefaultTickClock,
   // which in turn uses base::TimeTicks.
-  std::unique_ptr<base::TickClock> tick_clock_;
+  std::unique_ptr<const base::TickClock> tick_clock_;
 
   // The reporting delegate used to report gathered statistics.
   std::unique_ptr<StatsReportingDelegate> reporting_delegate_;
@@ -254,6 +264,16 @@ class SessionRestoreStatsCollector::StatsReportingDelegate {
   // Called when a deferred tab has been loaded.
   virtual void ReportDeferredTabLoaded() = 0;
 
+  // Called when a tab starts being tracked. Logs the relative time since last
+  // use of the tab.
+  virtual void ReportTabTimeSinceActive(base::TimeDelta elapsed) = 0;
+
+  // Called when a tab starts being tracked. Logs the relative time since last
+  // use of the tab. The |engagement| is a value that is typically between
+  // 0 and 100, but is technically unbounded. See
+  // chrome/browser/engagement/site_engagement_service.h for details.
+  virtual void ReportTabSiteEngagementScore(double engagement) = 0;
+
  private:
   DISALLOW_COPY_AND_ASSIGN(StatsReportingDelegate);
 };
@@ -269,6 +289,8 @@ class SessionRestoreStatsCollector::UmaStatsReportingDelegate
   void ReportTabLoaderStats(const TabLoaderStats& tab_loader_stats) override;
   void ReportTabDeferred() override;
   void ReportDeferredTabLoaded() override;
+  void ReportTabTimeSinceActive(base::TimeDelta elapsed) override;
+  void ReportTabSiteEngagementScore(double engagement) override;
 
  private:
   // Has ReportTabDeferred been called?

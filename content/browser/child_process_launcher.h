@@ -6,6 +6,7 @@
 #define CONTENT_BROWSER_CHILD_PROCESS_LAUNCHER_H_
 
 #include <memory>
+#include <string>
 
 #include "base/macros.h"
 #include "base/memory/ref_counted.h"
@@ -14,13 +15,14 @@
 #include "base/process/kill.h"
 #include "base/process/process.h"
 #include "base/sequence_checker.h"
+#include "base/time/time.h"
 #include "build/build_config.h"
 #include "content/browser/child_process_launcher_helper.h"
 #include "content/common/content_export.h"
 #include "content/public/browser/browser_thread.h"
+#include "content/public/browser/child_process_termination_info.h"
 #include "content/public/common/result_codes.h"
-#include "mojo/edk/embedder/outgoing_broker_client_invitation.h"
-#include "mojo/edk/embedder/scoped_platform_handle.h"
+#include "mojo/public/cpp/system/invitation.h"
 
 #if defined(OS_ANDROID)
 #include "content/public/browser/android/child_process_importance.h"
@@ -55,6 +57,7 @@ static_assert(static_cast<int>(LAUNCH_RESULT_START) >
 
 struct ChildProcessLauncherPriority {
   bool background;
+  unsigned int frame_depth;
   bool boost_for_pending_views;
 #if defined(OS_ANDROID)
   ChildProcessImportance importance;
@@ -77,7 +80,7 @@ class CONTENT_EXPORT ChildProcessLauncher {
     // constructed on.
     virtual void OnProcessLaunched() = 0;
 
-    virtual void OnProcessLaunchFailed(int error_code) {};
+    virtual void OnProcessLaunchFailed(int error_code) {}
 
    protected:
     virtual ~Client() {}
@@ -97,9 +100,8 @@ class CONTENT_EXPORT ChildProcessLauncher {
       std::unique_ptr<base::CommandLine> cmd_line,
       int child_process_id,
       Client* client,
-      std::unique_ptr<mojo::edk::OutgoingBrokerClientInvitation>
-          broker_client_invitation,
-      const mojo::edk::ProcessErrorCallback& process_error_callback,
+      mojo::OutgoingInvitation mojo_invitation,
+      const mojo::ProcessErrorCallback& process_error_callback,
       bool terminate_on_shutdown = true);
   ~ChildProcessLauncher();
 
@@ -117,11 +119,7 @@ class CONTENT_EXPORT ChildProcessLauncher {
   // process could be seen as running. With |known_dead| set to true, the
   // process will be killed if it was still running. See ZygoteHostImpl for
   // more discussion of Linux implementation details.
-  // |exit_code| is the exit code of the process if it exited (e.g. status from
-  // waitpid if on posix, from GetExitCodeProcess on Windows). |exit_code| may
-  // be NULL.
-  base::TerminationStatus GetChildTerminationStatus(bool known_dead,
-                                                    int* exit_code);
+  ChildProcessTerminationInfo GetChildTerminationInfo(bool known_dead);
 
   // Changes whether the process runs in the background or not.  Only call
   // this after the process has started.
@@ -152,11 +150,6 @@ class CONTENT_EXPORT ChildProcessLauncher {
   // support multiple shell context creation in unit_tests.
   static void ResetRegisteredFilesForTesting();
 
-#if defined(OS_ANDROID)
-  // Temporary until crbug.com/693484 is fixed.
-  static size_t GetNumberOfRendererSlots();
-#endif  // OS_ANDROID
-
  private:
   friend class internal::ChildProcessLauncherHelper;
 
@@ -171,9 +164,9 @@ class CONTENT_EXPORT ChildProcessLauncher {
   // ChildProcessLauncherHelper once the process was started.
   internal::ChildProcessLauncherHelper::Process process_;
 
-  base::TerminationStatus termination_status_;
-  int exit_code_;
+  ChildProcessTerminationInfo termination_info_;
   bool starting_;
+  base::TimeTicks start_time_;
 
   // Controls whether the child process should be terminated on browser
   // shutdown. Default behavior is to terminate the child.

@@ -30,18 +30,19 @@ class VIZ_COMMON_EXPORT ChildLocalSurfaceIdAllocator {
 
   // When a parent-allocated LocalSurfaceId arrives in the child, the child
   // needs to update its understanding of the last generated message so the
-  // messages can continue to monotonically increase.
-  const LocalSurfaceId& UpdateFromParent(
+  // messages can continue to monotonically increase. Returns whether the
+  // current LocalSurfaceId has been updated.
+  bool UpdateFromParent(
       const LocalSurfaceId& parent_allocated_local_surface_id);
 
   const LocalSurfaceId& GenerateId();
 
-  const LocalSurfaceId& last_known_local_surface_id() const {
-    return last_known_local_surface_id_;
+  const LocalSurfaceId& GetCurrentLocalSurfaceId() const {
+    return current_local_surface_id_;
   }
 
  private:
-  LocalSurfaceId last_known_local_surface_id_;
+  LocalSurfaceId current_local_surface_id_;
 
   DISALLOW_COPY_AND_ASSIGN(ChildLocalSurfaceIdAllocator);
 };

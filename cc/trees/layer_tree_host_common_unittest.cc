@@ -9,6 +9,7 @@
 #include <algorithm>
 #include <memory>
 #include <set>
+#include <tuple>
 #include <vector>
 
 #include "base/memory/ptr_util.h"
@@ -54,6 +55,13 @@
 
 namespace cc {
 namespace {
+
+bool LayerSubtreeHasCopyRequest(Layer* layer) {
+  LayerTreeHost* host = layer->layer_tree_host();
+  int index = layer->effect_tree_index();
+  auto* node = host->property_trees()->effect_tree.Node(index);
+  return node->subtree_has_copy_request;
+}
 
 class VerifyTreeCalcsLayerTreeSettings : public LayerTreeSettings {
  public:
@@ -114,6 +122,12 @@ class LayerTreeHostCommonTestBase : public LayerTestCommon::LayerImplTest {
     inputs.page_scale_layer = page_scale_layer;
     inputs.inner_viewport_scroll_layer = inner_viewport_scroll_layer;
     inputs.outer_viewport_scroll_layer = outer_viewport_scroll_layer;
+    if (page_scale_layer) {
+      PropertyTrees* property_trees =
+          root_layer->layer_tree_host()->property_trees();
+      inputs.page_scale_transform_node = property_trees->transform_tree.Node(
+          page_scale_layer->transform_tree_index());
+    }
     LayerTreeHostCommon::CalculateDrawPropertiesForTesting(&inputs);
   }
 
@@ -148,6 +162,12 @@ class LayerTreeHostCommonTestBase : public LayerTestCommon::LayerImplTest {
     inputs.inner_viewport_scroll_layer = inner_viewport_scroll_layer;
     inputs.outer_viewport_scroll_layer = outer_viewport_scroll_layer;
     inputs.can_adjust_raster_scales = true;
+    if (page_scale_layer) {
+      PropertyTrees* property_trees =
+          root_layer->layer_tree_impl()->property_trees();
+      inputs.page_scale_transform_node = property_trees->transform_tree.Node(
+          page_scale_layer->transform_tree_index());
+    }
 
     LayerTreeHostCommon::CalculateDrawPropertiesForTesting(&inputs);
   }
@@ -296,16 +316,6 @@ class LayerTreeHostCommonTestBase : public LayerTestCommon::LayerImplTest {
 
 class LayerTreeHostCommonTest : public LayerTreeHostCommonTestBase,
                                 public testing::Test {};
-
-class LayerWithForcedDrawsContent : public Layer {
- public:
-  LayerWithForcedDrawsContent() = default;
-
-  bool DrawsContent() const override { return true; }
-
- private:
-  ~LayerWithForcedDrawsContent() override = default;
-};
 
 class LayerTreeSettingsScaleContent : public VerifyTreeCalcsLayerTreeSettings {
  public:
@@ -1250,6 +1260,9 @@ TEST_F(LayerTreeHostCommonTest, TransformAboveRootLayer) {
         root, root->bounds(), translate, &render_surface_list_impl);
     inputs.page_scale_factor = page_scale_factor;
     inputs.page_scale_layer = root;
+    inputs.page_scale_transform_node =
+        inputs.property_trees->transform_tree.Node(
+            inputs.page_scale_layer->transform_tree_index());
     inputs.property_trees->needs_rebuild = true;
     LayerTreeHostCommon::CalculateDrawPropertiesForTesting(&inputs);
     gfx::Transform page_scaled_translate = translate;
@@ -2165,12 +2178,14 @@ TEST_F(LayerTreeHostCommonTest, LargeTransforms) {
 }
 
 static bool TransformIsAnimating(LayerImpl* layer) {
-  return layer->GetMutatorHost()->IsAnimatingTransformProperty(
+  MutatorHost* host = layer->layer_tree_impl()->mutator_host();
+  return host->IsAnimatingTransformProperty(
       layer->element_id(), layer->GetElementTypeForAnimation());
 }
 
 static bool HasPotentiallyRunningTransformAnimation(LayerImpl* layer) {
-  return layer->GetMutatorHost()->HasPotentiallyRunningTransformAnimation(
+  MutatorHost* host = layer->layer_tree_impl()->mutator_host();
+  return host->HasPotentiallyRunningTransformAnimation(
       layer->element_id(), layer->GetElementTypeForAnimation());
 }
 
@@ -3045,7 +3060,7 @@ TEST_F(LayerTreeHostCommonTest, OcclusionBySiblingOfTarget) {
   root->test_properties()->AddChild(std::move(child));
   host_impl.active_tree()->SetRootLayerForTesting(std::move(root));
   host_impl.SetVisible(true);
-  host_impl.InitializeRenderer(layer_tree_frame_sink.get());
+  host_impl.InitializeFrameSink(layer_tree_frame_sink.get());
   host_impl.active_tree()->BuildLayerListAndPropertyTreesForTesting();
   host_impl.active_tree()->UpdateDrawProperties();
 
@@ -3091,7 +3106,7 @@ TEST_F(LayerTreeHostCommonTest, TextureLayerSnapping) {
   root->test_properties()->AddChild(std::move(child));
   host_impl.active_tree()->SetRootLayerForTesting(std::move(root));
   host_impl.SetVisible(true);
-  host_impl.InitializeRenderer(layer_tree_frame_sink.get());
+  host_impl.InitializeFrameSink(layer_tree_frame_sink.get());
   host_impl.active_tree()->BuildLayerListAndPropertyTreesForTesting();
   host_impl.active_tree()->UpdateDrawProperties();
 
@@ -3153,7 +3168,7 @@ TEST_F(LayerTreeHostCommonTest,
   root->test_properties()->AddChild(std::move(occluding_child));
   host_impl.active_tree()->SetRootLayerForTesting(std::move(root));
   host_impl.SetVisible(true);
-  host_impl.InitializeRenderer(layer_tree_frame_sink.get());
+  host_impl.InitializeFrameSink(layer_tree_frame_sink.get());
   host_impl.active_tree()->BuildLayerListAndPropertyTreesForTesting();
   host_impl.active_tree()->UpdateDrawProperties();
 
@@ -4363,7 +4378,8 @@ TEST_F(LayerTreeHostCommonTest, LayerSearch) {
   scoped_refptr<Layer> root = Layer::Create();
   scoped_refptr<Layer> child = Layer::Create();
   scoped_refptr<Layer> grand_child = Layer::Create();
-  scoped_refptr<Layer> mask_layer = Layer::Create();
+  FakeContentLayerClient client;
+  scoped_refptr<PictureLayer> mask_layer = PictureLayer::Create(&client);
 
   child->AddChild(grand_child.get());
   child->SetMaskLayer(mask_layer.get());
@@ -4489,7 +4505,7 @@ TEST_F(LayerTreeHostCommonTest, OpacityAnimatingOnPendingTree) {
       active_child->effect_tree_index()));
 }
 
-using LCDTextTestParam = std::tr1::tuple<bool, bool, bool>;
+using LCDTextTestParam = std::tuple<bool, bool, bool>;
 class LCDTextTest : public LayerTreeHostCommonTestBase,
                     public testing::TestWithParam<LCDTextTestParam> {
  public:
@@ -4505,8 +4521,8 @@ class LCDTextTest : public LayerTreeHostCommonTestBase,
   LayerTreeSettings LCDTextTestLayerTreeSettings() {
     LayerTreeSettings settings = VerifyTreeCalcsLayerTreeSettings();
 
-    can_use_lcd_text_ = std::tr1::get<0>(GetParam());
-    layers_always_allowed_lcd_text_ = std::tr1::get<1>(GetParam());
+    can_use_lcd_text_ = std::get<0>(GetParam());
+    layers_always_allowed_lcd_text_ = std::get<1>(GetParam());
     settings.can_use_lcd_text = can_use_lcd_text_;
     settings.layers_always_allowed_lcd_text = layers_always_allowed_lcd_text_;
     return settings;
@@ -4547,8 +4563,7 @@ class LCDTextTest : public LayerTreeHostCommonTestBase,
     child_->SetBounds(gfx::Size(1, 1));
     grand_child_->SetBounds(gfx::Size(1, 1));
 
-    child_->test_properties()->force_render_surface =
-        std::tr1::get<2>(GetParam());
+    child_->test_properties()->force_render_surface = std::get<2>(GetParam());
   }
 
   bool can_use_lcd_text_;
@@ -4885,10 +4900,16 @@ TEST_F(LayerTreeHostCommonTest, SubtreeHiddenWithCopyRequest) {
   inputs.can_adjust_raster_scales = true;
   LayerTreeHostCommon::CalculateDrawPropertiesForTesting(&inputs);
 
-  EXPECT_TRUE(root_layer->has_copy_requests_in_target_subtree());
-  EXPECT_TRUE(copy_grand_parent_layer->has_copy_requests_in_target_subtree());
-  EXPECT_TRUE(copy_parent_layer->has_copy_requests_in_target_subtree());
-  EXPECT_TRUE(copy_layer->has_copy_requests_in_target_subtree());
+  auto& effect_tree =
+      root_layer->layer_tree_impl()->property_trees()->effect_tree;
+  EXPECT_TRUE(effect_tree.Node(root_layer->effect_tree_index())
+                  ->subtree_has_copy_request);
+  EXPECT_TRUE(effect_tree.Node(copy_grand_parent_layer->effect_tree_index())
+                  ->subtree_has_copy_request);
+  EXPECT_TRUE(effect_tree.Node(copy_parent_layer->effect_tree_index())
+                  ->subtree_has_copy_request);
+  EXPECT_TRUE(effect_tree.Node(copy_layer->effect_tree_index())
+                  ->subtree_has_copy_request);
 
   // We should have four render surfaces, one for the root, one for the grand
   // parent since it has opacity and two drawing descendants, one for the parent
@@ -7419,9 +7440,12 @@ TEST_F(LayerTreeHostCommonTest, MaximumAnimationScaleFactor) {
   EXPECT_EQ(0.f, GetStartingAnimationScale(child_raw));
   EXPECT_EQ(0.f, GetStartingAnimationScale(grand_child_raw));
 
-  grand_parent_animation->AbortKeyframeModels(TargetProperty::TRANSFORM, false);
-  parent_animation->AbortKeyframeModels(TargetProperty::TRANSFORM, false);
-  child_animation->AbortKeyframeModels(TargetProperty::TRANSFORM, false);
+  grand_parent_animation->AbortKeyframeModelsWithProperty(
+      TargetProperty::TRANSFORM, false);
+  parent_animation->AbortKeyframeModelsWithProperty(TargetProperty::TRANSFORM,
+                                                    false);
+  child_animation->AbortKeyframeModelsWithProperty(TargetProperty::TRANSFORM,
+                                                   false);
 
   TransformOperations perspective;
   perspective.AppendPerspective(10.f);
@@ -7443,7 +7467,8 @@ TEST_F(LayerTreeHostCommonTest, MaximumAnimationScaleFactor) {
   EXPECT_EQ(0.f, GetStartingAnimationScale(child_raw));
   EXPECT_EQ(0.f, GetStartingAnimationScale(grand_child_raw));
 
-  child_animation->AbortKeyframeModels(TargetProperty::TRANSFORM, false);
+  child_animation->AbortKeyframeModelsWithProperty(TargetProperty::TRANSFORM,
+                                                   false);
 
   gfx::Transform scale_matrix;
   scale_matrix.Scale(1.f, 2.f);
@@ -7838,6 +7863,8 @@ TEST_F(LayerTreeHostCommonTest, DrawPropertyScales) {
   inputs.page_scale_factor = page_scale_factor;
   inputs.can_adjust_raster_scales = true;
   inputs.page_scale_layer = root_layer;
+  inputs.page_scale_transform_node = inputs.property_trees->transform_tree.Node(
+      inputs.page_scale_layer->transform_tree_index());
   LayerTreeHostCommon::CalculateDrawPropertiesForTesting(&inputs);
 
   EXPECT_FLOAT_EQ(3.f, root_layer->GetIdealContentsScale());
@@ -8293,8 +8320,9 @@ TEST_F(LayerTreeHostCommonTest, AnimatedOpacityCreatesRenderSurface) {
 }
 
 static bool FilterIsAnimating(LayerImpl* layer) {
-  return layer->GetMutatorHost()->IsAnimatingFilterProperty(
-      layer->element_id(), layer->GetElementTypeForAnimation());
+  MutatorHost* host = layer->layer_tree_impl()->mutator_host();
+  return host->IsAnimatingFilterProperty(layer->element_id(),
+                                         layer->GetElementTypeForAnimation());
 }
 
 // Verify that having an animated filter (but no current filter, as these
@@ -8326,7 +8354,8 @@ TEST_F(LayerTreeHostCommonTest, AnimatedFilterCreatesRenderSurface) {
 }
 
 bool HasPotentiallyRunningFilterAnimation(const LayerImpl& layer) {
-  return layer.GetMutatorHost()->HasPotentiallyRunningFilterAnimation(
+  MutatorHost* host = layer.layer_tree_impl()->mutator_host();
+  return host->HasPotentiallyRunningFilterAnimation(
       layer.element_id(), layer.GetElementTypeForAnimation());
 }
 
@@ -8593,21 +8622,22 @@ TEST_F(LayerTreeHostCommonTest, HasCopyRequestsInTargetSubtree) {
   child2->SetOpacity(0.f);
   ExecuteCalculateDrawPropertiesAndSaveUpdateLayerList(root.get());
 
-  EXPECT_TRUE(root->has_copy_requests_in_target_subtree());
-  EXPECT_TRUE(child1->has_copy_requests_in_target_subtree());
-  EXPECT_FALSE(child2->has_copy_requests_in_target_subtree());
-  EXPECT_TRUE(grandchild->has_copy_requests_in_target_subtree());
-  EXPECT_TRUE(greatgrandchild->has_copy_requests_in_target_subtree());
+  EXPECT_TRUE(LayerSubtreeHasCopyRequest(root.get()));
+  EXPECT_TRUE(LayerSubtreeHasCopyRequest(child1.get()));
+  EXPECT_FALSE(LayerSubtreeHasCopyRequest(child2.get()));
+  EXPECT_TRUE(LayerSubtreeHasCopyRequest(grandchild.get()));
+  EXPECT_TRUE(LayerSubtreeHasCopyRequest(greatgrandchild.get()));
 }
 
 TEST_F(LayerTreeHostCommonTest, SkippingSubtreeMain) {
-  scoped_refptr<Layer> root = Layer::Create();
   FakeContentLayerClient client;
+
+  scoped_refptr<Layer> root = Layer::Create();
   client.set_bounds(root->bounds());
-  scoped_refptr<LayerWithForcedDrawsContent> child =
-      base::MakeRefCounted<LayerWithForcedDrawsContent>();
-  scoped_refptr<LayerWithForcedDrawsContent> grandchild =
-      base::MakeRefCounted<LayerWithForcedDrawsContent>();
+  scoped_refptr<Layer> child = Layer::Create();
+  child->SetIsDrawable(true);
+  scoped_refptr<Layer> grandchild = Layer::Create();
+  grandchild->SetIsDrawable(true);
   scoped_refptr<FakePictureLayer> greatgrandchild(
       FakePictureLayer::Create(&client));
 
@@ -9019,10 +9049,10 @@ TEST_F(LayerTreeHostCommonTest, LayerTreeRebuildTest) {
   child->RequestCopyOfOutput(viz::CopyOutputRequest::CreateStubForTesting());
 
   ExecuteCalculateDrawPropertiesAndSaveUpdateLayerList(root.get());
-  EXPECT_TRUE(root->has_copy_requests_in_target_subtree());
+  EXPECT_TRUE(LayerSubtreeHasCopyRequest(root.get()));
 
   ExecuteCalculateDrawPropertiesAndSaveUpdateLayerList(root.get());
-  EXPECT_TRUE(root->has_copy_requests_in_target_subtree());
+  EXPECT_TRUE(LayerSubtreeHasCopyRequest(root.get()));
 }
 
 TEST_F(LayerTreeHostCommonTest, ResetPropertyTreeIndices) {
@@ -9721,8 +9751,8 @@ TEST_F(LayerTreeHostCommonTest, LargeTransformTest) {
 
 TEST_F(LayerTreeHostCommonTest, PropertyTreesRebuildWithOpacityChanges) {
   scoped_refptr<Layer> root = Layer::Create();
-  scoped_refptr<LayerWithForcedDrawsContent> child =
-      base::MakeRefCounted<LayerWithForcedDrawsContent>();
+  scoped_refptr<Layer> child = Layer::Create();
+  child->SetIsDrawable(true);
   root->AddChild(child);
   host()->SetRootLayer(root);
 
@@ -9763,8 +9793,8 @@ TEST_F(LayerTreeHostCommonTest, PropertyTreesRebuildWithOpacityChanges) {
 
 TEST_F(LayerTreeHostCommonTest, OpacityAnimationsTrackingTest) {
   scoped_refptr<Layer> root = Layer::Create();
-  scoped_refptr<LayerWithForcedDrawsContent> animated =
-      base::MakeRefCounted<LayerWithForcedDrawsContent>();
+  scoped_refptr<Layer> animated = Layer::Create();
+  animated->SetIsDrawable(true);
   root->AddChild(animated);
   host()->SetRootLayer(root);
   host()->SetElementIdsForTesting();
@@ -9804,8 +9834,8 @@ TEST_F(LayerTreeHostCommonTest, OpacityAnimationsTrackingTest) {
   EXPECT_TRUE(node->is_currently_animating_opacity);
   EXPECT_TRUE(node->has_potential_opacity_animation);
 
-  animation->AbortKeyframeModels(TargetProperty::OPACITY,
-                                 false /*needs_completion*/);
+  animation->AbortKeyframeModelsWithProperty(TargetProperty::OPACITY,
+                                             false /*needs_completion*/);
   node = tree.Node(animated->effect_tree_index());
   EXPECT_FALSE(node->is_currently_animating_opacity);
   EXPECT_FALSE(node->has_potential_opacity_animation);
@@ -9813,8 +9843,8 @@ TEST_F(LayerTreeHostCommonTest, OpacityAnimationsTrackingTest) {
 
 TEST_F(LayerTreeHostCommonTest, TransformAnimationsTrackingTest) {
   scoped_refptr<Layer> root = Layer::Create();
-  scoped_refptr<LayerWithForcedDrawsContent> animated =
-      base::MakeRefCounted<LayerWithForcedDrawsContent>();
+  scoped_refptr<Layer> animated = Layer::Create();
+  animated->SetIsDrawable(true);
   root->AddChild(animated);
   host()->SetRootLayer(root);
   host()->SetElementIdsForTesting();
@@ -9863,8 +9893,8 @@ TEST_F(LayerTreeHostCommonTest, TransformAnimationsTrackingTest) {
   EXPECT_TRUE(node->is_currently_animating);
   EXPECT_TRUE(node->has_potential_animation);
 
-  animation->AbortKeyframeModels(TargetProperty::TRANSFORM,
-                                 false /*needs_completion*/);
+  animation->AbortKeyframeModelsWithProperty(TargetProperty::TRANSFORM,
+                                             false /*needs_completion*/);
   node = tree.Node(animated->transform_tree_index());
   EXPECT_FALSE(node->is_currently_animating);
   EXPECT_FALSE(node->has_potential_animation);

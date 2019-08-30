@@ -33,8 +33,6 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/time/time.h"
 #include "base/values.h"
-#include "components/cronet/android/cert/cert_verifier_cache_serializer.h"
-#include "components/cronet/android/cert/proto/cert_verification.pb.h"
 #include "components/cronet/android/cronet_library_loader.h"
 #include "components/cronet/cronet_prefs_manager.h"
 #include "components/cronet/histogram_manager.h"
@@ -55,8 +53,8 @@
 #include "net/nqe/network_quality_estimator_params.h"
 #include "net/proxy_resolution/proxy_config_service_android.h"
 #include "net/proxy_resolution/proxy_resolution_service.h"
-#include "net/quic/core/quic_versions.h"
 #include "net/ssl/channel_id_service.h"
+#include "net/third_party/quic/core/quic_versions.h"
 #include "net/url_request/url_request_context.h"
 #include "net/url_request/url_request_context_builder.h"
 #include "net/url_request/url_request_interceptor.h"
@@ -131,37 +129,6 @@ void CronetURLRequestContextAdapter::OnInitNetworkThread() {
 void CronetURLRequestContextAdapter::OnDestroyNetworkThread() {
   // The |context_| is destroyed.
   context_ = nullptr;
-}
-
-void CronetURLRequestContextAdapter::OnInitCertVerifierData(
-    net::CertVerifier* cert_verifier,
-    const std::string& cert_verifier_data) {
-  SCOPED_UMA_HISTOGRAM_TIMER("Net.Cronet.CertVerifierCache.DeserializeTime");
-  std::string data;
-  cronet_pb::CertVerificationCache cert_verification_cache;
-  if (base::Base64Decode(cert_verifier_data, &data) &&
-      cert_verification_cache.ParseFromString(data)) {
-    DeserializeCertVerifierCache(
-        cert_verification_cache,
-        reinterpret_cast<net::CachingCertVerifier*>(cert_verifier));
-  }
-}
-
-void CronetURLRequestContextAdapter::OnSaveCertVerifierData(
-    net::CertVerifier* cert_verifier) {
-  std::string encoded_data;
-  if (cert_verifier) {
-    SCOPED_UMA_HISTOGRAM_TIMER("Net.Cronet.CertVerifierCache.SerializeTime");
-    std::string data;
-    cronet_pb::CertVerificationCache cert_cache = SerializeCertVerifierCache(
-        *reinterpret_cast<net::CachingCertVerifier*>(cert_verifier));
-    cert_cache.SerializeToString(&data);
-    base::Base64Encode(data, &encoded_data);
-  }
-  JNIEnv* env = base::android::AttachCurrentThread();
-  Java_CronetUrlRequestContext_onGetCertVerifierData(
-      env, jcronet_url_request_context_,
-      base::android::ConvertUTF8ToJavaString(env, encoded_data));
 }
 
 void CronetURLRequestContextAdapter::OnEffectiveConnectionTypeChanged(
@@ -251,12 +218,6 @@ void CronetURLRequestContextAdapter::StopNetLog(
   context_->StopNetLog();
 }
 
-void CronetURLRequestContextAdapter::GetCertVerifierData(
-    JNIEnv* env,
-    const JavaParamRef<jobject>& jcaller) {
-  context_->GetCertVerifierData();
-}
-
 int CronetURLRequestContextAdapter::default_load_flags() const {
   return context_->default_load_flags();
 }
@@ -277,8 +238,7 @@ static jlong JNI_CronetUrlRequestContext_CreateRequestContextConfig(
     const JavaParamRef<jstring>& jexperimental_quic_connection_options,
     jlong jmock_cert_verifier,
     jboolean jenable_network_quality_estimator,
-    jboolean jbypass_public_key_pinning_for_local_trust_anchors,
-    const JavaParamRef<jstring>& jcert_verifier_data) {
+    jboolean jbypass_public_key_pinning_for_local_trust_anchors) {
   return reinterpret_cast<jlong>(new URLRequestContextConfig(
       jquic_enabled,
       ConvertNullableJavaStringToUTF8(env, jquic_default_user_agent_id),
@@ -293,8 +253,7 @@ static jlong JNI_CronetUrlRequestContext_CreateRequestContextConfig(
       base::WrapUnique(
           reinterpret_cast<net::CertVerifier*>(jmock_cert_verifier)),
       jenable_network_quality_estimator,
-      jbypass_public_key_pinning_for_local_trust_anchors,
-      ConvertNullableJavaStringToUTF8(env, jcert_verifier_data)));
+      jbypass_public_key_pinning_for_local_trust_anchors));
 }
 
 // Add a QUIC hint to a URLRequestContextConfig.

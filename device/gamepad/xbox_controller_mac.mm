@@ -35,6 +35,11 @@ const int kXbox360ControlEndpoint = 2;
 const int kXboxOneReadEndpoint = 2;
 const int kXboxOneControlEndpoint = 1;
 
+const double kXboxOneMaxEffectDurationMillis = 2500;  // 2.5 seconds
+
+const size_t kXbox360HeaderBytes = 2;
+const size_t kXboxOneHeaderBytes = 4;
+
 enum {
   STATUS_MESSAGE_BUTTONS = 0,
   STATUS_MESSAGE_LED = 1,
@@ -151,8 +156,8 @@ struct XboxOneRumbleData {
   uint8_t rumble_mask;
   uint8_t trigger_left;
   uint8_t trigger_right;
-  uint8_t weak_magnitude;
   uint8_t strong_magnitude;
+  uint8_t weak_magnitude;
   uint8_t duration;
   uint8_t period;
   uint8_t extra;
@@ -368,11 +373,24 @@ void XboxControllerMac::StartVibration(int sequence_id,
     return;
   SetVibration(strong_magnitude, weak_magnitude);
 
-  playing_effect_task_runner_->PostDelayedTask(
-      FROM_HERE,
-      base::BindOnce(&XboxControllerMac::StopVibration, base::Unretained(this),
-                     sequence_id),
-      base::TimeDelta::FromMillisecondsD(duration));
+  // The Xbox One controller rumble packet specifies a duration for the rumble
+  // effect with a maximum length of about 3 seconds. Support longer durations
+  // by sending a second rumble packet to extend the duration.
+  if (duration > kXboxOneMaxEffectDurationMillis) {
+    double remaining = duration - kXboxOneMaxEffectDurationMillis;
+    playing_effect_task_runner_->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(&XboxControllerMac::StartVibration,
+                       base::Unretained(this), sequence_id, remaining,
+                       strong_magnitude, weak_magnitude),
+        base::TimeDelta::FromMillisecondsD(kXboxOneMaxEffectDurationMillis));
+  } else {
+    playing_effect_task_runner_->PostDelayedTask(
+        FROM_HERE,
+        base::BindOnce(&XboxControllerMac::StopVibration,
+                       base::Unretained(this), sequence_id),
+        base::TimeDelta::FromMillisecondsD(duration));
+  }
 }
 
 void XboxControllerMac::StopVibration(int sequence_id) {
@@ -705,7 +723,7 @@ void XboxControllerMac::GotData(void* context, IOReturn result, void* arg0) {
 }
 
 void XboxControllerMac::ProcessXbox360Packet(size_t length) {
-  if (length < 2)
+  if (length < kXbox360HeaderBytes)
     return;
   DCHECK(length <= read_buffer_size_);
   if (length > read_buffer_size_) {
@@ -719,8 +737,8 @@ void XboxControllerMac::ProcessXbox360Packet(size_t length) {
     return;
 
   uint8_t type = buffer[0];
-  buffer += 2;
-  length -= 2;
+  buffer += kXbox360HeaderBytes;
+  length -= kXbox360HeaderBytes;
   switch (type) {
     case STATUS_MESSAGE_BUTTONS: {
       if (length != sizeof(Xbox360ButtonData))
@@ -747,7 +765,7 @@ void XboxControllerMac::ProcessXbox360Packet(size_t length) {
 }
 
 void XboxControllerMac::ProcessXboxOnePacket(size_t length) {
-  if (length < 2)
+  if (length < kXboxOneHeaderBytes)
     return;
   DCHECK(length <= read_buffer_size_);
   if (length > read_buffer_size_) {
@@ -755,10 +773,12 @@ void XboxControllerMac::ProcessXboxOnePacket(size_t length) {
     return;
   }
   uint8_t* buffer = read_buffer_.get();
-
   uint8_t type = buffer[0];
-  buffer += 4;
-  length -= 4;
+  bool needs_ack = (buffer[1] == 0x30);
+  uint8_t sequence_number = buffer[2];
+
+  buffer += kXboxOneHeaderBytes;
+  length -= kXboxOneHeaderBytes;
   switch (type) {
     case XBOX_ONE_STATUS_MESSAGE_BUTTONS: {
       if (length != sizeof(XboxOneButtonData) &&
@@ -776,6 +796,9 @@ void XboxControllerMac::ProcessXboxOnePacket(size_t length) {
         return;
       XboxOneGuideData* data = reinterpret_cast<XboxOneGuideData*>(buffer);
       delegate_->XboxControllerGotGuideData(this, data->down);
+      // The Xbox One S controller requires these reports to be acked.
+      if (needs_ack)
+        WriteXboxOneAckGuide(sequence_number);
       break;
     }
     default:
@@ -870,9 +893,41 @@ void XboxControllerMac::WriteXboxOneRumble(uint8_t strong_magnitude,
   // Set rumble intensities.
   rumble_data->trigger_left = 0x00;
   rumble_data->trigger_right = 0x00;
-  rumble_data->weak_magnitude = weak_magnitude;
   rumble_data->strong_magnitude = strong_magnitude;
+  rumble_data->weak_magnitude = weak_magnitude;
 
+  kern_return_t kr =
+      (*interface_)
+          ->WritePipeAsync(interface_, control_endpoint_, buffer,
+                           (UInt32)length, WriteComplete, buffer);
+  if (kr != KERN_SUCCESS) {
+    delete[] buffer;
+    IOError();
+    return;
+  }
+}
+
+// Ack the guide report. The contents of the ack report are modeled after
+// xpad's xboxone_ack_mode_report. See the mode_report_ack buffer defined in
+// this commit:
+// https://github.com/torvalds/linux/commit/57b8443d3e5bd046a519ff714ca31c64c7f04309
+void XboxControllerMac::WriteXboxOneAckGuide(uint8_t sequence_number) {
+  const UInt8 length = 13;
+
+  UInt8* buffer = new UInt8[length];
+  buffer[0] = 0x01;
+  buffer[1] = 0x20;
+  buffer[2] = sequence_number;
+  buffer[3] = 0x09;
+  buffer[4] = 0x00;
+  buffer[5] = 0x07;
+  buffer[6] = 0x20;
+  buffer[7] = 0x02;
+  buffer[8] = 0x00;
+  buffer[9] = 0x00;
+  buffer[10] = 0x00;
+  buffer[11] = 0x00;
+  buffer[12] = 0x00;
   kern_return_t kr =
       (*interface_)
           ->WritePipeAsync(interface_, control_endpoint_, buffer,

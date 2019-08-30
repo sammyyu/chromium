@@ -11,13 +11,16 @@
 #include "base/threading/thread_task_runner_handle.h"
 #include "base/win/windows_version.h"
 #include "ui/base/ui_base_features.h"
+#include "ui/display/win/screen_win.h"
+#include "ui/gfx/geometry/rect.h"
 
 namespace ui {
 namespace win {
 
 // static
 std::unique_ptr<DirectManipulationHelper>
-DirectManipulationHelper::CreateInstance(HWND window) {
+DirectManipulationHelper::CreateInstance(HWND window,
+                                         WindowEventTarget* event_target) {
   if (!::IsWindow(window))
     return nullptr;
 
@@ -32,7 +35,7 @@ DirectManipulationHelper::CreateInstance(HWND window) {
       base::WrapUnique(new DirectManipulationHelper());
   instance->window_ = window;
 
-  if (instance->Initialize())
+  if (instance->Initialize(event_target))
     return instance;
 
   return nullptr;
@@ -53,9 +56,8 @@ DirectManipulationHelper::CreateInstanceForTesting(
   std::unique_ptr<DirectManipulationHelper> instance =
       base::WrapUnique(new DirectManipulationHelper());
 
-  instance->event_handler_ =
-      Microsoft::WRL::Make<DirectManipulationHandler>(instance.get());
-  instance->event_handler_->SetWindowEventTarget(event_target);
+  instance->event_handler_ = Microsoft::WRL::Make<DirectManipulationHandler>(
+      instance.get(), event_target);
 
   instance->viewport_ = viewport;
 
@@ -69,11 +71,7 @@ DirectManipulationHelper::~DirectManipulationHelper() {
 
 DirectManipulationHelper::DirectManipulationHelper() {}
 
-// We only use Direct Manipulation as event handler so we can use any size for
-// the fake viewport.
-const RECT VIEWPORT_DEFAULT_RECT = {0, 0, 1000, 1000};
-
-bool DirectManipulationHelper::Initialize() {
+bool DirectManipulationHelper::Initialize(WindowEventTarget* event_target) {
   // IDirectManipulationUpdateManager is the first COM object created by the
   // application to retrieve other objects in the Direct Manipulation API.
   // It also serves to activate and deactivate Direct Manipulation functionality
@@ -99,6 +97,8 @@ bool DirectManipulationHelper::Initialize() {
       DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_X |
       DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_Y |
       DIRECTMANIPULATION_CONFIGURATION_TRANSLATION_INERTIA |
+      DIRECTMANIPULATION_CONFIGURATION_RAILS_X |
+      DIRECTMANIPULATION_CONFIGURATION_RAILS_Y |
       DIRECTMANIPULATION_CONFIGURATION_SCALING;
 
   hr = viewport_->ActivateConfiguration(configuration);
@@ -112,7 +112,8 @@ bool DirectManipulationHelper::Initialize() {
   if (!SUCCEEDED(hr))
     return false;
 
-  event_handler_ = Microsoft::WRL::Make<DirectManipulationHandler>(this);
+  event_handler_ =
+      Microsoft::WRL::Make<DirectManipulationHandler>(this, event_target);
   if (!SUCCEEDED(hr))
     return false;
 
@@ -123,7 +124,10 @@ bool DirectManipulationHelper::Initialize() {
   if (!SUCCEEDED(hr))
     return false;
 
-  hr = viewport_->SetViewportRect(&VIEWPORT_DEFAULT_RECT);
+  // Set default rect for viewport before activate.
+  viewport_size_ = {1000, 1000};
+  RECT rect = gfx::Rect(viewport_size_).ToRECT();
+  hr = viewport_->SetViewportRect(&rect);
   if (!SUCCEEDED(hr))
     return false;
 
@@ -138,16 +142,33 @@ bool DirectManipulationHelper::Initialize() {
 }
 
 void DirectManipulationHelper::Activate() {
+  viewport_->Stop();
   manager_->Activate(window_);
 }
 
 void DirectManipulationHelper::Deactivate() {
+  viewport_->Stop();
   manager_->Deactivate(window_);
+}
+
+void DirectManipulationHelper::SetSize(const gfx::Size& size) {
+  if (viewport_size_ == size)
+    return;
+
+  viewport_->Stop();
+
+  viewport_size_ = size;
+  RECT rect = gfx::Rect(viewport_size_).ToRECT();
+  viewport_->SetViewportRect(&rect);
 }
 
 bool DirectManipulationHelper::OnPointerHitTest(
     WPARAM w_param,
     WindowEventTarget* event_target) {
+  // Update the device scale factor.
+  event_handler_->SetDeviceScaleFactor(
+      display::win::ScreenWin::GetScaleFactorForHWND(window_));
+
   // Only DM_POINTERHITTEST can be the first message of input sequence of
   // touchpad input.
   // TODO(chaopeng) Check if Windows API changes:
@@ -162,7 +183,7 @@ bool DirectManipulationHelper::OnPointerHitTest(
   static GetPointerTypeFn get_pointer_type = reinterpret_cast<GetPointerTypeFn>(
       GetProcAddress(GetModuleHandleA("user32.dll"), "GetPointerType"));
   if (get_pointer_type && get_pointer_type(pointer_id, &pointer_type) &&
-      pointer_type == PT_TOUCHPAD) {
+      pointer_type == PT_TOUCHPAD && event_target) {
     viewport_->SetContact(pointer_id);
     // Request begin frame for fake viewport.
     need_poll_events_ = true;
@@ -173,11 +194,10 @@ bool DirectManipulationHelper::OnPointerHitTest(
 HRESULT DirectManipulationHelper::ResetViewport(bool need_poll_events) {
   // By zooming the primary content to a rect that match the viewport rect, we
   // reset the content's transform to identity.
-  HRESULT hr = viewport_->ZoomToRect(
-      static_cast<float>(VIEWPORT_DEFAULT_RECT.left),
-      static_cast<float>(VIEWPORT_DEFAULT_RECT.top),
-      static_cast<float>(VIEWPORT_DEFAULT_RECT.right),
-      static_cast<float>(VIEWPORT_DEFAULT_RECT.bottom), FALSE);
+  HRESULT hr =
+      viewport_->ZoomToRect(static_cast<float>(0), static_cast<float>(0),
+                            static_cast<float>(viewport_size_.width()),
+                            static_cast<float>(viewport_size_.height()), FALSE);
   if (!SUCCEEDED(hr))
     return hr;
 
@@ -191,14 +211,19 @@ bool DirectManipulationHelper::PollForNextEvent() {
   return need_poll_events_;
 }
 
+void DirectManipulationHelper::SetDeviceScaleFactorForTesting(float factor) {
+  event_handler_->SetDeviceScaleFactor(factor);
+}
+
 // DirectManipulationHandler
 DirectManipulationHandler::DirectManipulationHandler() {
   NOTREACHED();
 }
 
 DirectManipulationHandler::DirectManipulationHandler(
-    DirectManipulationHelper* helper)
-    : helper_(helper) {}
+    DirectManipulationHelper* helper,
+    WindowEventTarget* event_target)
+    : helper_(helper), event_target_(event_target) {}
 
 DirectManipulationHandler::~DirectManipulationHandler() {}
 
@@ -209,37 +234,106 @@ void DirectManipulationHandler::TransitionToState(Gesture new_gesture_state) {
   Gesture previous_gesture_state = gesture_state_;
   gesture_state_ = new_gesture_state;
 
-  if (new_gesture_state == Gesture::kPinch) {
-    // kScroll, kNone -> kPinch, PinchBegin.
-    // Pinch gesture may begin with some scroll events.
-    event_target_->ApplyPinchZoomBegin();
-    return;
+  // End the previous sequence.
+  switch (previous_gesture_state) {
+    case Gesture::kScroll: {
+      // kScroll -> kNone, kPinch, ScrollEnd.
+      // kScroll -> kFling, we don't want to end the current scroll sequence.
+      if (new_gesture_state != Gesture::kFling)
+        event_target_->ApplyPanGestureScrollEnd();
+      break;
+    }
+    case Gesture::kFling: {
+      // kFling -> *, FlingEnd.
+      event_target_->ApplyPanGestureFlingEnd();
+      break;
+    }
+    case Gesture::kPinch: {
+      DCHECK_EQ(new_gesture_state, Gesture::kNone);
+      // kPinch -> kNone, PinchEnd. kPinch should only transition to kNone.
+      event_target_->ApplyPinchZoomEnd();
+      break;
+    }
+    case Gesture::kNone: {
+      // kNone -> *, no cleanup is needed.
+      break;
+    }
+    default:
+      NOTREACHED();
   }
 
-  if (new_gesture_state == Gesture::kNone) {
-    // kScroll -> kNone do nothing.
-    if (previous_gesture_state == Gesture::kScroll)
-      return;
-    // kPinch -> kNone, PinchEnd.
-    event_target_->ApplyPinchZoomEnd();
-    return;
+  // Start the new sequence.
+  switch (new_gesture_state) {
+    case Gesture::kScroll: {
+      // kFling, kNone -> kScroll, ScrollBegin.
+      // ScrollBegin is different phase event with others. It must send within
+      // the first scroll event.
+      should_send_scroll_begin_ = true;
+      break;
+    }
+    case Gesture::kFling: {
+      // Only kScroll can transition to kFling.
+      DCHECK_EQ(previous_gesture_state, Gesture::kScroll);
+      event_target_->ApplyPanGestureFlingBegin();
+      break;
+    }
+    case Gesture::kPinch: {
+      // * -> kPinch, PinchBegin.
+      // Pinch gesture may begin with some scroll events.
+      event_target_->ApplyPinchZoomBegin();
+      break;
+    }
+    case Gesture::kNone: {
+      // * -> kNone, only cleanup is needed.
+      break;
+    }
+    default:
+      NOTREACHED();
   }
-
-  // kNone -> kScroll do nothing. Not allow kPinch -> kScroll.
-  DCHECK_EQ(previous_gesture_state, Gesture::kNone);
-  DCHECK_EQ(new_gesture_state, Gesture::kScroll);
 }
 
 HRESULT DirectManipulationHandler::OnViewportStatusChanged(
     IDirectManipulationViewport* viewport,
     DIRECTMANIPULATION_STATUS current,
     DIRECTMANIPULATION_STATUS previous) {
+  // MSDN never mention |viewport| are nullable and we never saw it is null when
+  // testing.
+  DCHECK(viewport);
+
   // The state of our viewport has changed! We'l be in one of three states:
   // - ENABLED: initial state
   // - READY: the previous gesture has been completed
   // - RUNNING: gesture updating
   // - INERTIA: finger leave touchpad content still updating by inertia
   HRESULT hr = S_OK;
+
+  // Windows should not call this when event_target_ is null since we do not
+  // pass the DM_POINTERHITTEST to DirectManipulation.
+  if (!event_target_)
+    return hr;
+
+  if (current == previous)
+    return hr;
+
+  if (current == DIRECTMANIPULATION_INERTIA) {
+    // Fling must lead by Scroll. We can actually hit here when user pinch then
+    // quickly pan gesture and leave touchpad. In this case, we don't want to
+    // start a new sequence until the gesture end. The rest events in sequence
+    // will be ignore since sequence still in pinch and only scale factor
+    // changes will be applied.
+    if (previous != DIRECTMANIPULATION_RUNNING ||
+        gesture_state_ != Gesture::kScroll) {
+      return hr;
+    }
+
+    TransitionToState(Gesture::kFling);
+  }
+
+  if (current == DIRECTMANIPULATION_RUNNING) {
+    // INERTIA -> RUNNING, should start a new sequence.
+    if (previous == DIRECTMANIPULATION_INERTIA)
+      TransitionToState(Gesture::kNone);
+  }
 
   // Reset the viewport when we're idle, so the content transforms always start
   // at identity.
@@ -286,14 +380,26 @@ bool DifferentLessThanOne(int f1, int f2) {
 HRESULT DirectManipulationHandler::OnContentUpdated(
     IDirectManipulationViewport* viewport,
     IDirectManipulationContent* content) {
+  // MSDN never mention these params are nullable and we never saw they are null
+  // when testing.
+  DCHECK(viewport);
+  DCHECK(content);
+
+  HRESULT hr = S_OK;
+
+  // Windows should not call this when event_target_ is null since we do not
+  // pass the DM_POINTERHITTEST to DirectManipulation.
+  if (!event_target_)
+    return hr;
+
   float xform[6];
-  HRESULT hr = content->GetContentTransform(xform, ARRAYSIZE(xform));
+  hr = content->GetContentTransform(xform, ARRAYSIZE(xform));
   if (!SUCCEEDED(hr))
     return hr;
 
   float scale = xform[0];
-  int x_offset = xform[4];
-  int y_offset = xform[5];
+  int x_offset = xform[4] / device_scale_factor_;
+  int y_offset = xform[5] / device_scale_factor_;
 
   // Ignore if Windows pass scale=0 to us.
   if (scale == 0.0f) {
@@ -331,8 +437,17 @@ HRESULT DirectManipulationHandler::OnContentUpdated(
   }
 
   if (gesture_state_ == Gesture::kScroll) {
-    event_target_->ApplyPanGestureScroll(x_offset - last_x_offset_,
-                                         y_offset - last_y_offset_);
+    if (should_send_scroll_begin_) {
+      event_target_->ApplyPanGestureScrollBegin(x_offset - last_x_offset_,
+                                                y_offset - last_y_offset_);
+      should_send_scroll_begin_ = false;
+    } else {
+      event_target_->ApplyPanGestureScroll(x_offset - last_x_offset_,
+                                           y_offset - last_y_offset_);
+    }
+  } else if (gesture_state_ == Gesture::kFling) {
+    event_target_->ApplyPanGestureFling(x_offset - last_x_offset_,
+                                        y_offset - last_y_offset_);
   } else {
     event_target_->ApplyPinchZoomScale(scale / last_scale_);
   }
@@ -346,8 +461,12 @@ HRESULT DirectManipulationHandler::OnContentUpdated(
 
 void DirectManipulationHandler::SetWindowEventTarget(
     WindowEventTarget* event_target) {
-  DCHECK(event_target);
   event_target_ = event_target;
+}
+
+void DirectManipulationHandler::SetDeviceScaleFactor(
+    float device_scale_factor) {
+  device_scale_factor_ = device_scale_factor;
 }
 
 }  // namespace win

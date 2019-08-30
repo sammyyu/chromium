@@ -6,10 +6,10 @@
 #define CONTENT_RENDERER_MEDIA_WEBRTC_RTC_CERTIFICATE_GENERATOR_H_
 
 #include "base/macros.h"
-#include "third_party/WebKit/public/platform/WebRTCCertificate.h"
-#include "third_party/WebKit/public/platform/WebRTCCertificateGenerator.h"
-#include "third_party/WebKit/public/platform/WebRTCKeyParams.h"
-#include "third_party/webrtc/api/optional.h"
+#include "base/single_thread_task_runner.h"
+#include "third_party/blink/public/platform/web_rtc_certificate.h"
+#include "third_party/blink/public/platform/web_rtc_certificate_generator.h"
+#include "third_party/blink/public/platform/web_rtc_key_params.h"
 
 namespace content {
 
@@ -37,12 +37,6 @@ class RTCCertificateGenerator : public blink::WebRTCCertificateGenerator {
       blink::WebString pem_certificate) override;
 
  private:
-  void generateCertificateWithOptionalExpiration(
-      const blink::WebRTCKeyParams& key_params,
-      const rtc::Optional<uint64_t>& expires_ms,
-      std::unique_ptr<blink::WebRTCCertificateCallback> observer,
-      scoped_refptr<base::SingleThreadTaskRunner> task_runner);
-
   DISALLOW_COPY_AND_ASSIGN(RTCCertificateGenerator);
 };
 

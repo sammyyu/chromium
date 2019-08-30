@@ -7,6 +7,7 @@ package org.chromium.chromecast.shell;
 import android.app.Activity;
 import android.content.Intent;
 import android.content.IntentFilter;
+import android.graphics.Color;
 import android.media.AudioManager;
 import android.net.Uri;
 import android.os.Bundle;
@@ -20,11 +21,11 @@ import android.widget.Toast;
 import org.chromium.base.Log;
 import org.chromium.base.annotations.RemovableInRelease;
 import org.chromium.chromecast.base.Both;
+import org.chromium.chromecast.base.CastSwitches;
 import org.chromium.chromecast.base.Controller;
 import org.chromium.chromecast.base.Observable;
 import org.chromium.chromecast.base.ScopeFactories;
 import org.chromium.chromecast.base.Unit;
-import org.chromium.content_public.browser.WebContents;
 
 /**
  * Activity for displaying a WebContents in CastShell.
@@ -47,51 +48,71 @@ public class CastWebContentsActivity extends Activity {
     private final Controller<Intent> mGotIntentState = new Controller<>();
     // Set this to cause the Activity to finish.
     private final Controller<String> mIsFinishingState = new Controller<>();
+    // Set this to provide the Activity with a CastAudioManager.
+    private final Controller<CastAudioManager> mAudioManagerState = new Controller<>();
     // Set in unittests to skip some behavior.
     private final Controller<Unit> mIsTestingState = new Controller<>();
 
     private CastWebContentsSurfaceHelper mSurfaceHelper;
 
     {
-        // Create an Observable that only supplies the Intent when not finishing.
-        Observable<Intent> hasIntentState =
-                mGotIntentState.and(Observable.not(mIsFinishingState)).transform(Both::getFirst);
         Observable<Intent> gotIntentAfterFinishingState =
-                mIsFinishingState.andThen(mGotIntentState).transform(Both::getSecond);
+                mIsFinishingState.andThen(mGotIntentState).map(Both::getSecond);
+        Observable<?> createdAndNotTestingState =
+                mCreatedState.and(Observable.not(mIsTestingState));
+        createdAndNotTestingState.watch(() -> {
+            // Register handler for web content stopped event while we have an Intent.
+            IntentFilter filter = new IntentFilter();
+            filter.addAction(CastIntents.ACTION_ON_WEB_CONTENT_STOPPED);
+            return new LocalBroadcastReceiverScope(filter, (Intent intent) -> {
+                mIsFinishingState.set("Stopped by intent: " + intent.getAction());
+            });
+        });
+        createdAndNotTestingState.watch(ScopeFactories.onEnter(() -> {
+            // Do this in onCreate() only if not testing.
+            if (!CastBrowserHelper.initializeBrowser(getApplicationContext())) {
+                Toast.makeText(this, R.string.browser_process_initialization_failed,
+                             Toast.LENGTH_SHORT)
+                        .show();
+                mIsFinishingState.set("Failed to initialize browser");
+            }
 
-        mCreatedState.and(Observable.not(mIsTestingState))
-                .watch(() -> {
-                    // Register handler for web content stopped event while we have an Intent.
-                    IntentFilter filter = new IntentFilter();
-                    filter.addAction(CastIntents.ACTION_ON_WEB_CONTENT_STOPPED);
-                    return new LocalBroadcastReceiverScope(filter, (Intent intent) -> {
-                        mIsFinishingState.set("Stopped by intent: " + intent.getAction());
-                    });
-                })
-                .watch(ScopeFactories.onEnter(() -> {
-                    // Do this in onCreate() only if not testing.
-                    if (!CastBrowserHelper.initializeBrowser(getApplicationContext())) {
-                        Toast.makeText(this, R.string.browser_process_initialization_failed,
-                                     Toast.LENGTH_SHORT)
-                                .show();
-                        mIsFinishingState.set("Failed to initialize browser");
-                    }
+            // Set flags to both exit sleep mode when this activity starts and
+            // avoid entering sleep mode while playing media. We cannot distinguish
+            // between video and audio so this applies to both.
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
+            getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
 
-                    // Set flags to both exit sleep mode when this activity starts and
-                    // avoid entering sleep mode while playing media. We cannot distinguish
-                    // between video and audio so this applies to both.
-                    getWindow().addFlags(WindowManager.LayoutParams.FLAG_TURN_SCREEN_ON);
-                    getWindow().addFlags(WindowManager.LayoutParams.FLAG_KEEP_SCREEN_ON);
+            setContentView(R.layout.cast_web_contents_activity);
 
-                    setContentView(R.layout.cast_web_contents_activity);
-
-                    mSurfaceHelper = new CastWebContentsSurfaceHelper(this, /* hostActivity */
+            mSurfaceHelper = new CastWebContentsSurfaceHelper(this, /* hostActivity */
+                    CastWebContentsView.onLayout(this,
                             (FrameLayout) findViewById(R.id.web_contents_container),
-                            false /* showInFragment */);
+                            CastSwitches.getSwitchValueColor(
+                                    CastSwitches.CAST_APP_BACKGROUND_COLOR, Color.BLACK)),
+                    (Uri uri) -> mIsFinishingState.set("Delayed teardown for URI: " + uri));
+        }));
+
+        // Initialize the audio manager in onCreate() if tests haven't already.
+        mCreatedState.and(Observable.not(mAudioManagerState)).watch(ScopeFactories.onEnter(() -> {
+            mAudioManagerState.set(CastAudioManager.getAudioManager(this));
+        }));
+
+        // Clean up stream mute state on pause events.
+        mAudioManagerState.andThen(Observable.not(mResumedState))
+                .watch(ScopeFactories.onEnter((CastAudioManager audioManager, Unit u) -> {
+                    audioManager.releaseStreamMuteIfNecessary(AudioManager.STREAM_MUSIC);
                 }));
 
         // Handle each new Intent.
-        hasIntentState.watch(ScopeFactories.onEnter(this ::handleIntent));
+        Controller<CastWebContentsSurfaceHelper.StartParams> startParamsState = new Controller<>();
+        mGotIntentState.and(Observable.not(mIsFinishingState))
+                .map(Both::getFirst)
+                .map(Intent::getExtras)
+                .map(CastWebContentsSurfaceHelper.StartParams::fromBundle)
+                // Use the duplicate-filtering functionality of Controller to drop duplicate params.
+                .watch(ScopeFactories.onEnter(startParamsState::set));
+        startParamsState.watch(ScopeFactories.onEnter(this ::notifyNewWebContents));
 
         mIsFinishingState.watch(ScopeFactories.onEnter((String reason) -> {
             if (DEBUG) Log.d(TAG, "Finishing activity: " + reason);
@@ -114,36 +135,10 @@ public class CastWebContentsActivity extends Activity {
         super.onCreate(savedInstanceState);
         mCreatedState.set(Unit.unit());
         mGotIntentState.set(getIntent());
-        CastAudioManager.getAudioManager(this).requestAudioFocusWhen(
-                mResumedState, AudioManager.STREAM_MUSIC, AudioManager.AUDIOFOCUS_GAIN);
     }
 
-    private void handleIntent(Intent intent) {
-        final Bundle bundle = intent.getExtras();
-        if (bundle == null) {
-            Log.i(TAG, "Intent without bundle received!");
-            return;
-        }
-        final String uriString = CastWebContentsIntentUtils.getUriString(intent);
-        if (uriString == null) {
-            Log.i(TAG, "Intent without uri received!");
-            return;
-        }
-        final Uri uri = Uri.parse(uriString);
-
-        // Do not load the WebContents if we are simply bringing the same
-        // activity to the foreground.
-        if (mSurfaceHelper.getInstanceId() != null
-                && mSurfaceHelper.getInstanceId().equals(uri.getPath())) {
-            Log.i(TAG, "Duplicated intent received!");
-            return;
-        }
-
-        bundle.setClassLoader(WebContents.class.getClassLoader());
-        final WebContents webContents = CastWebContentsIntentUtils.getWebContents(intent);
-
-        final boolean touchInputEnabled = CastWebContentsIntentUtils.isTouchable(intent);
-        mSurfaceHelper.onNewWebContents(uri, webContents, touchInputEnabled);
+    private void notifyNewWebContents(CastWebContentsSurfaceHelper.StartParams params) {
+        if (mSurfaceHelper != null) mSurfaceHelper.onNewStartParams(params);
     }
 
     @Override
@@ -163,9 +158,6 @@ public class CastWebContentsActivity extends Activity {
         if (DEBUG) Log.d(TAG, "onPause");
         super.onPause();
         mResumedState.reset();
-        if (mSurfaceHelper != null) {
-            mSurfaceHelper.onPause();
-        }
     }
 
     @Override
@@ -173,9 +165,6 @@ public class CastWebContentsActivity extends Activity {
         if (DEBUG) Log.d(TAG, "onResume");
         super.onResume();
         mResumedState.set(Unit.unit());
-        if (mSurfaceHelper != null) {
-            mSurfaceHelper.onResume();
-        }
     }
 
     @Override
@@ -271,5 +260,15 @@ public class CastWebContentsActivity extends Activity {
     @RemovableInRelease
     public void testingModeForTesting() {
         mIsTestingState.set(Unit.unit());
+    }
+
+    @RemovableInRelease
+    public void setAudioManagerForTesting(CastAudioManager audioManager) {
+        mAudioManagerState.set(audioManager);
+    }
+
+    @RemovableInRelease
+    public void setSurfaceHelperForTesting(CastWebContentsSurfaceHelper surfaceHelper) {
+        mSurfaceHelper = surfaceHelper;
     }
 }

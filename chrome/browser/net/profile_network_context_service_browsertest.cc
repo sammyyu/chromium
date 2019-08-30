@@ -11,6 +11,7 @@
 #include "base/files/file_path.h"
 #include "base/files/file_util.h"
 #include "base/files/scoped_temp_dir.h"
+#include "base/stl_util.h"
 #include "base/strings/string_piece.h"
 #include "base/strings/string_split.h"
 #include "base/threading/thread_restrictions.h"
@@ -27,7 +28,7 @@
 #include "components/prefs/pref_service.h"
 #include "content/public/browser/storage_partition.h"
 #include "content/public/test/simple_url_loader_test_helper.h"
-#include "mojo/common/data_pipe_utils.h"
+#include "mojo/public/cpp/system/data_pipe_utils.h"
 #include "net/base/load_flags.h"
 #include "net/traffic_annotation/network_traffic_annotation_test_helper.h"
 #include "services/network/public/cpp/features.h"
@@ -125,8 +126,7 @@ IN_PROC_BROWSER_TEST_P(ProfileNetworkContextServiceBrowsertest, BrotliEnabled) {
   std::vector<std::string> encodings =
       base::SplitString(*simple_loader_helper.response_body(), ",",
                         base::TRIM_WHITESPACE, base::SPLIT_WANT_NONEMPTY);
-  EXPECT_TRUE(encodings.end() !=
-              std::find(encodings.begin(), encodings.end(), "br"));
+  EXPECT_TRUE(base::ContainsValue(encodings, "br"));
 }
 
 // Test subclass that adds switches::kDiskCacheDir to the command line, to make

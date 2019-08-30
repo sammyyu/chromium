@@ -5,21 +5,25 @@
 package org.chromium.content.browser.test.mock;
 
 import android.annotation.SuppressLint;
+import android.content.Context;
 import android.graphics.Rect;
 import android.os.Handler;
 import android.os.Parcel;
 
+import org.chromium.base.Callback;
 import org.chromium.content_public.browser.AccessibilitySnapshotCallback;
-import org.chromium.content_public.browser.ContentBitmapCallback;
 import org.chromium.content_public.browser.ImageDownloadCallback;
 import org.chromium.content_public.browser.JavaScriptCallback;
 import org.chromium.content_public.browser.MessagePort;
 import org.chromium.content_public.browser.NavigationController;
 import org.chromium.content_public.browser.RenderFrameHost;
+import org.chromium.content_public.browser.ViewEventSink;
 import org.chromium.content_public.browser.WebContents;
+import org.chromium.content_public.browser.WebContents.UserDataFactory;
 import org.chromium.content_public.browser.WebContentsObserver;
 import org.chromium.ui.OverscrollRefreshHandler;
 import org.chromium.ui.base.EventForwarder;
+import org.chromium.ui.base.ViewAndroidDelegate;
 import org.chromium.ui.base.WindowAndroid;
 
 /**
@@ -28,6 +32,10 @@ import org.chromium.ui.base.WindowAndroid;
 @SuppressLint("ParcelCreator")
 public class MockWebContents implements WebContents {
     public RenderFrameHost renderFrameHost;
+
+    @Override
+    public void initialize(Context context, String productVersion, ViewAndroidDelegate viewDelegate,
+            ViewEventSink.InternalAccessDelegate accessDelegate, WindowAndroid windowAndroid) {}
 
     @Override
     public int describeContents() {
@@ -46,11 +54,24 @@ public class MockWebContents implements WebContents {
     }
 
     @Override
+    public ViewAndroidDelegate getViewAndroidDelegate() {
+        return null;
+    }
+
+    @Override
+    public void setTopLevelNativeWindow(WindowAndroid windowAndroid) {}
+
+    @Override
     public void destroy() {}
 
     @Override
     public boolean isDestroyed() {
         return false;
+    }
+
+    @Override
+    public <T> T getOrSetUserData(Class<T> key, UserDataFactory<T> userDataFactory) {
+        return null;
     }
 
     @Override
@@ -92,27 +113,6 @@ public class MockWebContents implements WebContents {
     public void stop() {}
 
     @Override
-    public void cut() {}
-
-    @Override
-    public void copy() {}
-
-    @Override
-    public void paste() {}
-
-    @Override
-    public void pasteAsPlainText() {}
-
-    @Override
-    public void replace(String word) {}
-
-    @Override
-    public void selectAll() {}
-
-    @Override
-    public void collapseSelection() {}
-
-    @Override
     public void onHide() {}
 
     @Override
@@ -120,12 +120,6 @@ public class MockWebContents implements WebContents {
 
     @Override
     public void setImportance(int importance) {}
-
-    @Override
-    public void dismissTextHandles() {}
-
-    @Override
-    public void showContextMenuAtTouchHandle(int x, int y) {}
 
     @Override
     public void suspendAllMediaPlayers() {}
@@ -137,9 +131,6 @@ public class MockWebContents implements WebContents {
     public int getBackgroundColor() {
         return 0;
     }
-
-    @Override
-    public void showInterstitialPage(String url, long interstitialPageDelegateAndroid) {}
 
     @Override
     public boolean isShowingInterstitialPage() {
@@ -234,7 +225,8 @@ public class MockWebContents implements WebContents {
     public void setOverscrollRefreshHandler(OverscrollRefreshHandler handler) {}
 
     @Override
-    public void getContentBitmapAsync(int width, int height, ContentBitmapCallback callback) {}
+    public void writeContentBitmapToDiskAsync(
+            int width, int height, String path, Callback<String> callback) {}
 
     @Override
     public void reloadLoFiImages() {}
@@ -264,6 +256,11 @@ public class MockWebContents implements WebContents {
     public void simulateRendererKilledForTesting(boolean wasOomProtected) {}
 
     @Override
+    public boolean isSelectPopupVisibleForTesting() {
+        return false;
+    }
+
+    @Override
     public void setHasPersistentVideo(boolean value) {}
 
     @Override
@@ -278,4 +275,7 @@ public class MockWebContents implements WebContents {
     public int getHeight() {
         return 0;
     }
+
+    @Override
+    public void setDisplayCutoutSafeArea(Rect insets) {}
 }

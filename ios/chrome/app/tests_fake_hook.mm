@@ -10,6 +10,9 @@
 
 namespace tests_hook {
 
+bool DisableAppGroupAccess() {
+  return false;
+}
 bool DisableContentSuggestions() {
   return false;
 }
@@ -29,10 +32,6 @@ bool DisableUpdateService() {
   return false;
 }
 bool ForceUIRefreshPhase1() {
-  return false;
-}
-// TODO(crbug.com/818560) : Remove this hook.
-bool ForceTabSwitcherTabGrid() {
   return false;
 }
 void SetUpTestsIfPresent() {}

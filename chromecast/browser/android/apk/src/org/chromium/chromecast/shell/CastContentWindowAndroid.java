@@ -63,6 +63,13 @@ public class CastContentWindowAndroid implements CastWebContentsComponent.OnComp
 
     @SuppressWarnings("unused")
     @CalledByNative
+    private void enableTouchInput(boolean enabled) {
+        if (DEBUG) Log.d(TAG, "enableTouchInput");
+        mComponent.enableTouchInput(enabled);
+    }
+
+    @SuppressWarnings("unused")
+    @CalledByNative
     private void onNativeDestroyed() {
         assert mNativeCastContentWindowAndroid != 0;
         mNativeCastContentWindowAndroid = 0;
@@ -80,12 +87,14 @@ public class CastContentWindowAndroid implements CastWebContentsComponent.OnComp
     @SuppressWarnings("unused")
     @CalledByNative
     private void requestVisibilityPriority(int visisbilityPriority) {
+        if (DEBUG) Log.d(TAG, "requestVisibilityPriority visibility=" + visisbilityPriority);
         mComponent.requestVisibilityPriority(visisbilityPriority);
     }
 
     @SuppressWarnings("unused")
     @CalledByNative
     private void requestMoveOut() {
+        if (DEBUG) Log.d(TAG, "requestMoveOut");
         mComponent.requestMoveOut();
     }
 
@@ -107,7 +116,7 @@ public class CastContentWindowAndroid implements CastWebContentsComponent.OnComp
 
     @Override
     public void onVisibilityChange(int visibilityType) {
-        if (DEBUG) Log.d(TAG, "onVisibilityChange");
+        if (DEBUG) Log.d(TAG, "onVisibilityChange type=" + visibilityType);
         if (mNativeCastContentWindowAndroid != 0) {
             nativeOnVisibilityChange(mNativeCastContentWindowAndroid, visibilityType);
         }
@@ -115,7 +124,7 @@ public class CastContentWindowAndroid implements CastWebContentsComponent.OnComp
 
     @Override
     public boolean consumeGesture(int gestureType) {
-        if (DEBUG) Log.d(TAG, "onVisibilityChange");
+        if (DEBUG) Log.d(TAG, "consumeGesture type=" + gestureType);
         if (mNativeCastContentWindowAndroid != 0) {
             return nativeConsumeGesture(mNativeCastContentWindowAndroid, gestureType);
         }

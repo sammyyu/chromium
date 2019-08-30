@@ -21,9 +21,11 @@ namespace subresource_filter {
 
 SubframeNavigationFilteringThrottle::SubframeNavigationFilteringThrottle(
     content::NavigationHandle* handle,
-    AsyncDocumentSubresourceFilter* parent_frame_filter)
+    AsyncDocumentSubresourceFilter* parent_frame_filter,
+    Delegate* delegate)
     : content::NavigationThrottle(handle),
       parent_frame_filter_(parent_frame_filter),
+      delegate_(delegate),
       weak_ptr_factory_(this) {
   DCHECK(!handle->IsInMainFrame());
   DCHECK(parent_frame_filter_);
@@ -50,12 +52,12 @@ SubframeNavigationFilteringThrottle::~SubframeNavigationFilteringThrottle() {
 
 content::NavigationThrottle::ThrottleCheckResult
 SubframeNavigationFilteringThrottle::WillStartRequest() {
-  return DeferToCalculateLoadPolicy(ThrottlingStage::WillStartRequest);
+  return DeferToCalculateLoadPolicy();
 }
 
 content::NavigationThrottle::ThrottleCheckResult
 SubframeNavigationFilteringThrottle::WillRedirectRequest() {
-  return DeferToCalculateLoadPolicy(ThrottlingStage::WillRedirectRequest);
+  return DeferToCalculateLoadPolicy();
 }
 
 content::NavigationThrottle::ThrottleCheckResult
@@ -70,21 +72,19 @@ const char* SubframeNavigationFilteringThrottle::GetNameForLogging() {
 }
 
 content::NavigationThrottle::ThrottleCheckResult
-SubframeNavigationFilteringThrottle::DeferToCalculateLoadPolicy(
-    ThrottlingStage stage) {
+SubframeNavigationFilteringThrottle::DeferToCalculateLoadPolicy() {
   DCHECK_NE(load_policy_, LoadPolicy::DISALLOW);
   if (load_policy_ == LoadPolicy::WOULD_DISALLOW)
     return PROCEED;
   parent_frame_filter_->GetLoadPolicyForSubdocument(
       navigation_handle()->GetURL(),
       base::Bind(&SubframeNavigationFilteringThrottle::OnCalculatedLoadPolicy,
-                 weak_ptr_factory_.GetWeakPtr(), stage));
+                 weak_ptr_factory_.GetWeakPtr()));
   last_defer_timestamp_ = base::TimeTicks::Now();
   return DEFER;
 }
 
 void SubframeNavigationFilteringThrottle::OnCalculatedLoadPolicy(
-    ThrottlingStage stage,
     LoadPolicy policy) {
   DCHECK(!last_defer_timestamp_.is_null());
   load_policy_ = policy;
@@ -113,12 +113,23 @@ void SubframeNavigationFilteringThrottle::OnCalculatedLoadPolicy(
 }
 
 void SubframeNavigationFilteringThrottle::NotifyLoadPolicy() const {
-  if (auto* observer_manager =
-          SubresourceFilterObserverManager::FromWebContents(
-              navigation_handle()->GetWebContents())) {
-    observer_manager->NotifySubframeNavigationEvaluated(navigation_handle(),
-                                                        load_policy_);
-  }
+  auto* observer_manager = SubresourceFilterObserverManager::FromWebContents(
+      navigation_handle()->GetWebContents());
+  if (!observer_manager)
+    return;
+
+  // TODO(crbug.com/843646): Use an API that NavigationHandle supports rather
+  // than trying to infer what the NavigationHandle is doing.
+  content::RenderFrameHost* starting_rfh =
+      navigation_handle()->GetWebContents()->UnsafeFindFrameByFrameTreeNodeId(
+          navigation_handle()->GetFrameTreeNodeId());
+  DCHECK(starting_rfh);
+
+  bool is_ad_subframe =
+      delegate_->CalculateIsAdSubframe(starting_rfh, load_policy_);
+
+  observer_manager->NotifySubframeNavigationEvaluated(
+      navigation_handle(), load_policy_, is_ad_subframe);
 }
 
 }  // namespace subresource_filter

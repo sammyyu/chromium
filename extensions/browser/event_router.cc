@@ -11,11 +11,10 @@
 
 #include "base/atomic_sequence_num.h"
 #include "base/bind.h"
-#include "base/memory/ptr_util.h"
-#include "base/message_loop/message_loop.h"
 #include "base/metrics/histogram_macros.h"
 #include "base/stl_util.h"
 #include "base/values.h"
+#include "content/public/browser/browser_thread.h"
 #include "content/public/browser/render_process_host.h"
 #include "extensions/browser/api_activity_monitor.h"
 #include "extensions/browser/event_router_factory.h"
@@ -244,6 +243,14 @@ void EventRouter::UnregisterObserver(Observer* observer) {
   }
 }
 
+void EventRouter::AddObserverForTesting(TestObserver* observer) {
+  test_observers_.AddObserver(observer);
+}
+
+void EventRouter::RemoveObserverForTesting(TestObserver* observer) {
+  test_observers_.RemoveObserver(observer);
+}
+
 void EventRouter::OnListenerAdded(const EventListener* listener) {
   const EventListenerInfo details(listener->event_name(),
                                   listener->extension_id(),
@@ -273,9 +280,9 @@ void EventRouter::OnListenerRemoved(const EventListener* listener) {
     observer->second->OnListenerRemoved(details);
 }
 
-void EventRouter::RenderProcessExited(content::RenderProcessHost* host,
-                                      base::TerminationStatus status,
-                                      int exit_code) {
+void EventRouter::RenderProcessExited(
+    content::RenderProcessHost* host,
+    const content::ChildProcessTerminationInfo& info) {
   listeners_.RemoveListenersForProcess(host);
   observed_process_set_.erase(host);
   host->RemoveObserver(this);
@@ -511,6 +518,10 @@ void EventRouter::DispatchEventImpl(const std::string& restrict_to_extension_id,
   DCHECK(!event->restrict_to_browser_context ||
          ExtensionsBrowserClient::Get()->IsSameContext(
              browser_context_, event->restrict_to_browser_context));
+
+  for (TestObserver& observer : test_observers_)
+    observer.OnWillDispatchEvent(*event);
+
   std::set<const EventListener*> listeners(
       listeners_.GetEventListeners(*event));
 
@@ -914,7 +925,7 @@ Event::Event(events::HistogramValue histogram_value,
 
 Event::~Event() {}
 
-Event* Event::DeepCopy() {
+Event* Event::DeepCopy() const {
   Event* copy = new Event(
       histogram_value, event_name,
       std::unique_ptr<base::ListValue>(event_args->DeepCopy()),

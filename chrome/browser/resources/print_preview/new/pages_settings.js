@@ -15,7 +15,7 @@ const PagesInputErrorState = {
 Polymer({
   is: 'print-preview-pages-settings',
 
-  behaviors: [SettingsBehavior],
+  behaviors: [SettingsBehavior, print_preview_new.InputBehavior],
 
   properties: {
     /** @type {!print_preview.DocumentInfo} */
@@ -65,19 +65,48 @@ Polymer({
       type: Array,
       computed: 'computeRangesToPrint_(pagesToPrint_, allPagesArray_)',
     },
+
+    /** @private {string} */
+    inputPattern_: {
+      type: String,
+      notify: true,
+      value:
+          '([0-9]*(-)?[0-9]*(,|\u3001)( )?)*([0-9]*(-)?[0-9]*(,|\u3001)?( )?)?',
+    },
   },
 
   observers: [
-    'onRangeChange_(errorState_, rangesToPrint_)',
+    'onRangeChange_(errorState_, rangesToPrint_, settings.pages)',
     'onRadioChange_(allSelected_, customSelected_)'
   ],
 
+  listeners: {
+    'input-change': 'onInputChange_',
+  },
+
+  /** @return {!HTMLInputElement} The input field element for InputBehavior. */
+  getInput: function() {
+    return this.$.pageSettingsCustomInput;
+  },
+
+  /**
+   * @param {!CustomEvent} e Contains the new input value.
+   * @private
+   */
+  onInputChange_: function(e) {
+    this.inputString_ = /** @type {string} */ (e.detail);
+  },
+
   /**
    * @return {boolean} Whether the controls should be disabled.
+   * Does not need to depend on |errorState_|, since |errorState_| is always
+   * defined and any change to or from NO_ERROR will also trigger a change in
+   * |disabled|.
    * @private
    */
   getDisabled_: function() {
-    return this.getSetting('pages').valid && this.disabled;
+    // Disable the input if other settings are responsible for the error state.
+    return this.errorState_ == PagesInputErrorState.NO_ERROR && this.disabled;
   },
 
   /**
@@ -102,23 +131,25 @@ Polymer({
       this.errorState_ = PagesInputErrorState.NO_ERROR;
       return this.allPagesArray_;
     }
-    if (!this.$$('.user-value').validity.valid) {
+    if (!this.$.pageSettingsCustomInput.validity.valid) {
       this.errorState_ = PagesInputErrorState.INVALID_SYNTAX;
       return this.pagesToPrint_;
     }
 
     const pages = [];
     const added = {};
-    const ranges = this.inputString_.split(',');
+    const ranges = this.inputString_.split(/,|\u3001/);
     const maxPage = this.allPagesArray_.length;
     for (let range of ranges) {
       range = range.trim();
-      if (range == '')
-        continue;
+      if (range == '') {
+        this.errorState_ = PagesInputErrorState.INVALID_SYNTAX;
+        return this.pagesToPrint_;
+      }
       const limits = range.split('-');
       let min = parseInt(limits[0], 10);
       if (min < 1) {
-        this.errorState_ = PagesInputErrorState.OUT_OF_BOUNDS;
+        this.errorState_ = PagesInputErrorState.INVALID_SYNTAX;
         return this.pagesToPrint_;
       }
       if (limits.length == 1) {
@@ -153,6 +184,7 @@ Polymer({
         }
       }
     }
+    this.errorState_ = PagesInputErrorState.NO_ERROR;
     return pages;
   },
 
@@ -203,12 +235,15 @@ Polymer({
    * @private
    */
   onRangeChange_: function() {
+    if (this.settings === undefined || this.pagesToPrint_ === undefined)
+      return;
+
     if (this.errorState_ != PagesInputErrorState.NO_ERROR) {
       this.setSettingValid('pages', false);
-      this.$$('.user-value').classList.add('invalid');
+      this.$.pageSettingsCustomInput.classList.add('invalid');
       return;
     }
-    this.$$('.user-value').classList.remove('invalid');
+    this.$.pageSettingsCustomInput.classList.remove('invalid');
     this.setSettingValid('pages', true);
     if (!this.settingMatches_()) {
       this.setSetting('pages', this.pagesToPrint_);
@@ -226,7 +261,7 @@ Polymer({
 
   /** @private */
   onCustomRadioClick_: function() {
-    this.$$('#page-settings-custom-input').focus();
+    this.$.pageSettingsCustomInput.focus();
   },
 
   /** @private */
@@ -259,10 +294,11 @@ Polymer({
       return loadTimeData.getStringF(
           'pageRangeSyntaxInstruction',
           loadTimeData.getString('examplePageRangeText'));
-    } else {
-      return loadTimeData.getStringF(
-          'pageRangeLimitInstructionWithValue', this.documentInfo.pageCount);
     }
+    return (this.documentInfo === undefined) ?
+        '' :
+        loadTimeData.getStringF(
+            'pageRangeLimitInstructionWithValue', this.documentInfo.pageCount);
   },
 
   /**

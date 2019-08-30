@@ -7,6 +7,7 @@
 #include <stddef.h>
 
 #include <string>
+#include <vector>
 
 #include "base/command_line.h"
 #include "base/logging.h"
@@ -17,15 +18,16 @@
 #include "content/renderer/media/stream/media_stream_source.h"
 #include "content/renderer/media/stream/media_stream_video_source.h"
 #include "content/renderer/media/stream/media_stream_video_track.h"
+#include "content/renderer/media/stream/processed_local_audio_source.h"
 #include "content/renderer/media/stream/webaudio_media_stream_source.h"
 #include "content/renderer/media/webrtc_local_audio_source_provider.h"
-#include "third_party/WebKit/public/platform/WebMediaConstraints.h"
-#include "third_party/WebKit/public/platform/WebMediaStream.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamCenterClient.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamSource.h"
-#include "third_party/WebKit/public/platform/WebMediaStreamTrack.h"
-#include "third_party/WebKit/public/platform/WebVector.h"
-#include "third_party/WebKit/public/web/WebFrame.h"
+#include "media/base/sample_format.h"
+#include "third_party/blink/public/platform/web_media_constraints.h"
+#include "third_party/blink/public/platform/web_media_stream.h"
+#include "third_party/blink/public/platform/web_media_stream_source.h"
+#include "third_party/blink/public/platform/web_media_stream_track.h"
+#include "third_party/blink/public/platform/web_vector.h"
+#include "third_party/blink/public/web/web_frame.h"
 
 using blink::WebFrame;
 using blink::WebView;
@@ -55,6 +57,8 @@ void CreateNativeAudioMediaStreamTrack(
     blink::WebMediaStreamSource::Capabilities capabilities;
     capabilities.device_id = source.Id();
     capabilities.echo_cancellation = std::vector<bool>({false});
+    capabilities.auto_gain_control = std::vector<bool>({false});
+    capabilities.noise_suppression = std::vector<bool>({false});
     source.SetCapabilities(capabilities);
   }
 
@@ -97,11 +101,9 @@ void CloneNativeVideoMediaStreamTrack(
 
 }  // namespace
 
-MediaStreamCenter::MediaStreamCenter(
-    blink::WebMediaStreamCenterClient* client,
-    PeerConnectionDependencyFactory* factory) {}
+MediaStreamCenter::MediaStreamCenter() = default;
 
-MediaStreamCenter::~MediaStreamCenter() {}
+MediaStreamCenter::~MediaStreamCenter() = default;
 
 void MediaStreamCenter::DidCreateMediaStreamTrack(
     const blink::WebMediaStreamTrack& track) {
@@ -187,6 +189,30 @@ void MediaStreamCenter::DidStopMediaStreamSource(
       static_cast<MediaStreamSource*>(web_source.GetExtraData());
   DCHECK(source);
   source->StopSource();
+}
+
+void MediaStreamCenter::GetSourceSettings(
+    const blink::WebMediaStreamSource& web_source,
+    blink::WebMediaStreamTrack::Settings& settings) {
+  MediaStreamAudioSource* const source =
+      MediaStreamAudioSource::From(web_source);
+  if (!source)
+    return;
+
+  media::AudioParameters audio_parameters = source->GetAudioParameters();
+  settings.sample_rate = audio_parameters.sample_rate();
+  // kSampleFormatS16 is the format used for all audio input streams.
+  settings.sample_size =
+      media::SampleFormatToBitsPerChannel(media::kSampleFormatS16);
+  settings.channel_count = audio_parameters.channels();
+  settings.latency = audio_parameters.GetBufferDuration().InSecondsF();
+
+  ProcessedLocalAudioSource* const processed_source =
+      ProcessedLocalAudioSource::From(source);
+  settings.volume = processed_source
+                        ? static_cast<double>(processed_source->Volume()) /
+                              processed_source->MaxVolume()
+                        : 1.0;
 }
 
 }  // namespace content

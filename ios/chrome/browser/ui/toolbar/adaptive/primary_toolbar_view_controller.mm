@@ -7,10 +7,7 @@
 #import "base/logging.h"
 #import "ios/chrome/browser/ui/UIView+SizeClassSupport.h"
 #import "ios/chrome/browser/ui/commands/browser_commands.h"
-#import "ios/chrome/browser/ui/fullscreen/fullscreen_foreground_animator.h"
-#import "ios/chrome/browser/ui/fullscreen/fullscreen_scroll_end_animator.h"
-#import "ios/chrome/browser/ui/fullscreen/fullscreen_scroll_to_top_animator.h"
-#import "ios/chrome/browser/ui/history_popup/requirements/tab_history_constants.h"
+#import "ios/chrome/browser/ui/fullscreen/fullscreen_animator.h"
 #import "ios/chrome/browser/ui/toolbar/adaptive/adaptive_toolbar_view_controller+subclassing.h"
 #import "ios/chrome/browser/ui/toolbar/adaptive/primary_toolbar_view.h"
 #import "ios/chrome/browser/ui/toolbar/adaptive/primary_toolbar_view_controller_delegate.h"
@@ -19,6 +16,7 @@
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_configuration.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_constants.h"
 #import "ios/chrome/browser/ui/toolbar/buttons/toolbar_tools_menu_button.h"
+#import "ios/chrome/browser/ui/toolbar/public/omnibox_focuser.h"
 #import "ios/chrome/browser/ui/ui_util.h"
 #import "ios/chrome/browser/ui/uikit_ui_util.h"
 #import "ios/chrome/browser/ui/util/named_guide.h"
@@ -75,8 +73,19 @@
 - (void)setScrollProgressForTabletOmnibox:(CGFloat)progress {
   [super setScrollProgressForTabletOmnibox:progress];
   self.view.locationBarBottomConstraint.constant =
-      -kLocationBarVerticalMargin * progress;
+      -AlignValueToPixel(kAdaptiveLocationBarVerticalMargin * progress);
   self.view.locationBarContainer.alpha = progress;
+
+  // When the locationBarContainer is hidden, show the |fakeOmniboxTarget|.
+  if (progress == 0 && !self.view.fakeOmniboxTarget) {
+    [self.view addFakeOmniboxTarget];
+    UITapGestureRecognizer* tapRecognizer =
+        [[UITapGestureRecognizer alloc] initWithTarget:self.dispatcher
+                                                action:@selector(focusOmnibox)];
+    [self.view.fakeOmniboxTarget addGestureRecognizer:tapRecognizer];
+  } else if (progress > 0 && self.view.fakeOmniboxTarget) {
+    [self.view removeFakeOmniboxTarget];
+  }
 }
 #pragma mark - UIViewController
 
@@ -113,9 +122,9 @@
 - (void)setIsNTP:(BOOL)isNTP {
   if (isNTP == _isNTP)
     return;
+  [super setIsNTP:isNTP];
   _isNTP = isNTP;
-  if (!isNTP && self.view.cr_widthSizeClass == REGULAR &&
-      self.view.cr_heightSizeClass == REGULAR) {
+  if (!isNTP && !IsSplitToolbarMode(self)) {
     // Reset any location bar view updates when not an NTP.
     [self setScrollProgressForTabletOmnibox:1];
   }
@@ -138,6 +147,8 @@
       (kAdaptiveToolbarHeight - 2 * kAdaptiveLocationBarVerticalMargin -
        kToolbarHeightFullscreen) *
           progress);
+  self.view.locationBarBottomConstraint.constant =
+      -AlignValueToPixel(kAdaptiveLocationBarVerticalMargin * progress);
   self.view.locationBarContainer.backgroundColor =
       [self.buttonFactory.toolbarConfiguration
           locationBarBackgroundColorWithVisibility:alphaValue];
@@ -148,18 +159,15 @@
     [self updateForFullscreenProgress:1.0];
 }
 
-- (void)finishFullscreenScrollWithAnimator:
-    (FullscreenScrollEndAnimator*)animator {
+- (void)finishFullscreenScrollWithAnimator:(FullscreenAnimator*)animator {
   [self addFullscreenAnimationsToAnimator:animator];
 }
 
-- (void)scrollFullscreenToTopWithAnimator:
-    (FullscreenScrollToTopAnimator*)animator {
+- (void)scrollFullscreenToTopWithAnimator:(FullscreenAnimator*)animator {
   [self addFullscreenAnimationsToAnimator:animator];
 }
 
-- (void)showToolbarForForgroundWithAnimator:
-    (FullscreenForegroundAnimator*)animator {
+- (void)showToolbarWithAnimator:(FullscreenAnimator*)animator {
   [self addFullscreenAnimationsToAnimator:animator];
 }
 

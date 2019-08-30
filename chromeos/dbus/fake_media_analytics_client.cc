@@ -24,8 +24,9 @@ bool FakeMediaAnalyticsClient::FireMediaPerceptionEvent(
   if (!process_running_)
     return false;
   base::ThreadTaskRunnerHandle::Get()->PostTask(
-      FROM_HERE, base::Bind(&FakeMediaAnalyticsClient::OnMediaPerception,
-                            weak_ptr_factory_.GetWeakPtr(), media_perception));
+      FROM_HERE,
+      base::BindOnce(&FakeMediaAnalyticsClient::OnMediaPerception,
+                     weak_ptr_factory_.GetWeakPtr(), media_perception));
   return true;
 }
 
@@ -101,6 +102,14 @@ void FakeMediaAnalyticsClient::GetDiagnostics(
       FROM_HERE,
       base::BindOnce(&FakeMediaAnalyticsClient::OnGetDiagnostics,
                      weak_ptr_factory_.GetWeakPtr(), std::move(callback)));
+}
+
+void FakeMediaAnalyticsClient::BootstrapMojoConnection(
+    base::ScopedFD file_descriptor,
+    VoidDBusMethodCallback callback) {
+  // Fake that the mojo connection has been successfully established.
+  base::ThreadTaskRunnerHandle::Get()->PostTask(
+      FROM_HERE, base::BindOnce(std::move(callback), true));
 }
 
 void FakeMediaAnalyticsClient::OnGetDiagnostics(

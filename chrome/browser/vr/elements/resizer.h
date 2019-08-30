@@ -9,13 +9,14 @@
 
 #include "base/macros.h"
 #include "chrome/browser/vr/elements/ui_element.h"
+#include "chrome/browser/vr/vr_ui_export.h"
 #include "ui/gfx/transform.h"
 
 namespace vr {
 
 // When enabled, a resizer scales its descendant elements in response to
 // trackpad use.
-class Resizer : public UiElement {
+class VR_UI_EXPORT Resizer : public UiElement {
  public:
   Resizer();
   ~Resizer() override;
@@ -29,12 +30,18 @@ class Resizer : public UiElement {
   void SetEnabled(bool enabled);
   void Reset();
 
+#ifndef NDEBUG
+  void DumpGeometry(std::ostringstream* os) const override;
+#endif
+
+  bool ShouldUpdateWorldSpaceTransform(
+      bool parent_transform_changed) const override;
+
  private:
   gfx::Transform LocalTransform() const override;
   gfx::Transform GetTargetLocalTransform() const override;
   void UpdateTransform(const gfx::Transform& head_pose);
-  bool OnBeginFrame(const base::TimeTicks& time,
-                    const gfx::Transform& head_pose) override;
+  bool OnBeginFrame(const gfx::Transform& head_pose) override;
 
   bool enabled_ = false;
 

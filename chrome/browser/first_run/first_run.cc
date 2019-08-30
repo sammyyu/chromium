@@ -162,7 +162,7 @@ class FirstRunDelayedTasks : public content::NotificationObserver {
 
   void OnExtensionSystemReady(content::BrowserContext* context) {
     // Process the notification and delete this.
-    ExtensionService* service =
+    extensions::ExtensionService* service =
         extensions::ExtensionSystem::Get(context)->extension_service();
     if (service) {
       // Trigger an extension update check. If the extension specified in the
@@ -372,7 +372,7 @@ void SetupMasterPrefsFromInstallPrefs(
 
 bool GetFirstRunSentinelFilePath(base::FilePath* path) {
   base::FilePath user_data_dir;
-  if (!PathService::Get(chrome::DIR_USER_DATA, &user_data_dir))
+  if (!base::PathService::Get(chrome::DIR_USER_DATA, &user_data_dir))
     return false;
   *path = user_data_dir.Append(chrome::kFirstRunSentinel);
   return true;

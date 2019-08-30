@@ -32,9 +32,10 @@ class LoginHandlerViews : public LoginHandler, public views::DialogDelegate {
   LoginHandlerViews(
       net::AuthChallengeInfo* auth_info,
       content::ResourceRequestInfo::WebContentsGetter web_contents_getter,
-      const base::Callback<void(const base::Optional<net::AuthCredentials>&)>&
-          auth_required_callback)
-      : LoginHandler(auth_info, web_contents_getter, auth_required_callback),
+      LoginAuthRequiredCallback auth_required_callback)
+      : LoginHandler(auth_info,
+                     web_contents_getter,
+                     std::move(auth_required_callback)),
         login_view_(nullptr),
         dialog_(nullptr) {
     chrome::RecordDialogCreation(chrome::DialogIdentifier::LOGIN_HANDLER);
@@ -80,6 +81,9 @@ class LoginHandlerViews : public LoginHandler, public views::DialogDelegate {
     dialog_ = NULL;
     ResetModel();
 
+    // This Release is the counter-point to the AddRef() in BuildViewImpl().
+    Release();
+
     ReleaseSoon();
   }
 
@@ -120,6 +124,11 @@ class LoginHandlerViews : public LoginHandler, public views::DialogDelegate {
     // accordingly.
     login_view_ = new LoginView(authority, explanation, login_model_data);
 
+    // Views requires the WidgetDelegate [this instance] live longer than the
+    // Widget. To enforce this, we AddRef() here and Release() in
+    // DeleteDelegate().
+    AddRef();
+
     // Scary thread safety note: This can potentially be called *after* SetAuth
     // or CancelAuth (say, if the request was cancelled before the UI thread got
     // control).  However, that's OK since any UI interaction in those functions
@@ -155,10 +164,9 @@ namespace chrome {
 scoped_refptr<LoginHandler> CreateLoginHandlerViews(
     net::AuthChallengeInfo* auth_info,
     content::ResourceRequestInfo::WebContentsGetter web_contents_getter,
-    const base::Callback<void(const base::Optional<net::AuthCredentials>&)>&
-        auth_required_callback) {
-  return base::MakeRefCounted<LoginHandlerViews>(auth_info, web_contents_getter,
-                                                 auth_required_callback);
+    LoginAuthRequiredCallback auth_required_callback) {
+  return base::MakeRefCounted<LoginHandlerViews>(
+      auth_info, web_contents_getter, std::move(auth_required_callback));
 }
 
 }  // namespace chrome

@@ -7,7 +7,6 @@
 
 #include "base/macros.h"
 #include "chrome/browser/chromeos/power/ml/user_activity_ukm_logger.h"
-#include "chrome/browser/resource_coordinator/tab_metrics_event.pb.h"
 #include "services/metrics/public/cpp/ukm_recorder.h"
 
 namespace chromeos {
@@ -41,9 +40,7 @@ class UserActivityUkmLoggerImpl : public UserActivityUkmLogger {
   ~UserActivityUkmLoggerImpl() override;
 
   // chromeos::power::ml::UserActivityUkmLogger overrides:
-  void LogActivity(
-      const UserActivityEvent& event,
-      const std::map<ukm::SourceId, TabProperty>& open_tabs) override;
+  void LogActivity(const UserActivityEvent& event) override;
 
  private:
   friend class UserActivityUkmLoggerTest;

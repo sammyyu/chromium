@@ -24,6 +24,7 @@
         flex: 1;
         font-size: 123%;
         font-weight: 400;
+        letter-spacing: .25px;
         line-height: normal;
       }
 
@@ -42,8 +43,6 @@
 
       #menuButtonContainer {
         height: 32px;
-        margin-bottom: 6px;
-        margin-top: 6px;
         min-width: 32px;
         padding: 6px 0;
         width: 32px;
@@ -61,6 +60,11 @@
 
       :host([narrow]) #centeredContent {
         justify-content: flex-end;
+      }
+
+      :host([has-overlay]) {
+        transition: visibility var(--cr-toolbar-overlay-animation-duration);
+        visibility: hidden;
       }
 
       :host([narrow][showing-search_]) #leftContent {

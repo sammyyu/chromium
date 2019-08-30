@@ -61,7 +61,7 @@ class AutomationApiTest : public ExtensionApiTest {
 
   void StartEmbeddedTestServer() {
     base::FilePath test_data;
-    ASSERT_TRUE(PathService::Get(chrome::DIR_TEST_DATA, &test_data));
+    ASSERT_TRUE(base::PathService::Get(chrome::DIR_TEST_DATA, &test_data));
     embedded_test_server()->ServeFilesFromDirectory(
         test_data.AppendASCII("extensions/api_test")
         .AppendASCII(kSitesDir));
@@ -120,13 +120,7 @@ IN_PROC_BROWSER_TEST_F(AutomationApiTest, Actions) {
       << message_;
 }
 
-// TODO(https://crbug.com/622387): Disabled due to flakiness.
-#if defined(OS_CHROMEOS) && defined(NDEBUG)
-#define MAYBE_Location DISABLED_Location
-#else
-#define MAYBE_Location Location
-#endif
-IN_PROC_BROWSER_TEST_F(AutomationApiTest, MAYBE_Location) {
+IN_PROC_BROWSER_TEST_F(AutomationApiTest, Location) {
   StartEmbeddedTestServer();
   ASSERT_TRUE(RunExtensionSubtest("automation/tests/tabs", "location.html"))
       << message_;
@@ -155,6 +149,13 @@ IN_PROC_BROWSER_TEST_F(AutomationApiTest, LineStartOffsets) {
 IN_PROC_BROWSER_TEST_F(AutomationApiTest, ImageData) {
   StartEmbeddedTestServer();
   ASSERT_TRUE(RunExtensionSubtest("automation/tests/tabs", "image_data.html"))
+      << message_;
+}
+
+IN_PROC_BROWSER_TEST_F(AutomationApiTest, TableProperties) {
+  StartEmbeddedTestServer();
+  ASSERT_TRUE(
+      RunExtensionSubtest("automation/tests/tabs", "table_properties.html"))
       << message_;
 }
 
@@ -227,6 +228,13 @@ IN_PROC_BROWSER_TEST_F(AutomationApiTest, DesktopFocusViews) {
       << message_;
 }
 
+IN_PROC_BROWSER_TEST_F(AutomationApiTest, DesktopGetNextTextMatch) {
+  StartEmbeddedTestServer();
+  ASSERT_TRUE(RunExtensionSubtest("automation/tests/desktop",
+                                  "get_next_text_match.html"))
+      << message_;
+}
+
 IN_PROC_BROWSER_TEST_F(AutomationApiTest, LocationInWebView) {
   StartEmbeddedTestServer();
   ASSERT_TRUE(RunPlatformAppTest("automation/tests/webview")) << message_;
@@ -268,7 +276,8 @@ IN_PROC_BROWSER_TEST_F(AutomationApiTest, DesktopNotSupported) {
 }
 #endif  // defined(USE_AURA)
 
-IN_PROC_BROWSER_TEST_F(AutomationApiTest, CloseTab) {
+// Flaky test on site_per_browser_tests: https://crbug.com/833318
+IN_PROC_BROWSER_TEST_F(AutomationApiTest, DISABLED_CloseTab) {
   StartEmbeddedTestServer();
   ASSERT_TRUE(RunExtensionSubtest("automation/tests/tabs", "close_tab.html"))
       << message_;
